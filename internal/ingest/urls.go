@@ -150,14 +150,17 @@ func (s *Service) importURL(ctx context.Context, raw string, libID uuid.UUID, ge
 		}
 		return s.scanner.ScanLibrary(ctx, resolved, prov, root, "import", uuid.Nil)
 	}
-	stored, storedName := transcode.PrepareStore(ctx, name, "import"+ext, "")
-	if stored != name {
+	stored := transcode.PrepareStoreOpts(ctx, name, "import"+ext, "", scan.StoreOptsFor(ctx, s.pool, libID))
+	if stored.Path != name {
 		os.Remove(name)
-		name = stored
-		ext = path.Ext(storedName)
+		name = stored.Path
+		ext = path.Ext(stored.StoreName)
 		hf, err := os.Open(name)
 		if err != nil {
 			os.Remove(name)
+			if stored.CompanionPath != "" {
+				os.Remove(stored.CompanionPath)
+			}
 			return err
 		}
 		hw = sha256.New()
@@ -165,6 +168,9 @@ func (s *Service) importURL(ctx context.Context, raw string, libID uuid.UUID, ge
 		hf.Close()
 		if err != nil {
 			os.Remove(name)
+			if stored.CompanionPath != "" {
+				os.Remove(stored.CompanionPath)
+			}
 			return err
 		}
 	}
@@ -172,23 +178,45 @@ func (s *Service) importURL(ctx context.Context, raw string, libID uuid.UUID, ge
 	var existing string
 	if err := s.pool.QueryRow(ctx, `SELECT storage_key FROM track_files WHERE content_hash=$1 LIMIT 1`, hash).Scan(&existing); err == nil && existing != "" {
 		os.Remove(name)
+		if stored.CompanionPath != "" {
+			os.Remove(stored.CompanionPath)
+		}
 		return fmt.Errorf("already imported")
 	}
 	prov, resolved, prefix, err := getProv(ctx, libID)
 	if err != nil {
 		os.Remove(name)
+		if stored.CompanionPath != "" {
+			os.Remove(stored.CompanionPath)
+		}
 		return err
 	}
 	key := path.Join(prefix, "imports", hash[:2], hash+ext)
 	f, err := os.Open(name)
 	if err != nil {
+		if stored.CompanionPath != "" {
+			os.Remove(stored.CompanionPath)
+		}
 		return err
 	}
 	err = prov.Write(ctx, key, f, storage.WriteInfo{Size: n})
 	f.Close()
 	os.Remove(name)
 	if err != nil {
+		if stored.CompanionPath != "" {
+			os.Remove(stored.CompanionPath)
+		}
 		return err
+	}
+	if stored.CompanionPath != "" {
+		ch, _ := os.Open(stored.CompanionPath)
+		if ch != nil {
+			st, _ := ch.Stat()
+			ck := scan.CompanionStorageKey(key, hash)
+			_ = prov.Write(ctx, ck, ch, storage.WriteInfo{Size: st.Size()})
+			ch.Close()
+		}
+		os.Remove(stored.CompanionPath)
 	}
 	return s.scanner.ScanLibrary(ctx, resolved, prov, path.Join(prefix, "imports", hash[:2]), "import", uuid.Nil)
 }

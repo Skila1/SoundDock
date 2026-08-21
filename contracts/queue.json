@@ -1,0 +1,72 @@
+{
+  "get_queue": {
+    "method": "GET",
+    "path": "/api/v1/me/queue",
+    "response": {
+      "id": "00000000-0000-4000-8000-000000000070",
+      "kind": "web_device",
+      "owner_key": "00000000-0000-4000-8000-000000000001",
+      "volume": 1,
+      "repeat": "off",
+      "shuffle": false,
+      "crossfade_seconds": 0,
+      "replaygain_mode": "off",
+      "current_index": 0,
+      "current_track_id": "00000000-0000-4000-8000-000000000050",
+      "position_ms": 0,
+      "status": "playing",
+      "items": [
+        {
+          "id": "00000000-0000-4000-8000-000000000080",
+          "position": 0,
+          "track_id": "00000000-0000-4000-8000-000000000050"
+        }
+      ],
+      "shuffle_mode": "random",
+      "stop_after_current": false,
+      "device_id": null
+    }
+  },
+  "put_queue": {
+    "method": "PUT",
+    "path": "/api/v1/me/queue",
+    "body": {
+      "track_ids": ["00000000-0000-4000-8000-000000000050"],
+      "start": 0
+    }
+  },
+  "post_add": {
+    "method": "POST",
+    "path": "/api/v1/me/queue/add",
+    "body": {
+      "track_ids": ["00000000-0000-4000-8000-000000000051"],
+      "next": false
+    },
+    "response": { "ok": true }
+  },
+  "post_control": {
+    "method": "POST",
+    "path": "/api/v1/me/queue/control",
+    "body": {
+      "action": "pause",
+      "extra": {}
+    },
+    "actions": ["pause", "resume", "stop", "clear", "shuffle", "repeat", "volume", "seek", "skip", "next", "previous", "remove", "reorder"],
+    "reorder_extra": {
+      "from": 1,
+      "to": 0
+    },
+    "remove_extra": {
+      "position": 0
+    },
+    "repeat_extra": {
+      "mode": "one"
+    }
+  },
+  "notes": [
+    "Existing GET fields stay. Additive only: shuffle_mode, stop_after_current, device_id.",
+    "Do not remove remove/shuffle/repeat. reorder is additive.",
+    "repeat modes: off, queue, one.",
+    "P1 is the only mutator of playback queues."
+  ]
+}

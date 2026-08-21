@@ -1,0 +1,25 @@
+{
+  "get_radio": {
+    "method": "GET",
+    "path": "/api/v1/radio",
+    "query": {
+      "kind": "artist",
+      "seed_id": "00000000-0000-4000-8000-000000000030",
+      "limit": 20
+    },
+    "response": {
+      "kind": "artist",
+      "seed_id": "00000000-0000-4000-8000-000000000030",
+      "track_ids": [
+        "00000000-0000-4000-8000-000000000050",
+        "00000000-0000-4000-8000-000000000051"
+      ]
+    }
+  },
+  "kinds": ["library", "artist", "album", "track", "genre", "decade", "quick_mix"],
+  "notes": [
+    "P4 selects track ids only. Clients enqueue with POST /api/v1/me/queue/add from queue.json.",
+    "P4 must not write playback_sessions.",
+    "stop_after_current also stops radio replenishment."
+  ]
+}

@@ -8,6 +8,8 @@ export type User = {
   replaygain_mode: string;
   crossfade_seconds: number;
   target_lufs?: number;
+  accent?: string;
+  density?: "comfortable" | "compact";
 };
 
 export type ArtistRef = { id: string; name: string; role?: string; position?: number };
@@ -99,3 +101,18 @@ export type QueueState = {
 };
 
 export type Favourite = { type: string; id: string; created_at: string };
+
+export type PartyState = {
+  session_id: string;
+  enabled: boolean;
+  host_user_id?: string;
+  guests?: { user_id: string }[];
+};
+
+export type DeviceSession = {
+  id: string;
+  kind: string;
+  owner_key: string;
+  status: string;
+  current_track_id?: string | null;
+};

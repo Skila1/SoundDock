@@ -1,0 +1,31 @@
+{
+  "mint": {
+    "method": "POST",
+    "path": "/api/v1/me/offline/tokens",
+    "body": {
+      "track_id": "00000000-0000-4000-8000-000000000050",
+      "device_id": "browser-1"
+    },
+    "response": {
+      "token": "offline.example.jwt",
+      "track_id": "00000000-0000-4000-8000-000000000050",
+      "device_id": "browser-1",
+      "user_id": "00000000-0000-4000-8000-000000000001",
+      "expires_at": "2026-02-15T12:00:00Z",
+      "url": "/api/v1/tracks/00000000-0000-4000-8000-000000000050/stream?offline_token=offline.example.jwt"
+    }
+  },
+  "revoke": {
+    "method": "DELETE",
+    "path": "/api/v1/me/offline/tokens",
+    "body": {
+      "device_id": "browser-1"
+    }
+  },
+  "notes": [
+    "Bound to user + device + track. Revocable. No general API authority.",
+    "Independent lifetime from interactive /stream?token= credentials.",
+    "Do not cache ordinary stream tokens in the service worker.",
+    "Bulk download: max 2 concurrent /stream fills."
+  ]
+}

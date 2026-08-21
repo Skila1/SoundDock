@@ -4,10 +4,24 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type userCtxKey struct{}
+
+// WithUser scopes played:never / last_played filters to this listener.
+// Integrator should wrap Server.search: search.WithUser(r.Context(), currentUser(r).ID).
+func WithUser(ctx context.Context, id uuid.UUID) context.Context {
+	return context.WithValue(ctx, userCtxKey{}, id)
+}
+
+func userFrom(ctx context.Context) uuid.UUID {
+	id, _ := ctx.Value(userCtxKey{}).(uuid.UUID)
+	return id
+}
 
 type Engine struct{ pool *pgxpool.Pool }
 
@@ -107,6 +121,7 @@ func (e *Engine) tracks(ctx context.Context, q Query, libs []uuid.UUID, limit in
 		args = append(args, "%"+q.Album+"%")
 		albumF = fmt.Sprintf(" AND al.title ILIKE $%d", len(args))
 	}
+	playF, args := playFilterSQL(ctx, q, args)
 	sql := fmt.Sprintf(`
 		SELECT t.id, t.title, coalesce(string_agg(DISTINCT ar.name, ', ') FILTER (WHERE ta.role='primary'), ''),
 		       coalesce(al.title,''), t.duration_ms, coalesce(tf.codec,''), t.explicit, t.year,
@@ -118,10 +133,10 @@ func (e *Engine) tracks(ctx context.Context, q Query, libs []uuid.UUID, limit in
 		LEFT JOIN LATERAL (SELECT codec FROM track_files WHERE track_id=t.id LIMIT 1) tf ON TRUE
 		WHERE (%s)
 		  AND (t.search_vec @@ websearch_to_tsquery('simple', unaccent($%d)) OR t.title ILIKE $%d OR similarity(t.title, $%d) > 0.15)
-		  %s %s
+		  %s %s %s
 		GROUP BY t.id, al.title, tf.codec
 		ORDER BY score DESC
-		LIMIT $%d`, off+1, off+1, lf, off+1, off+2, off+1, artistF, albumF, off+3)
+		LIMIT $%d`, off+1, off+1, lf, off+1, off+2, off+1, artistF, albumF, playF, off+3)
 	rows, err := e.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
@@ -216,4 +231,43 @@ func (e *Engine) playlists(ctx context.Context, q Query, limit int) ([]Hit, erro
 		out = append(out, h)
 	}
 	return out, rows.Err()
+}
+
+func playFilterSQL(ctx context.Context, q Query, args []any) (string, []any) {
+	uid := userFrom(ctx)
+	var b strings.Builder
+	userPred := func() string {
+		if uid == uuid.Nil {
+			return ""
+		}
+		args = append(args, uid)
+		return fmt.Sprintf(" AND pc.user_id=$%d", len(args))
+	}
+	if q.NeverPlayed {
+		u := userPred()
+		b.WriteString(" AND NOT EXISTS (SELECT 1 FROM play_counts pc WHERE pc.track_id=t.id AND pc.count>0" + u + ")")
+	}
+	if q.HasPlayed {
+		u := userPred()
+		b.WriteString(" AND EXISTS (SELECT 1 FROM play_counts pc WHERE pc.track_id=t.id AND pc.count>0" + u + ")")
+	}
+	if q.LastPlayedWithin > 0 {
+		args = append(args, time.Now().Add(-q.LastPlayedWithin))
+		ph := len(args)
+		u := userPred()
+		b.WriteString(fmt.Sprintf(" AND EXISTS (SELECT 1 FROM play_counts pc WHERE pc.track_id=t.id AND pc.last_played_at >= $%d%s)", ph, u))
+	}
+	if q.LastPlayedBefore > 0 {
+		args = append(args, time.Now().Add(-q.LastPlayedBefore))
+		ph := len(args)
+		u := userPred()
+		b.WriteString(fmt.Sprintf(" AND EXISTS (SELECT 1 FROM play_counts pc WHERE pc.track_id=t.id AND pc.last_played_at IS NOT NULL AND pc.last_played_at < $%d%s)", ph, u))
+	}
+	if q.LastPlayedAfter != nil {
+		args = append(args, *q.LastPlayedAfter)
+		ph := len(args)
+		u := userPred()
+		b.WriteString(fmt.Sprintf(" AND EXISTS (SELECT 1 FROM play_counts pc WHERE pc.track_id=t.id AND pc.last_played_at >= $%d%s)", ph, u))
+	}
+	return b.String(), args
 }

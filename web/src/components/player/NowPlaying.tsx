@@ -1,19 +1,28 @@
-import { Heart, ListMusic, Pause, Play, Repeat, Shuffle, SkipBack, SkipForward, X } from "lucide-react";
+import { Heart, ListMusic, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Square, X } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { Switch } from "@/components/ui/switch";
 import { Artwork } from "@/components/media/Artwork";
 import { artworkUrl, formatDuration } from "@/lib/utils";
+import { Visualizer } from "@/components/player/Visualizer";
 import { usePlayer } from "@/stores/player";
 import { useUi } from "@/stores/ui";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
+
+function nextRepeat(mode: string) {
+  if (mode === "off") return "queue";
+  if (mode === "queue") return "one";
+  return "off";
+}
 
 export function NowPlaying() {
   const ui = useUi();
   const p = usePlayer();
   const t = p.current;
   const progress = p.duration ? (p.position / p.duration) * 100 : 0;
+  const RepeatIcon = p.repeat === "one" ? Repeat1 : Repeat;
   return (
     <Dialog open={ui.nowPlayingOpen} onOpenChange={(v) => ui.set({ nowPlayingOpen: v })}>
       <DialogContent className="max-h-[92vh] overflow-auto p-0 sm:w-[min(560px,96vw)]">
@@ -24,6 +33,7 @@ export function NowPlaying() {
           <div className="mx-auto aspect-square w-full max-w-sm overflow-hidden rounded-xl shadow-card">
             {t && <Artwork src={artworkUrl("track", t.id, "now")} id={t.id} name={t.title} kind="album" />}
           </div>
+          <Visualizer active={p.visualizer && ui.nowPlayingOpen} />
           <div className="mt-6">
             <h2 className="text-2xl font-semibold">{t?.title || "Nothing playing"}</h2>
             <p className="text-muted">{t?.artists?.map((a) => a.name).join(", ") || t?.artist}</p>
@@ -41,7 +51,30 @@ export function NowPlaying() {
               {p.playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
             </Button>
             <Button size="icon" variant="ghost" onClick={() => p.control("skip")}><SkipForward /></Button>
-            <Button size="icon" variant="ghost" className={p.repeat !== "off" ? "text-accent" : ""} onClick={() => p.control("repeat", { mode: p.repeat === "queue" ? "off" : "queue" })}><Repeat /></Button>
+            <Button size="icon" variant="ghost" className={p.repeat !== "off" ? "text-accent" : ""} onClick={() => p.control("repeat", { mode: nextRepeat(p.repeat) })}><RepeatIcon /></Button>
+          </div>
+          <div className="mt-4 space-y-3">
+            <label className="flex items-center justify-between text-sm">
+              Speed {p.playbackRate.toFixed(2)}×
+              <span className="w-40">
+                <Slider min={50} max={200} step={5} value={[p.playbackRate * 100]} onValueChange={([v]) => p.setPlaybackRate((v || 100) / 100)} />
+              </span>
+            </label>
+            <label className="flex items-center justify-between text-sm">
+              Visualizer
+              <Switch checked={p.visualizer} onCheckedChange={p.setVisualizer} />
+            </label>
+            <label className="flex items-center justify-between text-sm">
+              Stop after current
+              <Switch checked={p.stopAfterCurrent} onCheckedChange={p.setStopAfterCurrent} />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              {[5, 15, 30, 60].map((m) => (
+                <Button key={m} size="sm" variant="secondary" onClick={() => p.setSleep(m)}>Sleep {m}m</Button>
+              ))}
+              <Button size="sm" variant="secondary" onClick={() => p.setSleep(0)}>After current</Button>
+              <Button size="sm" variant="ghost" onClick={() => p.setSleep(null)}>Clear timer</Button>
+            </div>
           </div>
           <div className="mt-4 flex justify-center gap-2">
             {t && (
@@ -51,6 +84,9 @@ export function NowPlaying() {
             )}
             <Button variant="secondary" onClick={() => ui.set({ queueOpen: true, nowPlayingOpen: false })}>
               <ListMusic className="mr-2" /> Queue
+            </Button>
+            <Button variant={p.stopAfterCurrent ? "default" : "secondary"} onClick={() => p.setStopAfterCurrent(!p.stopAfterCurrent)}>
+              <Square className="mr-2" /> Stop after
             </Button>
           </div>
         </div>

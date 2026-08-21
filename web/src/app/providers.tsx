@@ -4,6 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "sonner";
 import { useEffect } from "react";
 import { useTheme } from "@/stores/theme";
+import { PrefsSync } from "@/stores/prefs";
 
 const client = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } }
@@ -18,6 +19,7 @@ export function Providers({ children }: { children: ReactNode }) {
     <QueryClientProvider client={client}>
       <TooltipProvider delayDuration={300}>
         {children}
+        <PrefsSync />
         <Toaster theme={theme === "light" ? "light" : "dark"} richColors position="bottom-right" />
       </TooltipProvider>
     </QueryClientProvider>

@@ -3,6 +3,8 @@ package ingest
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -139,24 +141,48 @@ func (s *Service) extractZip(ctx context.Context, staging string, sessionID uuid
 			zr.Close()
 			return 0, "", uuid.Nil, nil, err
 		}
-		out, storeName := transcode.PrepareStore(ctx, tmp.Name(), rel, "")
-		if out != tmp.Name() {
+		out := transcode.PrepareStoreOpts(ctx, tmp.Name(), rel, "", scan.StoreOptsFor(ctx, s.pool, lib))
+		if out.Path != tmp.Name() {
 			os.Remove(tmp.Name())
 		}
-		key := path.Join(root, storeName)
-		sf, err := os.Open(out)
+		key := path.Join(root, out.StoreName)
+		sf, err := os.Open(out.Path)
 		if err != nil {
-			os.Remove(out)
+			os.Remove(out.Path)
+			if out.CompanionPath != "" {
+				os.Remove(out.CompanionPath)
+			}
 			zr.Close()
 			return 0, "", uuid.Nil, nil, err
 		}
 		st, _ := sf.Stat()
 		err = prov.Write(ctx, key, sf, storage.WriteInfo{Size: st.Size()})
 		sf.Close()
-		os.Remove(out)
+		if out.Path != tmp.Name() {
+			os.Remove(out.Path)
+		} else {
+			os.Remove(tmp.Name())
+		}
 		if err != nil {
+			if out.CompanionPath != "" {
+				os.Remove(out.CompanionPath)
+			}
 			zr.Close()
 			return 0, "", uuid.Nil, nil, err
+		}
+		if out.CompanionPath != "" {
+			ck := scan.CompanionStorageKey(key, "")
+			if hf, e2 := os.Open(out.CompanionPath); e2 == nil {
+				sum := sha256.New()
+				_, _ = io.Copy(sum, hf)
+				hf.Seek(0, io.SeekStart)
+				hash := hex.EncodeToString(sum.Sum(nil))
+				ck = scan.CompanionStorageKey(key, hash)
+				cst, _ := hf.Stat()
+				_ = prov.Write(ctx, ck, hf, storage.WriteInfo{Size: cst.Size()})
+				hf.Close()
+			}
+			os.Remove(out.CompanionPath)
 		}
 	}
 	zr.Close()

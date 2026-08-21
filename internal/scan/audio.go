@@ -4,6 +4,8 @@ import (
 	"net/url"
 	"path"
 	"strings"
+
+	"github.com/sounddock/sounddock/internal/metadata"
 )
 
 var audioExt = map[string]bool{
@@ -65,6 +67,62 @@ func ExtFromContentType(ct string) string {
 	default:
 		return ""
 	}
+}
+
+func SkipScanKey(key string) bool {
+	k := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(key), "\\", "/"))
+	k = strings.TrimPrefix(k, "/")
+	if strings.HasPrefix(k, "trash/") || strings.Contains(k, "/trash/") {
+		return true
+	}
+	if strings.HasPrefix(k, "compressed/") || strings.Contains(k, "/compressed/") {
+		return true
+	}
+	return false
+}
+
+func HashStorageKey(prefix, hash, ext string) string {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	ext = strings.ToLower(ext)
+	if ext != "" && !strings.HasPrefix(ext, ".") {
+		ext = "." + ext
+	}
+	if len(hash) < 2 {
+		return path.Join(prefix, "uploads", hash+ext)
+	}
+	return path.Join(prefix, "uploads", hash[:2], hash+ext)
+}
+
+func CompanionStorageKey(originalKey, hash string) string {
+	hash = strings.ToLower(strings.TrimSpace(hash))
+	if len(hash) < 2 {
+		hash = hash + "00"
+	}
+	k := strings.ReplaceAll(originalKey, "\\", "/")
+	prefix := ""
+	switch {
+	case strings.HasPrefix(k, "uploads/") || strings.HasPrefix(k, "imports/") || strings.HasPrefix(k, "migrated/"):
+		prefix = ""
+	default:
+		for _, marker := range []string{"/uploads/", "/imports/", "/migrated/"} {
+			if i := strings.Index(k, marker); i >= 0 {
+				prefix = k[:i]
+				break
+			}
+		}
+	}
+	return path.Join(prefix, "compressed", hash[:2], hash+".flac")
+}
+
+func IsHashStorageKey(key string) bool {
+	k := strings.ReplaceAll(key, "\\", "/")
+	base := path.Base(k)
+	dir := path.Base(path.Dir(k))
+	if len(dir) != 2 {
+		return false
+	}
+	name := strings.TrimSuffix(base, path.Ext(base))
+	return metadata.LooksLikeHash(name) && strings.HasPrefix(strings.ToLower(name), dir)
 }
 
 func ResolveAudioExt(name, rawURL, contentType string) string {

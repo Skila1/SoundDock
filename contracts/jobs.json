@@ -1,0 +1,50 @@
+{
+  "jobs": [
+    {
+      "name": "waveform.generate",
+      "owner": "P3",
+      "payload": {
+        "track_id": "00000000-0000-4000-8000-000000000050",
+        "track_file_id": "00000000-0000-4000-8000-000000000060"
+      }
+    },
+    {
+      "name": "fingerprint.generate",
+      "owner": "P3",
+      "payload": {
+        "track_id": "00000000-0000-4000-8000-000000000050",
+        "track_file_id": "00000000-0000-4000-8000-000000000060"
+      }
+    },
+    {
+      "name": "integrity.scan",
+      "owner": "P3",
+      "payload": {
+        "library_id": "00000000-0000-4000-8000-000000000020"
+      }
+    },
+    {
+      "name": "radio.refresh",
+      "owner": "P4",
+      "payload": {
+        "kind": "artist",
+        "seed_id": "00000000-0000-4000-8000-000000000030",
+        "limit": 50
+      }
+    },
+    {
+      "name": "smart_playlist.refresh",
+      "owner": "P4",
+      "payload": {
+        "playlist_id": "00000000-0000-4000-8000-000000000090"
+      }
+    },
+    {
+      "name": "party.expire",
+      "owner": "P1",
+      "payload": {
+        "session_id": "00000000-0000-4000-8000-000000000070"
+      }
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "voice_state": {
+    "method": "GET",
+    "path": "/api/v1/me/discord/voice-state",
+    "response": {
+      "discord_enabled": true,
+      "linked": true,
+      "in_voice": true,
+      "guild_id": "111111111111111111",
+      "channel_id": "222222222222222222"
+    }
+  },
+  "join": {
+    "method": "POST",
+    "path": "/api/v1/me/discord/join",
+    "response": {
+      "ok": true,
+      "guild_id": "111111111111111111",
+      "channel_id": "222222222222222222"
+    },
+    "not_in_voice": {
+      "status": 409,
+      "code": "not_in_voice"
+    }
+  },
+  "play": {
+    "method": "POST",
+    "path": "/api/v1/me/discord/play",
+    "body": {
+      "track_ids": ["00000000-0000-4000-8000-000000000050"],
+      "start": 0
+    },
+    "notes": "Join the user's current VC then enqueue through P1 discord_guild session. Do not invent a second queue."
+  },
+  "player_output": {
+    "options": ["browser", "discord"],
+    "discord_enabled_when": "discord_enabled && linked && in_voice",
+    "default_when_in_voice": "discord",
+    "default_otherwise": "browser"
+  }
+}

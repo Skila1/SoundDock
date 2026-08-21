@@ -16,9 +16,9 @@ import (
 )
 
 type Service struct {
-	pool   *pgxpool.Pool
-	dir    string
-	dsn    string
+	pool *pgxpool.Pool
+	dir  string
+	dsn  string
 }
 
 func New(pool *pgxpool.Pool, dir, dsn string) *Service {
@@ -57,6 +57,26 @@ func (s *Service) Run(ctx context.Context) (uuid.UUID, error) {
 		_, _ = s.pool.Exec(ctx, `UPDATE backups SET status='verify_failed' WHERE id=$1`, id)
 	}
 	return id, nil
+}
+
+type Record struct {
+	ID        uuid.UUID
+	Path      string
+	SizeBytes int64
+	Checksum  string
+	Status    string
+	CreatedAt time.Time
+}
+
+func (s *Service) Get(ctx context.Context, id uuid.UUID) (Record, error) {
+	var rec Record
+	err := s.pool.QueryRow(ctx, `SELECT id, path, size_bytes, COALESCE(checksum,''), status, created_at FROM backups WHERE id=$1`, id).
+		Scan(&rec.ID, &rec.Path, &rec.SizeBytes, &rec.Checksum, &rec.Status, &rec.CreatedAt)
+	return rec, err
+}
+
+func (s *Service) setStatus(ctx context.Context, id uuid.UUID, status string) {
+	_, _ = s.pool.Exec(ctx, `UPDATE backups SET status=$2 WHERE id=$1`, id, status)
 }
 
 func (s *Service) VerifyFile(path string) (bool, string) {

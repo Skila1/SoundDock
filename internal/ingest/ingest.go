@@ -139,7 +139,7 @@ func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(c
 		defer cancel()
 		ingestSem <- struct{}{}
 		defer func() { <-ingestSem }()
-		_ = s.scanner.IngestKey(ctx, libID, prov, key)
+		_ = s.scanner.IngestKey(ctx, libID, prov, key, filename)
 	}()
 	return nil
 }

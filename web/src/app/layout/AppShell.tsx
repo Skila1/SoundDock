@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { PanelRightOpen } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Sidebar } from "@/components/navigation/Sidebar";
 import { TopBar } from "@/components/navigation/TopBar";
 import { MobileNav } from "@/components/navigation/MobileNav";
@@ -13,8 +14,11 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Sidebar as Side } from "@/components/navigation/Sidebar";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
+import { PrefsSync } from "@/stores/prefs";
 import { attachAudioListeners, usePlayer } from "@/stores/player";
+import { ensureDiscordPresence } from "@/features/settings/discordPresence";
 import { useUi } from "@/stores/ui";
+import { api } from "@/lib/api";
 import type { User } from "@/types/api";
 
 const titles: Record<string, string> = {
@@ -29,6 +33,12 @@ const titles: Record<string, string> = {
   "/upload": "Upload",
   "/import": "Remote Import",
   "/profile": "Profile",
+  "/profile/devices": "Devices",
+  "/profile/party": "Party",
+  "/history": "History",
+  "/stats": "Stats",
+  "/wrapped": "Wrapped",
+  "/radio": "Radio",
   "/admin": "Administration"
 };
 
@@ -38,11 +48,14 @@ export function AppShell({ user }: { user: User }) {
   useEffect(() => {
     attachAudioListeners();
     usePlayer.getState().load();
+    ensureDiscordPresence();
   }, []);
   const title = Object.entries(titles).find(([k]) => (k === "/" ? loc.pathname === "/" : loc.pathname.startsWith(k)))?.[1];
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <PrefsSync />
+      <AnnouncementBanner />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar user={user} collapsible />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -77,6 +90,25 @@ export function AppShell({ user }: { user: User }) {
           </div>
         </SheetContent>
       </Sheet>
+    </div>
+  );
+}
+
+function AnnouncementBanner() {
+  const q = useQuery({
+    queryKey: ["announcement"],
+    queryFn: () => api.get<{ enabled?: boolean; message?: string }>("/api/v1/announcement"),
+    refetchInterval: 60_000
+  });
+  const [dismissed, setDismissed] = useState("");
+  const msg = q.data?.enabled ? (q.data.message || "") : "";
+  if (!msg || dismissed === msg) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 border-b border-border bg-accent/15 px-4 py-2 text-sm">
+      <span>{msg}</span>
+      <Button size="sm" variant="ghost" onClick={() => setDismissed(msg)}>
+        Dismiss
+      </Button>
     </div>
   );
 }

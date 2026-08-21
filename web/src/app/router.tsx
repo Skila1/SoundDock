@@ -16,7 +16,24 @@ const AlbumsPage = lazy(() => import("@/features/albums/AlbumsPage").then((m) =>
 const AlbumPage = lazy(() => import("@/features/albums/AlbumPage").then((m) => ({ default: m.AlbumPage })));
 const TracksPage = lazy(() => import("@/features/tracks/TracksPage").then((m) => ({ default: m.TracksPage })));
 const PlaylistsPage = lazy(() => import("@/features/playlists/PlaylistsPage").then((m) => ({ default: m.PlaylistsPage })));
-const PlaylistPage = lazy(() => import("@/features/playlists/PlaylistPage").then((m) => ({ default: m.PlaylistPage })));
+const PlaylistInvitePage = lazy(() => import("@/features/playlists/PlaylistInvitePage").then((m) => ({ default: m.PlaylistInvitePage })));
+const RadioPage = lazy(() => import("@/features/playlists/RadioPage").then((m) => ({ default: m.RadioPage })));
+const RadioStationPage = lazy(() => import("@/features/playlists/RadioPage").then((m) => ({ default: m.RadioStationPage })));
+const TrackPage = lazy(() => import("@/features/tracks/TrackPage").then((m) => ({ default: m.TrackPage })));
+const HistoryPage = lazy(() => import("@/features/history/HistoryPage").then((m) => ({ default: m.HistoryPage })));
+const NeverPlayedPage = lazy(() => import("@/features/history/NeverPlayedPage").then((m) => ({ default: m.NeverPlayedPage })));
+const RediscoveryPage = lazy(() => import("@/features/history/RediscoveryPage").then((m) => ({ default: m.RediscoveryPage })));
+const StatsPage = lazy(() => import("@/features/stats/StatsPage").then((m) => ({ default: m.StatsPage })));
+const WrappedPage = lazy(() => import("@/features/wrapped/WrappedPage").then((m) => ({ default: m.WrappedPage })));
+const DevicesPage = lazy(() => import("@/features/devices/DevicesPage").then((m) => ({ default: m.DevicesPage })));
+const PartyPage = lazy(() => import("@/features/devices/PartyPage").then((m) => ({ default: m.PartyPage })));
+const AdminHealth = lazy(() => import("@/features/admin/AdminHealth").then((m) => ({ default: m.AdminHealth })));
+const AdminQuotas = lazy(() => import("@/features/admin/AdminQuotas").then((m) => ({ default: m.AdminQuotas })));
+const AdminMaintenance = lazy(() => import("@/features/admin/AdminMaintenance").then((m) => ({ default: m.AdminMaintenance })));
+const AdminBackupPreview = lazy(() => import("@/features/admin/AdminBackupPreview").then((m) => ({ default: m.AdminBackupPreview })));
+const AdminDiagnostics = lazy(() => import("@/features/admin/AdminDiagnostics").then((m) => ({ default: m.AdminDiagnostics })));
+const AdminDemo = lazy(() => import("@/features/admin/AdminDemo").then((m) => ({ default: m.AdminDemo })));
+const AdminGrants = lazy(() => import("@/features/admin/AdminGrants").then((m) => ({ default: m.AdminGrants })));
 const ConnectedServicesPage = lazy(() => import("@/features/settings/ConnectedServicesPage").then((m) => ({ default: m.ConnectedServicesPage })));
 const FavouritesPage = lazy(() => import("@/features/favourites/FavouritesPage").then((m) => ({ default: m.FavouritesPage })));
 const LibrariesPage = lazy(() => import("@/features/library/LibrariesPage").then((m) => ({ default: m.LibrariesPage })));
@@ -85,16 +102,35 @@ export function AppRouter() {
           <Route path="/albums" element={<AlbumsPage />} />
           <Route path="/albums/:id" element={<AlbumPage />} />
           <Route path="/tracks" element={<TracksPage />} />
+          <Route path="/tracks/:id" element={<TrackPage />} />
           <Route path="/playlists" element={<PlaylistsPage />} />
+          <Route path="/playlists/invite" element={<PlaylistInvitePage />} />
           <Route path="/playlists/:id" element={<PlaylistPage />} />
+          <Route path="/radio" element={<RadioPage />} />
+          <Route path="/radio/:kind/:seedId" element={<RadioStationPage />} />
+          <Route path="/radio/:kind" element={<RadioStationPage />} />
+          <Route path="/history" element={<HistoryPage />} />
+          <Route path="/history/never-played" element={<NeverPlayedPage />} />
+          <Route path="/history/rediscovery" element={<RediscoveryPage />} />
+          <Route path="/stats" element={<StatsPage />} />
+          <Route path="/wrapped" element={<WrappedPage />} />
           <Route path="/settings/connected" element={<ConnectedServicesPage />} />
           <Route path="/favourites" element={<FavouritesPage />} />
           <Route path="/library" element={<LibrariesPage user={user} />} />
           <Route path="/upload" element={<UploadPage />} />
           <Route path="/import" element={<ImportPage />} />
           <Route path="/profile" element={<ProfilePage user={user} onRefresh={() => me.refetch()} />} />
+          <Route path="/profile/devices" element={<DevicesPage />} />
+          <Route path="/profile/party" element={<PartyPage />} />
           <Route path="/admin" element={user.is_admin ? <AdminLayout /> : <ForbiddenPage />}>
             <Route index element={<AdminOverview />} />
+            <Route path="health" element={<AdminHealth />} />
+            <Route path="quotas" element={<AdminQuotas />} />
+            <Route path="maintenance" element={<AdminMaintenance />} />
+            <Route path="backup-preview" element={<AdminBackupPreview />} />
+            <Route path="diagnostics" element={<AdminDiagnostics />} />
+            <Route path="demo" element={<AdminDemo />} />
+            <Route path="grants" element={<AdminGrants />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="roles" element={<AdminRoles />} />
             <Route path="storage" element={<AdminStorage />} />

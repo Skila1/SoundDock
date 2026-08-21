@@ -34,3 +34,7 @@ export const api = {
 };
 
 export const streamUrl = (id: string, quality = "original") => `/api/v1/tracks/${id}/stream?quality=${quality}`;
+
+export function streamWithOffline(id: string, offlineToken: string, quality = "original") {
+  return `/api/v1/tracks/${id}/stream?quality=${quality}&offline_token=${encodeURIComponent(offlineToken)}`;
+}

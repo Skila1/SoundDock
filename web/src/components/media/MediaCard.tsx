@@ -1,9 +1,25 @@
-import type { ReactNode } from "react";
+import type { DragEvent, ReactNode } from "react";
 import { Play } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Artwork } from "./Artwork";
 import { cn, artworkUrl } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/misc";
+import { api } from "@/lib/api";
+import { addTracksToPlaylist, TRACK_DND_MIME } from "./TrackList";
+import { toast } from "sonner";
+
+function parseTrackIds(e: DragEvent) {
+  const raw = e.dataTransfer.getData(TRACK_DND_MIME) || e.dataTransfer.getData("text/plain");
+  if (!raw) return [] as string[];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.track_ids)) return parsed.track_ids.filter((id: unknown) => typeof id === "string");
+  } catch {
+    /* plain list */
+  }
+  return raw.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+}
 
 export function MediaCard({
   to,
@@ -12,7 +28,9 @@ export function MediaCard({
   subtitle,
   kind,
   onPlay,
-  className
+  className,
+  explicit,
+  codec
 }: {
   to: string;
   id: string;
@@ -21,14 +39,45 @@ export function MediaCard({
   kind: "album" | "artist" | "playlist" | "track";
   onPlay?: () => void;
   className?: string;
+  explicit?: boolean | null;
+  codec?: string;
 }) {
   const src = kind === "track" ? artworkUrl("track", id, "card") : artworkUrl(kind, id, "card");
+  const onDragOver = (e: DragEvent) => {
+    if (kind !== "playlist") return;
+    if (![TRACK_DND_MIME, "text/plain"].some((t) => e.dataTransfer.types.includes(t))) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  };
+  const onDrop = async (e: DragEvent) => {
+    if (kind !== "playlist") return;
+    e.preventDefault();
+    const ids = parseTrackIds(e);
+    if (!ids.length) return;
+    try {
+      await addTracksToPlaylist(id, ids);
+    } catch {
+      toast.error("Could not add to playlist");
+    }
+  };
   return (
-    <Link to={to} className={cn("group block min-w-[148px] max-w-[180px]", className)}>
+    <Link
+      to={to}
+      data-playlist-id={kind === "playlist" ? id : undefined}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      className={cn("group block min-w-[148px] max-w-[180px]", className)}
+    >
       <div className="relative overflow-hidden rounded-lg bg-surface-2 shadow-card">
         <div className="aspect-square">
           <Artwork src={src} id={id} name={title} kind={kind} />
         </div>
+        {(explicit || codec) && (
+          <div className="absolute left-2 top-2 flex gap-1">
+            {explicit && <Badge tone="warning">E</Badge>}
+            {codec && <Badge>{codec}</Badge>}
+          </div>
+        )}
         {onPlay && (
           <Button
             size="icon"

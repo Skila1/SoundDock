@@ -28,11 +28,12 @@ export function TracksPage() {
             <MediaCard
               key={t.id}
               className="max-w-none min-w-0 w-full"
-              to={t.album_id ? `/albums/${t.album_id}` : "/tracks"}
+              to={`/tracks/${t.id}`}
               id={t.id}
               title={t.title}
               subtitle={t.artist || t.album}
               kind="track"
+              explicit={t.explicit}
               onPlay={() => play(ids, i)}
             />
           ))}
@@ -43,7 +44,6 @@ export function TracksPage() {
           onPlay={(i) => play(ids, i)}
           onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
           onNext={(t) => add([t.id], true).then(() => toast.success("Playing next"))}
-          onFav={(t) => api.post("/api/v1/favourites", { type: "track", id: t.id, on: true }).then(() => toast.success("Favourited"))}
         />
       )}
     </div>

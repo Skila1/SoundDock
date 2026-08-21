@@ -12,3 +12,15 @@ func TestApply(t *testing.T) {
 		t.Fatal(p)
 	}
 }
+
+func TestShouldPhysical(t *testing.T) {
+	if ShouldPhysical("virtual", false, false) || ShouldPhysical("virtual", true, false) {
+		t.Fatal("virtual hash library must never physically reorganise")
+	}
+	if ShouldPhysical("managed", false, false) || ShouldPhysical("managed", true, true) {
+		t.Fatal("managed still needs allow_physical_reorganise and writable")
+	}
+	if !ShouldPhysical("managed", true, false) {
+		t.Fatal("managed + allow_physical_reorganise")
+	}
+}

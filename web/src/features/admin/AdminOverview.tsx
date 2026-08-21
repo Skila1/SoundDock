@@ -21,11 +21,15 @@ function Card({ label, value, icon: Icon, hint }: { label: string; value: ReactN
 export function AdminOverview() {
   const ov = useQuery({ queryKey: ["admin-overview"], queryFn: () => api.get<any>("/api/v1/admin/overview") });
   const health = useQuery({ queryKey: ["admin-health"], queryFn: () => api.get<any>("/api/v1/admin/health") });
+  const detail = useQuery({ queryKey: ["admin-health-detail"], queryFn: () => api.get<any>("/api/v1/admin/health/detail") });
+  const maint = useQuery({ queryKey: ["admin-maintenance"], queryFn: () => api.get<any>("/api/v1/admin/maintenance") });
+  const announce = useQuery({ queryKey: ["admin-announcement"], queryFn: () => api.get<any>("/api/v1/admin/announcement") });
   const db = useQuery({ queryKey: ["admin-db"], queryFn: () => api.get<any>("/api/v1/admin/database") });
   const jobs = useQuery({ queryKey: ["admin-jobs"], queryFn: () => api.get<any[]>("/api/v1/admin/jobs") });
   const discord = useQuery({ queryKey: ["discord"], queryFn: () => api.get<any>("/api/v1/admin/integrations/discord") });
   const c = ov.data?.counts || {};
-  const h = health.data || {};
+  const h = { ...(health.data || {}), ...(detail.data || {}) };
+  const fp = h.fingerprint as string | undefined;
   return (
     <div>
       <PageHeader title="Administration" description="Server health and library status." />
@@ -33,8 +37,13 @@ export function AdminOverview() {
         <Badge tone={h.postgres ? "success" : "danger"}>{h.postgres ? "Postgres healthy" : "Postgres down"}</Badge>
         <Badge tone={h.ffmpeg ? "success" : "warning"}>{h.ffmpeg ? "FFmpeg" : "FFmpeg missing"}</Badge>
         <Badge tone={h.worker ? "success" : "warning"}>{h.worker ? "Worker ready" : "Draining"}</Badge>
+        <Badge tone={fp === "available" ? "success" : "warning"}>Fingerprint {fp || "unknown"}</Badge>
+        <Badge tone={maint.data?.maintenance ? "warning" : "neutral"}>{maint.data?.maintenance ? "Maintenance" : "Live"}</Badge>
         <Badge tone={discord.data?.token_configured ? "success" : "neutral"}>{discord.data?.token_configured ? "Discord configured" : "Discord idle"}</Badge>
       </div>
+      {announce.data?.announcement ? (
+        <p className="mb-4 rounded-xl border border-border bg-surface-1 p-3 text-sm">{announce.data.announcement}</p>
+      ) : null}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Card icon={Music} label="Tracks" value={c.tracks ?? "-"} />
         <Card icon={Disc3} label="Albums" value={c.albums ?? "-"} />

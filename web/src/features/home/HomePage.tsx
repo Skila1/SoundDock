@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Disc3, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import { MediaCard } from "@/components/media/MediaCard";
@@ -58,11 +58,17 @@ export function HomePage() {
   }
 
   const heading = home.data?.continue?.length ? "Recently played" : "Recently added";
+  const playNext = (t: HomeTrack) => add([t.id], true).then(() => toast.success("Playing next"));
 
   return (
     <div>
       <div className="mb-6 flex items-center justify-between gap-3">
-        <h1 className="text-3xl font-semibold">{heading}</h1>
+        <div className="flex min-w-0 items-baseline gap-3">
+          <h1 className="text-3xl font-semibold">{heading}</h1>
+          {home.data?.continue?.length > 0 && (
+            <Link to="/history" className="text-sm text-muted hover:underline">See all</Link>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="secondary" onClick={() => nav("/playlists")}>
             <Plus className="h-4 w-4" /> Create playlist
@@ -70,13 +76,14 @@ export function HomePage() {
           <LayoutToggle />
         </div>
       </div>
-      <TrackSection tracks={recent} layout={layout} onPlay={play} onQueue={add} />
+      <TrackSection tracks={recent} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
       {played.length > 0 && (
         <>
           <div className="mb-4 mt-10 flex items-center justify-between">
             <h2 className="text-xl font-semibold">Most played</h2>
+            <Link to="/stats" className="text-sm text-muted hover:underline">See all</Link>
           </div>
-          <TrackSection tracks={played} layout={layout} onPlay={play} onQueue={add} />
+          <TrackSection tracks={played} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
         </>
       )}
       {added.length > 0 && home.data?.continue?.length > 0 && (
@@ -84,7 +91,7 @@ export function HomePage() {
           <div className="mb-4 mt-10 flex items-center justify-between">
             <h2 className="text-xl font-semibold">Recently added</h2>
           </div>
-          <TrackSection tracks={added} layout={layout} onPlay={play} onQueue={add} />
+          <TrackSection tracks={added} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
         </>
       )}
     </div>
@@ -95,12 +102,14 @@ function TrackSection({
   tracks,
   layout,
   onPlay,
-  onQueue
+  onQueue,
+  onNext
 }: {
   tracks: HomeTrack[];
   layout: "grid" | "list";
   onPlay: (ids: string[], i?: number) => void;
   onQueue: (ids: string[]) => Promise<void>;
+  onNext: (t: HomeTrack) => void;
 }) {
   const ids = tracks.map((t) => t.id);
   if (layout === "list") {
@@ -109,6 +118,7 @@ function TrackSection({
         tracks={tracks}
         onPlay={(i) => onPlay(ids, i)}
         onQueue={(t) => onQueue([t.id]).then(() => toast.success("Added to queue"))}
+        onNext={(t) => onNext(t)}
       />
     );
   }

@@ -16,10 +16,13 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sounddock/sounddock/internal/artwork"
+	"github.com/sounddock/sounddock/internal/fingerprint"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/metadata"
+	"github.com/sounddock/sounddock/internal/organise"
 	"github.com/sounddock/sounddock/internal/storage"
 	"github.com/sounddock/sounddock/internal/transcode"
+	"github.com/sounddock/sounddock/internal/waveform"
 	"github.com/sounddock/sounddock/internal/webhooks"
 )
 
@@ -70,13 +73,14 @@ func (s *Scanner) ScanLibrary(ctx context.Context, libID uuid.UUID, prov storage
 	}
 	defer it.Close()
 	var added, failed, seenN int
+	known := s.knownArtistFn(ctx)
 	for it.Next() {
 		e := it.Entry()
-		if e.IsDir || !IsAudioExt(strings.ToLower(path.Ext(e.Key))) {
+		if e.IsDir || SkipScanKey(e.Key) || !IsAudioExt(strings.ToLower(path.Ext(e.Key))) {
 			continue
 		}
 		seenN++
-		if err := s.ingestFile(ctx, libID, prov, e); err != nil {
+		if err := s.ingestFile(ctx, libID, prov, e, e.Key, known); err != nil {
 			failed++
 			_, _ = s.pool.Exec(ctx, `INSERT INTO scan_file_errors (scan_run_id, storage_key, error) VALUES ($1,$2,$3)`, runID, e.Key, err.Error())
 			s.log.Warn("scan file failed", "key", e.Key, "err", err)
@@ -95,7 +99,7 @@ func (s *Scanner) ScanLibrary(ctx context.Context, libID uuid.UUID, prov storage
 	return nil
 }
 
-func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, e storage.Entry) error {
+func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, e storage.Entry, originalName string, known func(string) bool) error {
 	var localPath string
 	if ls, ok := prov.(storage.FFmpegSourcer); ok {
 		src, err := ls.FFmpegSource(ctx, e.Key)
@@ -148,32 +152,74 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		localPath = name
 	}
 
-	if localPath != "" && prov.Capabilities().Write && transcode.NeedsCompress(e.Key, probe.Codec) {
-		if flac, err := transcode.CompressToFLAC(ctx, localPath); err == nil {
+	opts := s.libraryOpts(ctx, libID)
+	var origSize int64 = size
+	var companionPath, companionKey string
+	var companionSize int64
+	if localPath != "" && prov.Capabilities().Write && !opts.ReadOnly && transcode.NeedsCompress(e.Key, probe.Codec) {
+		if flac, err := transcode.CompressToFLACPreset(ctx, localPath, opts.Preset); err == nil {
 			in, _ := os.Stat(localPath)
 			out, _ := os.Stat(flac)
 			if out != nil && (in == nil || out.Size() < in.Size()) {
-				newKey := transcode.ReplaceExt(e.Key, ".flac")
-				if f, oerr := os.Open(flac); oerr == nil {
-					werr := prov.Write(ctx, newKey, f, storage.WriteInfo{Size: out.Size()})
-					f.Close()
-					if werr == nil {
-						if newKey != e.Key {
-							_ = prov.Delete(ctx, e.Key)
-						}
-						e.Key = newKey
-						e.Size = out.Size()
-						size = out.Size()
-						if h, herr := hashFile(flac); herr == nil {
-							hash = h
-						}
-						probe, _ = metadata.FromFile(flac)
+				if opts.KeepOriginal {
+					if h, herr := hashFile(flac); herr == nil {
+						companionKey = CompanionStorageKey(e.Key, h)
+					} else {
+						companionKey = transcode.ReplaceExt(e.Key, ".flac")
 					}
+					companionPath = flac
+					companionSize = out.Size()
+					if in != nil {
+						origSize = in.Size()
+					}
+				} else {
+					newKey := transcode.ReplaceExt(e.Key, ".flac")
+					if f, oerr := os.Open(flac); oerr == nil {
+						werr := prov.Write(ctx, newKey, f, storage.WriteInfo{Size: out.Size()})
+						f.Close()
+						if werr == nil {
+							if newKey != e.Key {
+								_ = prov.Delete(ctx, e.Key)
+							}
+							e.Key = newKey
+							e.Size = out.Size()
+							size = out.Size()
+							if in != nil {
+								origSize = in.Size()
+							}
+							if h, herr := hashFile(flac); herr == nil {
+								hash = h
+							}
+							probe, _ = metadata.FromFile(flac)
+						}
+					}
+					os.Remove(flac)
 				}
+			} else {
+				os.Remove(flac)
 			}
-			os.Remove(flac)
 		}
 	}
+	if companionPath != "" {
+		defer os.Remove(companionPath)
+	}
+
+	if originalName == "" || metadata.LooksLikeHash(originalName) {
+		var fn string
+		if hash != "" {
+			_ = s.pool.QueryRow(ctx, `SELECT filename FROM upload_sessions WHERE content_hash=$1 AND coalesce(filename,'') <> '' ORDER BY updated_at DESC LIMIT 1`, hash).Scan(&fn)
+		}
+		if fn != "" {
+			originalName = fn
+		} else {
+			originalName = e.Key
+		}
+	}
+	if known == nil {
+		known = s.knownArtistFn(ctx)
+	}
+	metadata.ApplyOriginalNameKnown(&probe, originalName, known)
+	metadata.EnrichMusicBrainz(ctx, s.pool, &probe)
 
 	artistName := probe.AlbumArtist
 	if artistName == "" {
@@ -201,18 +247,33 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		return err
 	}
 
+	title := nullTitle(probe.Title, originalName)
 	var existing uuid.UUID
 	err = s.pool.QueryRow(ctx, `SELECT track_id FROM track_files WHERE library_id=$1 AND storage_key=$2`, libID, e.Key).Scan(&existing)
 	var trackID uuid.UUID
 	if err == nil {
 		trackID = existing
-		_, _ = s.pool.Exec(ctx, `UPDATE tracks SET title=$2, disc_number=$3, track_number=$4, duration_ms=$5, year=NULLIF($6,0), genre_text=$7, updated_at=now() WHERE id=$1 AND locked=false`,
-			trackID, nullTitle(probe.Title, e.Key), max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre)
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE tracks SET
+			  title=$2,
+			  album_id=$3,
+			  disc_number=$4,
+			  track_number=$5,
+			  duration_ms=CASE WHEN $6 > 0 THEN $6 ELSE duration_ms END,
+			  year=COALESCE(NULLIF($7,0), year),
+			  genre_text=CASE WHEN $8 <> '' THEN $8 ELSE genre_text END,
+			  metadata_source=CASE WHEN $9 <> '' THEN $9 ELSE metadata_source END,
+			  metadata_confidence=COALESCE($10, metadata_confidence),
+			  mbid=CASE WHEN $11 <> '' THEN $11 ELSE mbid END,
+			  updated_at=now()
+			WHERE id=$1 AND locked=false`,
+			trackID, title, albumID, max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre, probe.Source, confOrNil(probe.Confidence), probe.MBID)
+		_, _ = s.pool.Exec(ctx, `DELETE FROM track_artists WHERE track_id=$1 AND role='primary' AND EXISTS (SELECT 1 FROM tracks WHERE id=$1 AND locked=false)`, trackID)
 	} else {
 		err = s.pool.QueryRow(ctx, `
-			INSERT INTO tracks (library_id, album_id, title, disc_number, track_number, duration_ms, year, genre_text)
-			VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,0),$8) RETURNING id`,
-			libID, albumID, nullTitle(probe.Title, e.Key), max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre).Scan(&trackID)
+			INSERT INTO tracks (library_id, album_id, title, disc_number, track_number, duration_ms, year, genre_text, metadata_source, metadata_confidence, mbid)
+			VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,0),$8,$9,$10,NULLIF($11,'')) RETURNING id`,
+			libID, albumID, title, max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre, probe.Source, confOrNil(probe.Confidence), probe.MBID).Scan(&trackID)
 		if err != nil {
 			return err
 		}
@@ -223,15 +284,51 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		_, _ = s.pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'composer',0) ON CONFLICT DO NOTHING`, trackID, cid)
 	}
 
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO track_files (track_id, library_id, storage_key, size_bytes, content_hash, codec, container, bitrate, sample_rate, channels, quality)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'original')
+	var fileID uuid.UUID
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO track_files (track_id, library_id, storage_key, size_bytes, content_hash, codec, container, bitrate, sample_rate, channels, bit_depth, quality, replaygain_track_gain, replaygain_track_peak, replaygain_album_gain, replaygain_album_peak, encoder_delay, encoder_padding, original_size_bytes)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,0),'original',$12,$13,$14,$15,NULLIF($16,0),NULLIF($17,0),$18)
 		ON CONFLICT (library_id, storage_key) DO UPDATE SET
 		  size_bytes=EXCLUDED.size_bytes, content_hash=EXCLUDED.content_hash, codec=EXCLUDED.codec,
-		  bitrate=EXCLUDED.bitrate, sample_rate=EXCLUDED.sample_rate, channels=EXCLUDED.channels`,
-		trackID, libID, e.Key, size, hash, probe.Codec, probe.Container, probe.Bitrate, probe.SampleRate, probe.Channels)
+		  bitrate=EXCLUDED.bitrate, sample_rate=EXCLUDED.sample_rate, channels=EXCLUDED.channels,
+		  bit_depth=EXCLUDED.bit_depth, replaygain_track_gain=EXCLUDED.replaygain_track_gain,
+		  replaygain_track_peak=EXCLUDED.replaygain_track_peak, replaygain_album_gain=EXCLUDED.replaygain_album_gain,
+		  replaygain_album_peak=EXCLUDED.replaygain_album_peak, encoder_delay=EXCLUDED.encoder_delay,
+		  encoder_padding=EXCLUDED.encoder_padding, original_size_bytes=EXCLUDED.original_size_bytes
+		RETURNING id`,
+		trackID, libID, e.Key, size, hash, probe.Codec, probe.Container, probe.Bitrate, probe.SampleRate, probe.Channels,
+		probe.BitDepth, probe.ReplayGainTrack, probe.ReplayGainTrackPeak, probe.ReplayGainAlbum, probe.ReplayGainAlbumPeak,
+		probe.EncoderDelay, probe.EncoderPadding, origSizePtr(origSize, size)).Scan(&fileID)
 	if err != nil {
 		return err
+	}
+
+	s.insertLyrics(ctx, trackID, probe)
+	s.writeDuplicateGroup(ctx, fileID, hash)
+	if companionPath != "" && companionKey != "" && !opts.ReadOnly {
+		if f, oerr := os.Open(companionPath); oerr == nil {
+			werr := prov.Write(ctx, companionKey, f, storage.WriteInfo{Size: companionSize})
+			f.Close()
+			if werr == nil {
+				ch, _ := hashFile(companionPath)
+				_, _ = s.pool.Exec(ctx, `
+					INSERT INTO track_files (track_id, library_id, storage_key, size_bytes, content_hash, codec, container, bitrate, sample_rate, channels, bit_depth, quality, original_size_bytes)
+					VALUES ($1,$2,$3,$4,$5,'flac','flac',$6,$7,$8,$9,$10,$11)
+					ON CONFLICT (library_id, storage_key) DO UPDATE SET
+					  size_bytes=EXCLUDED.size_bytes, content_hash=EXCLUDED.content_hash, original_size_bytes=EXCLUDED.original_size_bytes`,
+					trackID, libID, companionKey, companionSize, ch, probe.Bitrate, probe.SampleRate, probe.Channels, probe.BitDepth,
+					transcode.QualityCompressed, origSize)
+			}
+		}
+	}
+	if organise.ShouldPhysical(opts.OrgMode, opts.AllowPhysical, opts.ReadOnly) && prov.Capabilities().Write {
+		s.maybeReorganise(ctx, libID, prov, fileID, &e, probe, opts.Template)
+	}
+	if s.boolSetting(ctx, waveform.SettingEnabled, true) {
+		s.enqueueOnce(ctx, waveform.JobName, map[string]any{"track_id": trackID, "track_file_id": fileID})
+	}
+	if s.boolSetting(ctx, fingerprint.SettingEnabled, true) {
+		s.enqueueOnce(ctx, fingerprint.JobName, map[string]any{"track_id": trackID, "track_file_id": fileID})
 	}
 
 	if len(probe.Picture) > 0 && s.art != nil {
@@ -251,12 +348,32 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 	return nil
 }
 
-func (s *Scanner) IngestKey(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, key string) error {
+func (s *Scanner) IngestKey(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, key, originalName string) error {
 	info, err := prov.Stat(ctx, key)
 	if err != nil {
 		return err
 	}
-	return s.ingestFile(ctx, libID, prov, storage.Entry{Key: key, Size: info.Size, ModTime: info.ModTime})
+	return s.ingestFile(ctx, libID, prov, storage.Entry{Key: key, Size: info.Size, ModTime: info.ModTime}, originalName, s.knownArtistFn(ctx))
+}
+
+func (s *Scanner) knownArtistFn(ctx context.Context) func(string) bool {
+	cache := map[string]bool{}
+	return func(name string) bool {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" || key == "unknown artist" {
+			return false
+		}
+		if cache[key] {
+			return true
+		}
+		var id uuid.UUID
+		err := s.pool.QueryRow(ctx, `SELECT id FROM artists WHERE lower(name)=lower($1) LIMIT 1`, name).Scan(&id)
+		if err != nil {
+			return false
+		}
+		cache[key] = true
+		return true
+	}
 }
 
 func (s *Scanner) upsertArtist(ctx context.Context, name string) (uuid.UUID, error) {
@@ -311,14 +428,14 @@ func hashFile(p string) (string, error) {
 }
 
 func nullTitle(t, key string) string {
-	if t != "" {
+	if t != "" && !metadata.LooksLikeHash(t) {
 		return t
 	}
 	_, title := metadata.ParseAudioName(key)
 	if title != "" {
 		return title
 	}
-	return strings.TrimSuffix(filepath.Base(key), filepath.Ext(key))
+	return "Unknown Title"
 }
 
 func max1(n int) int {

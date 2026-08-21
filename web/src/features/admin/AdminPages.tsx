@@ -901,3 +901,12 @@ export function AdminCloudflare() {
     </div>
   );
 }
+
+export { AdminHealth } from "./AdminHealth";
+export { AdminQuotas } from "./AdminQuotas";
+export { AdminMaintenance } from "./AdminMaintenance";
+export { AdminBackupPreview } from "./AdminBackupPreview";
+export { AdminDiagnostics } from "./AdminDiagnostics";
+export { AdminDemo } from "./AdminDemo";
+export { AdminGrants } from "./AdminGrants";
+

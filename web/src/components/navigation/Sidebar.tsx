@@ -9,6 +9,7 @@ import {
   Mic2,
   PanelLeftClose,
   PanelLeftOpen,
+  Radio,
   Search,
   Settings,
   Upload,
@@ -29,11 +30,20 @@ const items = [
   { to: "/albums", label: "Albums", icon: Disc3 },
   { to: "/tracks", label: "Tracks", icon: Music },
   { to: "/playlists", label: "Playlists", icon: ListMusic },
+  { to: "/radio", label: "Radio", icon: Radio },
   { to: "/settings/connected", label: "Connected Services", icon: Link2 },
   { to: "/favourites", label: "Favourites", icon: Heart },
   { to: "/library", label: "Libraries", icon: Library },
   { to: "/upload", label: "Upload", icon: Upload },
   { to: "/import", label: "Remote Import", icon: Globe }
+];
+
+const profileItems = [
+  { to: "/history", label: "History" },
+  { to: "/stats", label: "Listening stats" },
+  { to: "/wrapped", label: "Wrapped" },
+  { to: "/profile/devices", label: "Devices" },
+  { to: "/profile/party", label: "Party" }
 ];
 
 export function Sidebar({ user, collapsed, className, collapsible = false }: { user: User; collapsed?: boolean; className?: string; collapsible?: boolean }) {
@@ -79,6 +89,21 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
           </NavLink>
         )}
       </nav>
+      {!compact && (
+        <div className="space-y-0.5 px-2 pb-2">
+          {profileItems.map((it) => (
+            <NavLink
+              key={it.to}
+              to={it.to}
+              className={({ isActive }) =>
+                cn("block rounded-lg px-3 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-foreground", isActive && "bg-surface-2 text-foreground")
+              }
+            >
+              {it.label}
+            </NavLink>
+          ))}
+        </div>
+      )}
       {collapsible && compact && (
         <div className="px-2 pb-2">
           <Tooltip label="Expand menu">

@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListMusic } from "lucide-react";
+import { ListMusic, Radio as RadioIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { MediaCard } from "@/components/media/MediaCard";
 import { Button } from "@/components/ui/button";
@@ -10,8 +10,9 @@ import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/misc";
 import { EmptyState, PageHeader } from "@/components/ui/empty";
-import type { Playlist } from "@/types/api";
 import { toast } from "sonner";
+import { usePlayer } from "@/stores/player";
+import type { PlaylistFolder, PlaylistListItem, RadioResponse } from "./types";
 
 const tabs = [
   { id: "all", label: "SoundDock" },
@@ -23,24 +24,66 @@ const tabs = [
 
 export function PlaylistsPage() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["playlists"], queryFn: () => api.get<Playlist[]>("/api/v1/playlists") });
+  const play = usePlayer((s) => s.playTracks);
+  const q = useQuery({ queryKey: ["playlists"], queryFn: () => api.get<PlaylistListItem[]>("/api/v1/playlists") });
+  const folders = useQuery({ queryKey: ["playlist-folders"], queryFn: () => api.get<PlaylistFolder[]>("/api/v1/playlists/folders") });
   const [open, setOpen] = useState(false);
   const [imp, setImp] = useState(false);
+  const [smart, setSmart] = useState(false);
   const [tab, setTab] = useState("all");
+  const [folder, setFolder] = useState("all");
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
+  const [newFolder, setNewFolder] = useState("");
   const [url, setUrl] = useState("");
   const [mode, setMode] = useState("once");
   const [interval, setInterval] = useState("6h");
-  const list = (q.data || []).filter((p) => (tab === "all" ? !p.provider : p.provider === tab));
+  const [genre, setGenre] = useState("");
+  const [ymin, setYmin] = useState("");
+  const [ymax, setYmax] = useState("");
+
+  const list = useMemo(() => {
+    return (q.data || []).filter((p) => {
+      if (tab === "all" ? p.provider : p.provider !== tab) {
+        if (tab !== "all") return false;
+        if (p.provider) return false;
+      }
+      if (folder !== "all" && (p.folder || "") !== folder) return false;
+      return true;
+    });
+  }, [q.data, tab, folder]);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, PlaylistListItem[]>();
+    for (const p of list) {
+      const key = p.folder || "";
+      const arr = map.get(key) || [];
+      arr.push(p);
+      map.set(key, arr);
+    }
+    return [...map.entries()];
+  }, [list]);
+
+  const quickMix = async () => {
+    const r = await api.get<RadioResponse>("/api/v1/radio?kind=quick_mix&limit=20");
+    const ids = r.track_ids || [];
+    if (!ids.length) {
+      toast.message("Quick Mix needs tracks in your library.");
+      return;
+    }
+    await play(ids);
+  };
 
   return (
     <div>
       <PageHeader
         title="Playlists"
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => { location.href = "/radio"; }}><RadioIcon /> Radio</Button>
+            <Button variant="secondary" onClick={quickMix}>Quick Mix</Button>
             <Button variant="secondary" onClick={() => setImp(true)}>Import from URL</Button>
+            <Button variant="secondary" onClick={() => setSmart(true)}>Smart playlist</Button>
             <Button onClick={() => setOpen(true)}>New playlist</Button>
           </div>
         }
@@ -56,6 +99,14 @@ export function PlaylistsPage() {
           </button>
         ))}
       </div>
+      <div className="mb-5 flex flex-wrap gap-1">
+        <button onClick={() => setFolder("all")} className={`rounded-full px-3 py-1 text-sm ${folder === "all" ? "bg-surface-3" : "bg-surface-2 text-muted"}`}>All folders</button>
+        {(folders.data || []).filter((f) => f.name).map((f) => (
+          <button key={f.name} onClick={() => setFolder(f.name)} className={`rounded-full px-3 py-1 text-sm ${folder === f.name ? "bg-surface-3" : "bg-surface-2 text-muted"}`}>
+            {f.name} ({f.count})
+          </button>
+        ))}
+      </div>
       {!q.isLoading && !list.length && (
         <EmptyState
           icon={ListMusic}
@@ -63,31 +114,75 @@ export function PlaylistsPage() {
           action={{ label: tab === "all" ? "New playlist" : "Import from URL", onClick: () => (tab === "all" ? setOpen(true) : setImp(true)) }}
         />
       )}
-      <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
-        {list.map((p) => (
-          <div key={p.id} className="relative">
-            <MediaCard className="max-w-none min-w-0" to={`/playlists/${p.id}`} id={p.id} title={p.name} kind="playlist" />
-            {p.provider && <Badge className="absolute left-2 top-2" tone="accent">{p.provider.replace("_", " ")}</Badge>}
+      {grouped.map(([folderName, items]) => (
+        <section key={folderName || "_"} className="mb-8">
+          {folder === "all" && folderName && <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-subtle">{folderName}</h2>}
+          <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+            {items.map((p) => (
+              <div key={p.id} className="relative">
+                <MediaCard className="max-w-none min-w-0" to={`/playlists/${p.id}`} id={p.id} title={p.name} kind="playlist" />
+                {p.provider && <Badge className="absolute left-2 top-2" tone="accent">{p.provider.replace("_", " ")}</Badge>}
+                {p.is_smart && <Badge className="absolute right-2 top-2" tone="neutral">Smart</Badge>}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        </section>
+      ))}
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent title="Create playlist">
           <form
             className="space-y-3"
             onSubmit={async (e) => {
               e.preventDefault();
-              await api.post("/api/v1/playlists", { name, description: desc });
+              await api.post("/api/v1/playlists", { name, description: desc, folder: newFolder });
               toast.success("Playlist created");
               setOpen(false);
               setName("");
+              setNewFolder("");
               qc.invalidateQueries({ queryKey: ["playlists"] });
+              qc.invalidateQueries({ queryKey: ["playlist-folders"] });
             }}
           >
             <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} required /></Field>
             <Field label="Description"><Textarea value={desc} onChange={(e) => setDesc(e.target.value)} /></Field>
+            <Field label="Folder"><Input value={newFolder} onChange={(e) => setNewFolder(e.target.value)} placeholder="Optional" /></Field>
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button type="submit">Create</Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={smart} onOpenChange={setSmart}>
+        <DialogContent title="Smart playlist">
+          <form
+            className="space-y-3"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              const clauses: { field: string; op: string; value: unknown }[] = [];
+              if (genre) clauses.push({ field: "genre", op: "eq", value: genre });
+              if (ymin) clauses.push({ field: "year", op: "gte", value: Number(ymin) });
+              if (ymax) clauses.push({ field: "year", op: "lt", value: Number(ymax) });
+              await api.post("/api/v1/playlists", {
+                name: name || "Smart playlist",
+                description: desc,
+                folder: newFolder,
+                smart: { limit: 50, match: "all", sort: "random", clauses }
+              });
+              toast.success("Smart playlist created");
+              setSmart(false);
+              setName("");
+              qc.invalidateQueries({ queryKey: ["playlists"] });
+            }}
+          >
+            <Field label="Name"><Input value={name} onChange={(e) => setName(e.target.value)} placeholder="90s Rock" /></Field>
+            <Field label="Genre"><Input value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="Rock" /></Field>
+            <div className="grid grid-cols-2 gap-2">
+              <Field label="Year from"><Input value={ymin} onChange={(e) => setYmin(e.target.value)} inputMode="numeric" /></Field>
+              <Field label="Year to"><Input value={ymax} onChange={(e) => setYmax(e.target.value)} inputMode="numeric" /></Field>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setSmart(false)}>Cancel</Button>
               <Button type="submit">Create</Button>
             </div>
           </form>

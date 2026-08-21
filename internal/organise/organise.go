@@ -19,6 +19,15 @@ type Vars struct {
 	Edition     string
 }
 
+// ShouldPhysical is true only for writable managed libraries that opted into
+// rewriting storage keys. The default virtual hash library must never match.
+func ShouldPhysical(organisationMode string, allowPhysicalReorganise, readOnly bool) bool {
+	if readOnly || !allowPhysicalReorganise {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(organisationMode), "managed")
+}
+
 func Apply(tmpl string, v Vars) string {
 	if tmpl == "" {
 		tmpl = "{album_artist}/{album} ({year})/{disc}{track} - {title}.{ext}"

@@ -7,11 +7,26 @@ import { Badge } from "@/components/ui/misc";
 import { toast } from "sonner";
 import type { SearchHit } from "@/types/api";
 
+type UnmatchedItem = {
+  id: string;
+  title: string;
+  artists?: string;
+  album?: string;
+  isrc?: string;
+  match_status?: string;
+  match_confidence?: number | null;
+};
+
+function confidenceLabel(n: number | null | undefined) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return Number(n).toFixed(2);
+}
+
 export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
   const qc = useQueryClient();
   const q = useQuery({
     queryKey: ["unmatched", playlistId],
-    queryFn: () => api.get<any[]>(`/api/v1/playlists/${playlistId}/unmatched`)
+    queryFn: () => api.get<UnmatchedItem[]>(`/api/v1/playlists/${playlistId}/unmatched`)
   });
   const items = q.data || [];
   if (!items.length) return null;
@@ -26,7 +41,10 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
               <div>
                 <div className="font-medium">{it.title}</div>
                 <div className="text-xs text-muted">{it.artists}{it.album ? ` · ${it.album}` : ""}{it.isrc ? ` · ${it.isrc}` : ""}</div>
-                <Badge className="mt-1" tone={it.match_status === "ambiguous" ? "warning" : "neutral"}>{it.match_status}</Badge>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <Badge tone={it.match_status === "ambiguous" ? "warning" : "neutral"}>{it.match_status}</Badge>
+                  <span className="text-xs tabular-nums text-muted">match_confidence {confidenceLabel(it.match_confidence)}</span>
+                </div>
               </div>
             </div>
             <MatchSearch
@@ -35,6 +53,7 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
                 toast.success("Matched");
                 qc.invalidateQueries({ queryKey: ["playlist", playlistId] });
                 qc.invalidateQueries({ queryKey: ["unmatched", playlistId] });
+                qc.invalidateQueries({ queryKey: ["sync-diff", playlistId] });
               }}
             />
           </li>

@@ -21,17 +21,23 @@ import (
 	"github.com/sounddock/sounddock/internal/db"
 	discordx "github.com/sounddock/sounddock/internal/discord"
 	"github.com/sounddock/sounddock/internal/external"
+	"github.com/sounddock/sounddock/internal/fingerprint"
 	"github.com/sounddock/sounddock/internal/httpapi"
 	"github.com/sounddock/sounddock/internal/httpapi/ratelimit"
 	"github.com/sounddock/sounddock/internal/ingest"
+	"github.com/sounddock/sounddock/internal/integrity"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/playback"
+	"github.com/sounddock/sounddock/internal/radio"
 	"github.com/sounddock/sounddock/internal/retention"
 	"github.com/sounddock/sounddock/internal/scan"
+	"github.com/sounddock/sounddock/internal/scrobble"
 	"github.com/sounddock/sounddock/internal/search"
 	"github.com/sounddock/sounddock/internal/storage"
 	"github.com/sounddock/sounddock/internal/transcode"
 	"github.com/sounddock/sounddock/internal/update"
+	"github.com/sounddock/sounddock/internal/watch"
+	"github.com/sounddock/sounddock/internal/waveform"
 	"github.com/sounddock/sounddock/internal/webhooks"
 	"github.com/sounddock/sounddock/openapi"
 	"github.com/sounddock/sounddock/web"
@@ -105,7 +111,7 @@ func main() {
 		Hooks:   hooks,
 		Box:     box,
 		Limit:   ratelimit.New(),
-		Slots:   ratelimit.NewSlots(8),
+		Slots:   ratelimit.NewSlots(httpapi.DefaultRemoteConcurrency),
 		Log:     log,
 		SignKey: cryptox.SigningKey(cfg.MasterKey),
 		Managed: managed,
@@ -115,6 +121,9 @@ func main() {
 	}
 	srv.OpenAPI = openapi.Spec
 	_ = update.WriteHostRunner()
+
+	_ = fingerprint.EnsureSchema(ctx, pool)
+	_ = scrobble.EnsureSchema(ctx, pool)
 
 	runner.Register("library.scan", sc.Handler(srv.ProviderFor))
 	runner.Register("ingest.url", ing.URLHandler(srv.ProviderFor))
@@ -144,6 +153,12 @@ func main() {
 		_, err := update.Check(ctx, pool)
 		return err
 	})
+	runner.Register("party.expire", playback.ExpireHandler(play))
+	runner.Register("waveform.generate", waveform.New(pool, srv.ProviderFor).Handler())
+	runner.Register("fingerprint.generate", fingerprint.New(pool, srv.ProviderFor).Handler())
+	runner.Register("integrity.scan", integrity.New(pool, srv.ProviderFor).Handler())
+	runner.Register("radio.refresh", radio.RefreshHandler(pool))
+	runner.Register("smart_playlist.refresh", radio.SmartRefreshHandler(pool))
 
 	role := resolveRole(cfg.Role)
 	log.Info("starting", "role", role, "addr", cfg.HTTPAddr)
@@ -152,6 +167,7 @@ func main() {
 		runner.Start(ctx, 2)
 		_, _ = runner.Enqueue(ctx, "maintenance.retention", map[string]any{})
 		_, _ = runner.Enqueue(ctx, "external.playlist.tick", map[string]any{})
+		go watch.New(pool, sc, srv.ProviderFor, log).Run(ctx)
 		go func() {
 			t := time.NewTicker(15 * time.Minute)
 			defer t.Stop()
@@ -178,7 +194,7 @@ func main() {
 		}()
 	}
 
-	if role == config.RoleDiscord {
+	if role == config.RoleAll || role == config.RoleDiscord {
 		bot := discordx.New(pool, box, se, play, log, srv.ProviderFor)
 		go func() {
 			if err := bot.Run(ctx); err != nil {

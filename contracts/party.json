@@ -1,0 +1,39 @@
+{
+  "get_party": {
+    "method": "GET",
+    "path": "/api/v1/me/party",
+    "response": {
+      "session_id": "00000000-0000-4000-8000-000000000070",
+      "enabled": true,
+      "host_user_id": "00000000-0000-4000-8000-000000000001",
+      "expires_at": "2026-01-15T13:00:00Z",
+      "members": [
+        {
+          "user_id": "00000000-0000-4000-8000-000000000001",
+          "role": "host"
+        }
+      ],
+      "votes": []
+    }
+  },
+  "post_party": {
+    "method": "POST",
+    "path": "/api/v1/me/party",
+    "body": {
+      "enabled": true,
+      "expires_in_seconds": 3600
+    }
+  },
+  "post_vote": {
+    "method": "POST",
+    "path": "/api/v1/me/party/votes",
+    "body": {
+      "track_id": "00000000-0000-4000-8000-000000000051"
+    }
+  },
+  "job": "party.expire",
+  "notes": [
+    "P1 owns membership, votes, expiry, permissions, concurrency.",
+    "P10 is UI only."
+  ]
+}

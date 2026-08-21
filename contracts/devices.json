@@ -1,0 +1,21 @@
+{
+  "kinds": {
+    "web_device": "Web player. Existing rows use owner_key=userID. New rows use owner_key=userID:deviceID. Migrate the existing row; do not delete Discord keys.",
+    "discord_guild": "Guild voice. owner_key=guildID. Never change."
+  },
+  "session": {
+    "id": "00000000-0000-4000-8000-000000000070",
+    "kind": "web_device",
+    "owner_key": "00000000-0000-4000-8000-000000000001:browser-1",
+    "user_id": "00000000-0000-4000-8000-000000000001",
+    "device_id": "browser-1",
+    "volume": 1,
+    "repeat": "off",
+    "shuffle": false,
+    "status": "paused"
+  },
+  "discord_session": {
+    "kind": "discord_guild",
+    "owner_key": "111111111111111111"
+  }
+}

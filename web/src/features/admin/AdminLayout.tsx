@@ -3,12 +3,16 @@ import { cn } from "@/lib/utils";
 
 const links = [
   [".", "Overview"],
+  ["health", "Health"],
   ["users", "Users"],
   ["roles", "Roles"],
   ["storage", "Storage"],
   ["libraries", "Libraries"],
+  ["grants", "Grants"],
+  ["quotas", "Quotas"],
   ["jobs", "Jobs"],
   ["backups", "Backups"],
+  ["backup-preview", "Backup preview"],
   ["database", "Database"],
   ["discord", "Discord"],
   ["integrations", "Integrations"],
@@ -20,7 +24,10 @@ const links = [
   ["security", "Security"],
   ["logs", "Logs"],
   ["cloudflare", "Cloudflare"],
-  ["updates", "Updates"]
+  ["updates", "Updates"],
+  ["maintenance", "Maintenance"],
+  ["diagnostics", "Diagnostics"],
+  ["demo", "Demo"]
 ];
 
 export function AdminLayout() {
