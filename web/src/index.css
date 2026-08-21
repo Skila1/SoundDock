@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Segoe UI", "Sora", ui-sans-serif, system-ui, sans-serif;
+
+  --color-background: var(--sd-bg);
+  --color-surface-1: var(--sd-surface-1);
+  --color-surface-2: var(--sd-surface-2);
+  --color-surface-3: var(--sd-surface-3);
+  --color-border: var(--sd-border);
+  --color-foreground: var(--sd-text);
+  --color-muted: var(--sd-text-2);
+  --color-subtle: var(--sd-text-3);
+  --color-accent: var(--sd-accent);
+  --color-accent-hover: var(--sd-accent-hover);
+  --color-destructive: var(--sd-destructive);
+  --color-warning: var(--sd-warning);
+  --color-success: var(--sd-success);
+  --color-ring: var(--sd-ring);
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+
+  --shadow-card: var(--sd-shadow);
+}
+
+:root {
+  --sd-bg: #f4f1ea;
+  --sd-surface-1: #fffdf8;
+  --sd-surface-2: #ece7de;
+  --sd-surface-3: #e0d9cd;
+  --sd-border: rgba(28, 24, 18, 0.1);
+  --sd-text: #17140f;
+  --sd-text-2: #5c564c;
+  --sd-text-3: #8a8276;
+  --sd-accent: #1db954;
+  --sd-accent-hover: #17a349;
+  --sd-destructive: #d4485b;
+  --sd-warning: #c4841d;
+  --sd-success: #1db954;
+  --sd-ring: #1db954;
+  --sd-shadow: 0 10px 30px rgba(23, 20, 15, 0.08);
+  color-scheme: light;
+}
+
+.dark {
+  --sd-bg: #0c1117;
+  --sd-surface-1: #131a22;
+  --sd-surface-2: #1a232d;
+  --sd-surface-3: #24303c;
+  --sd-border: rgba(232, 238, 245, 0.08);
+  --sd-text: #eef3f8;
+  --sd-text-2: #9aa8b6;
+  --sd-text-3: #6b7a88;
+  --sd-accent: #1db954;
+  --sd-accent-hover: #22c55e;
+  --sd-destructive: #f07187;
+  --sd-warning: #e3b341;
+  --sd-success: #34d399;
+  --sd-ring: #3ddc84;
+  --sd-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+  color-scheme: dark;
+}
+
+html, body, #root { height: 100%; }
+body {
+  margin: 0;
+  background: var(--sd-bg);
+  color: var(--sd-text);
+  font-family: var(--font-sans);
+}
+
+.dark body {
+  background:
+    radial-gradient(900px 420px at 0% -10%, rgba(29, 185, 84, 0.08), transparent 55%),
+    var(--sd-bg);
+}
+
+button, input, select, textarea { font: inherit; }
+
+*:focus-visible {
+  outline: 2px solid var(--sd-ring);
+  outline-offset: 2px;
+}
+
+.scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--sd-surface-3);
+  border-radius: 99px;
+}

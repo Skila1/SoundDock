@@ -1,0 +1,16 @@
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+  sounddock:
+    image: sounddock:local
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    environment:
+      SOUNDDOCK_COOKIE_SECURE: "false"
+      SOUNDDOCK_PUBLIC_URL: http://localhost:8080
+      SOUNDDOCK_LOG_LEVEL: debug
+  discord-worker:
+    image: sounddock:local
+

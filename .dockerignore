@@ -1,0 +1,26 @@
+# Build context — keep the image Linux-clean and small
+.git
+.gitignore
+**/.DS_Store
+**/Thumbs.db
+
+# Secrets and local data
+.env
+data
+cache
+backups
+bin
+*.exe
+
+# Frontend deps/output (image builds these)
+web/node_modules
+web/dist
+
+# Docs / IDE
+.idea
+.vscode
+*.md
+docs
+installer
+tests
+agent-transcripts

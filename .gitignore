@@ -1,0 +1,36 @@
+# Binaries
+/bin/
+/sounddock
+/sounddock.exe
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Web
+web/node_modules/
+web/dist/
+!web/dist/.gitkeep
+
+# Data / secrets
+.env
+/data/
+/cache/
+/backups/
+*.pem
+*.key
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+
+# Go
+vendor/
+coverage.out
+*.test
+
+# Docker
+docker-compose.override.yml
