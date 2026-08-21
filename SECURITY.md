@@ -15,4 +15,4 @@ SoundDock is designed to be internet-exposable. Please report vulnerabilities pr
 - Restrict `SOUNDDOCK_TRUSTED_PROXIES`
 - Keep `/metrics` disabled or token-protected
 - Run containers as non-root (default image)
-- Backups include secrets wrapped by the master key — store the key offline
+- Backups include secrets wrapped by the master key. Store the key offline.

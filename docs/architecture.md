@@ -2,8 +2,8 @@
 
 SoundDock is a Go modular monolith:
 
-- `api` / `worker` / `all` — HTTP + River-style Postgres jobs (`SKIP LOCKED`)
-- `discord` — optional first-party Discord worker, same image
+- `api` / `worker` / `all`: HTTP + River-style Postgres jobs (`SKIP LOCKED`)
+- `discord`: optional first-party Discord worker, same image
 - PostgreSQL is the system of record
 - Redis and Meilisearch are optional compose profiles
 

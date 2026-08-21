@@ -27,7 +27,7 @@ export function LibrariesPage({ user }: { user: User }) {
               </div>
               <Badge tone={l.read_only ? "warning" : "success"}>{l.read_only ? "Read-only" : "Writable"}</Badge>
             </div>
-            <p className="mt-4 text-2xl font-semibold">{l.track_count ?? "—"} <span className="text-sm font-normal text-muted">tracks</span></p>
+            <p className="mt-4 text-2xl font-semibold">{l.track_count ?? "-"} <span className="text-sm font-normal text-muted">tracks</span></p>
             {user.is_admin && (
               <div className="mt-4 flex gap-2">
                 <Button size="sm" variant="secondary" onClick={() => api.post(`/api/v1/admin/libraries/${l.id}/scan`).then(() => toast.success("Scan started"))}>Scan</Button>

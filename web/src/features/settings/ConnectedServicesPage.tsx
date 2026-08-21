@@ -67,7 +67,7 @@ export function ConnectedServicesPage() {
                     variant="ghost"
                     onClick={async () => {
                       await api.del(`/api/v1/me/providers/${p.provider}`);
-                      toast.success("Disconnected — playlists kept, media untouched");
+                      toast.success("Disconnected. Playlists kept, media untouched");
                       qc.invalidateQueries({ queryKey: ["me-providers"] });
                     }}
                   >

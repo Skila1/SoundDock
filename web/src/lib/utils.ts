@@ -16,7 +16,7 @@ export function formatDuration(ms?: number | null) {
 }
 
 export function formatBytes(n?: number | null) {
-  if (n == null) return "—";
+  if (n == null) return "-";
   const u = ["B", "KB", "MB", "GB", "TB"];
   let i = 0;
   let v = n;
@@ -28,7 +28,7 @@ export function formatBytes(n?: number | null) {
 }
 
 export function relativeTime(iso?: string | null) {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const d = new Date(iso);
   const diff = Date.now() - d.getTime();
   const min = Math.round(diff / 60000);

@@ -1,4 +1,4 @@
-# Build context — keep the image Linux-clean and small
+# Build context: keep the image Linux-clean and small
 .git
 .gitignore
 **/.DS_Store

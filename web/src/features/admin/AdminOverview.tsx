@@ -36,13 +36,13 @@ export function AdminOverview() {
         <Badge tone={discord.data?.token_configured ? "success" : "neutral"}>{discord.data?.token_configured ? "Discord configured" : "Discord idle"}</Badge>
       </div>
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Card icon={Music} label="Tracks" value={c.tracks ?? "—"} />
-        <Card icon={Disc3} label="Albums" value={c.albums ?? "—"} />
-        <Card icon={Mic2} label="Artists" value={c.artists ?? "—"} />
-        <Card icon={Users} label="Users" value={c.users ?? "—"} />
-        <Card icon={HardDrive} label="Libraries" value={c.libraries ?? "—"} />
+        <Card icon={Music} label="Tracks" value={c.tracks ?? "-"} />
+        <Card icon={Disc3} label="Albums" value={c.albums ?? "-"} />
+        <Card icon={Mic2} label="Artists" value={c.artists ?? "-"} />
+        <Card icon={Users} label="Users" value={c.users ?? "-"} />
+        <Card icon={HardDrive} label="Libraries" value={c.libraries ?? "-"} />
         <Card icon={Activity} label="Active streams" value={ov.data?.active_streams ?? 0} />
-        <Card icon={Database} label="Database" value={db.data?.database_size || "—"} hint={`migration ${db.data?.migration_version ?? "—"}`} />
+        <Card icon={Database} label="Database" value={db.data?.database_size || "-"} hint={`migration ${db.data?.migration_version ?? "-"}`} />
         <Card icon={Server} label="Version" value={ov.data?.version || "dev"} />
       </div>
       <p className="mt-4 text-sm text-muted">{(jobs.data || []).filter((j) => j.status === "running" || j.status === "queued").length} active jobs</p>

@@ -12,7 +12,7 @@ Installs Docker if needed, writes `/opt/sounddock`, **pulls** `ghcr.io/sounddock
 
 - Public URL
 - Discord OAuth client ID and secret (scope `identify`, redirect `{PUBLIC_URL}/api/v1/auth/discord/callback`)
-- Your Discord user ID (snowflake) — this account is administrator
+- Your Discord user ID (snowflake). This account is administrator.
 
 ```bash
 sudo bash install.sh status|update|logs|uninstall|doctor

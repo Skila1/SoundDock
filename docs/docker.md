@@ -16,8 +16,8 @@ or copy `docker-compose.yml` + `.env` and run `docker compose pull && docker com
 
 Profiles:
 
-- `discord` — `sounddock discord` worker
-- `cloudflare` — official `cloudflare/cloudflared` image
+- `discord`: `sounddock discord` worker
+- `cloudflare`: official `cloudflare/cloudflared` image
 - `redis`
 - `search` (Meilisearch)
 

@@ -48,7 +48,7 @@ export function AdminUsers() {
           <tbody>
             {rows.map((u) => (
               <tr key={u.id} className="border-t border-border">
-                <td className="p-3"><div className="font-medium">{u.username}</div><div className="text-xs text-subtle">{u.email || "—"}</div></td>
+                <td className="p-3"><div className="font-medium">{u.username}</div><div className="text-xs text-subtle">{u.email || "-"}</div></td>
                 <td className="p-3"><Badge tone={u.disabled ? "danger" : "success"}>{u.disabled ? "Disabled" : "Active"}</Badge></td>
                 <td className="p-3 text-muted">{relativeTime(u.created_at)}</td>
                 <td className="p-3 text-right">
@@ -218,8 +218,8 @@ export function AdminDatabase() {
     <div>
       <PageHeader title="Database" />
       <div className="mb-4 grid grid-cols-2 gap-3">
-        <div className="rounded-xl border border-border bg-surface-1 p-4"><div className="text-sm text-muted">Size</div><div className="text-2xl font-semibold">{d.database_size || "—"}</div></div>
-        <div className="rounded-xl border border-border bg-surface-1 p-4"><div className="text-sm text-muted">Migration</div><div className="text-2xl font-semibold">{d.migration_version ?? "—"}</div>{d.dirty && <Badge tone="warning">dirty</Badge>}</div>
+        <div className="rounded-xl border border-border bg-surface-1 p-4"><div className="text-sm text-muted">Size</div><div className="text-2xl font-semibold">{d.database_size || "-"}</div></div>
+        <div className="rounded-xl border border-border bg-surface-1 p-4"><div className="text-sm text-muted">Migration</div><div className="text-2xl font-semibold">{d.migration_version ?? "-"}</div>{d.dirty && <Badge tone="warning">dirty</Badge>}</div>
       </div>
       <table className="w-full text-left text-sm">
         <thead className="text-muted"><tr><th className="p-2">Table</th><th className="p-2">Size</th></tr></thead>
@@ -522,7 +522,7 @@ export function AdminCloudflare() {
       <PageHeader title="Cloudflare" description="Trusted proxy headers are applied when SoundDock sits behind Cloudflare Tunnel or another reverse proxy." />
       <div className="rounded-xl border border-border bg-surface-1 p-5 text-sm text-muted">
         <p>If you terminate TLS at Cloudflare, set the instance public URL and cookie security in server configuration. Client IP and proto are read from <code>CF-Connecting-IP</code> and <code>X-Forwarded-Proto</code> when present.</p>
-        <p className="mt-3">There is nothing to store in the database for Cloudflare itself — tunnel tokens stay with your host or Compose environment.</p>
+        <p className="mt-3">There is nothing to store in the database for Cloudflare itself. Tunnel tokens stay with your host or Compose environment.</p>
       </div>
     </div>
   );

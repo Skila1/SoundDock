@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SoundDock one-click installer. Pulls the published Docker image — no git clone required.
+# SoundDock one-click installer. Pulls the published Docker image. No git clone required.
 #
 #   curl -fsSL https://raw.githubusercontent.com/sounddock/sounddock/main/install.sh | sudo bash
 #   sudo bash install.sh install|status|update|logs|uninstall|doctor

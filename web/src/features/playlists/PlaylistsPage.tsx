@@ -100,7 +100,7 @@ export function PlaylistsPage() {
             onSubmit={async (e) => {
               e.preventDefault();
               await api.post("/api/v1/providers/import-url", { url, mode, sync_interval: interval, removal_policy: "mirror" });
-              toast.success("Import queued — matching against your SoundDock library");
+              toast.success("Import queued. Matching against your SoundDock library");
               setImp(false);
               setUrl("");
               qc.invalidateQueries({ queryKey: ["playlists"] });

@@ -64,7 +64,7 @@ function MatchSearch({ onPick }: { onPick: (id: string) => void }) {
         {hits.slice(0, 5).map((h) => (
           <li key={h.id}>
             <button className="text-sm text-accent hover:underline" onClick={() => onPick(h.id)}>
-              {h.title}{h.artist ? ` — ${h.artist}` : ""}
+              {h.title}{h.artist ? ` - ${h.artist}` : ""}
             </button>
           </li>
         ))}
