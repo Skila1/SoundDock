@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -70,24 +71,176 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `
-		SELECT u.id, u.username, u.display_name, u.email, u.disabled, u.created_at,
-			i.provider_user_id, i.provider_username
-		FROM users u
-		LEFT JOIN user_identities i ON i.user_id = u.id AND i.provider = 'discord'
-		ORDER BY u.created_at`)
+	rows, _ := s.Pool.Query(r.Context(), adminUserSQL+" ORDER BY u.created_at")
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "username", "display_name", "email", "disabled", "created_at", "discord_id", "discord_username"))
+	writeJSON(w, 200, scanMaps(rows, adminUserCols...))
+}
+
+const adminUserSQL = `
+		SELECT u.id, u.username, u.display_name, u.email, u.disabled, u.created_at,
+			i.provider_user_id, i.provider_username,
+			COALESCE((
+				SELECT r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+				WHERE ur.user_id = u.id
+				ORDER BY CASE r.name WHEN 'Administrator' THEN 0 ELSE 1 END
+				LIMIT 1
+			), 'User')
+		FROM users u
+		LEFT JOIN user_identities i ON i.user_id = u.id AND i.provider = 'discord'`
+
+var adminUserCols = []string{"id", "username", "display_name", "email", "disabled", "created_at", "discord_id", "discord_username", "role"}
+
+func (s *Server) adminGetUser(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "invalid user id")
+		return
+	}
+	rows, err := s.Pool.Query(r.Context(), adminUserSQL+" WHERE u.id=$1", id)
+	if err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	defer rows.Close()
+	out := scanMaps(rows, adminUserCols...)
+	if len(out) == 0 {
+		writeErr(w, 404, "not_found", "user not found")
+		return
+	}
+	writeJSON(w, 200, out[0])
+}
+
+func (s *Server) isAdministrator(ctx context.Context, userID uuid.UUID) bool {
+	var ok bool
+	_ = s.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM user_roles ur JOIN roles r ON r.id=ur.role_id
+			WHERE ur.user_id=$1 AND r.name='Administrator'
+		)`, userID).Scan(&ok)
+	return ok
+}
+
+func (s *Server) isLastAdministrator(ctx context.Context, userID uuid.UUID) bool {
+	if !s.isAdministrator(ctx, userID) {
+		return false
+	}
+	n, _ := s.Auth.AdministratorCount(ctx)
+	return n <= 1
+}
+
+func (s *Server) discordIDForUser(ctx context.Context, userID uuid.UUID) string {
+	var id *string
+	_ = s.Pool.QueryRow(ctx, `SELECT provider_user_id FROM user_identities WHERE user_id=$1 AND provider='discord'`, userID).Scan(&id)
+	if id == nil {
+		return ""
+	}
+	return *id
 }
 
 func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
-	var body struct{ Disabled *bool }
-	_ = decodeJSON(r, &body)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "invalid user id")
+		return
+	}
+	var exists bool
+	if err := s.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)`, id).Scan(&exists); err != nil || !exists {
+		writeErr(w, 404, "not_found", "user not found")
+		return
+	}
+	var body struct {
+		Disabled *bool   `json:"disabled"`
+		Role     *string `json:"role"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
+	self := currentUser(r).ID == id
 	if body.Disabled != nil {
-		_, _ = s.Pool.Exec(r.Context(), `UPDATE users SET disabled=$2 WHERE id=$1`, id, *body.Disabled)
+		if self && *body.Disabled {
+			writeErr(w, 400, "self", "you cannot disable your own account")
+			return
+		}
+		if *body.Disabled && s.isLastAdministrator(r.Context(), id) {
+			writeErr(w, 409, "last_admin", "cannot disable the last administrator")
+			return
+		}
+	}
+	if body.Role != nil {
+		role := strings.TrimSpace(*body.Role)
+		if role != "User" && role != "Administrator" {
+			writeErr(w, 400, "invalid", "role must be User or Administrator")
+			return
+		}
+		if role != "Administrator" && s.isLastAdministrator(r.Context(), id) {
+			writeErr(w, 409, "last_admin", "cannot remove the last administrator")
+			return
+		}
+	}
+	if body.Disabled != nil {
+		_, _ = s.Pool.Exec(r.Context(), `UPDATE users SET disabled=$2, updated_at=now() WHERE id=$1`, id, *body.Disabled)
+		if *body.Disabled {
+			_ = s.Auth.DeleteUserSessions(r.Context(), id)
+		}
 		s.Audit.Event(r.Context(), &currentUser(r).ID, "user.disable", id.String(), r.RemoteAddr, nil)
 	}
+	if body.Role != nil {
+		role := strings.TrimSpace(*body.Role)
+		_, _ = s.Pool.Exec(r.Context(), `DELETE FROM user_roles WHERE user_id=$1`, id)
+		_, _ = s.Pool.Exec(r.Context(), `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name=$2`, id, role)
+		s.Audit.Event(r.Context(), &currentUser(r).ID, "user.role", id.String()+":"+role, r.RemoteAddr, nil)
+	}
+	s.adminGetUser(w, r)
+}
+
+func (s *Server) adminUnlinkDiscord(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "invalid user id")
+		return
+	}
+	did := s.discordIDForUser(r.Context(), id)
+	tag, err := s.Pool.Exec(r.Context(), `DELETE FROM user_identities WHERE user_id=$1 AND provider='discord'`, id)
+	if err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeErr(w, 404, "not_found", "no Discord identity on this user")
+		return
+	}
+	auth.RemoveAdminDiscordID(r.Context(), s.Pool, did)
+	s.Audit.Event(r.Context(), &currentUser(r).ID, "user.unlink_discord", id.String(), r.RemoteAddr, nil)
+	s.adminGetUser(w, r)
+}
+
+func (s *Server) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "invalid user id")
+		return
+	}
+	if currentUser(r).ID == id {
+		writeErr(w, 400, "self", "you cannot delete your own account")
+		return
+	}
+	var exists bool
+	if err := s.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)`, id).Scan(&exists); err != nil || !exists {
+		writeErr(w, 404, "not_found", "user not found")
+		return
+	}
+	if s.isLastAdministrator(r.Context(), id) {
+		writeErr(w, 409, "last_admin", "cannot delete the last administrator")
+		return
+	}
+	did := s.discordIDForUser(r.Context(), id)
+	if _, err := s.Pool.Exec(r.Context(), `DELETE FROM users WHERE id=$1`, id); err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	auth.RemoveAdminDiscordID(r.Context(), s.Pool, did)
+	s.Audit.Event(r.Context(), &currentUser(r).ID, "user.delete", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -515,8 +668,8 @@ func (s *Server) adminUpdatesCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUpdatesApply(w http.ResponseWriter, r *http.Request) {
-	if !update.SocketOK() {
-		writeErr(w, 503, "no_socket", "Docker socket is not available. Re-run the installer so SoundDock can pull images.")
+	if !update.HelperOK() {
+		writeErr(w, 503, "no_helper", "Host update helper is not available. Re-run the installer so systemd can apply updates outside the app container.")
 		return
 	}
 	u := currentUser(r)

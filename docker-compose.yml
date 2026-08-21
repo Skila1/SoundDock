@@ -31,10 +31,12 @@ services:
       - .env
     environment:
       SD_ROLE: all
+      SD_UPDATE_DIR: /update
       SD_DATABASE_URL: postgres://${POSTGRES_USER:-sounddock}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sounddock}?sslmode=disable
     volumes:
       - sounddock_data:/data
       - ${SD_LIBRARY_HOST:-./libraries}:/libraries:ro
+      - ./update:/update
     ports:
       - "${SD_PORT:-8080}:8080"
     healthcheck:

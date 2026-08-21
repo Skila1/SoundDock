@@ -1,6 +1,11 @@
 package update
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestParseImage(t *testing.T) {
 	h, r, tag := parseImage("ghcr.io/skila1/sounddock:latest")
@@ -19,5 +24,29 @@ func TestDigestEqual(t *testing.T) {
 	}
 	if digestEqual("", "") {
 		t.Fatal("empty is not a match")
+	}
+}
+
+func TestRequestUpdate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SD_UPDATE_DIR", dir)
+	if !HelperOK() {
+		t.Fatal("expected helper dir to be writable")
+	}
+	if err := RequestUpdate("skila"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "request"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "skila") {
+		t.Fatalf("got %s", b)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "applied"), []byte("ghcr.io/skila1/sounddock@sha256:abc"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if AppliedDigest() != "sha256:abc" {
+		t.Fatalf("digest %s", AppliedDigest())
 	}
 }

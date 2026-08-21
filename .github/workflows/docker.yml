@@ -27,12 +27,16 @@ jobs:
       - name: Image name
         id: img
         run: echo "name=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+      - name: App version
+        id: ver
+        run: echo "version=$(tr -d '[:space:]' < VERSION)" >> "$GITHUB_OUTPUT"
       - uses: docker/metadata-action@v5
         id: meta
         with:
           images: ${{ steps.img.outputs.name }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ steps.ver.outputs.version }}
             type=semver,pattern={{version}}
             type=sha,prefix=
       - uses: docker/build-push-action@v6
@@ -42,5 +46,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

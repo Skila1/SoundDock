@@ -93,6 +93,24 @@ func RecordAdminDiscordID(ctx context.Context, pool *pgxpool.Pool, id string) {
 	_, _ = pool.Exec(ctx, `UPDATE discord_settings SET admin_discord_ids=$1, updated_at=now() WHERE id=1`, strings.Join(ids, ","))
 }
 
+func RemoveAdminDiscordID(ctx context.Context, pool *pgxpool.Pool, id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	ids := LoadAdminDiscordIDs(ctx, pool)
+	out := make([]string, 0, len(ids))
+	for _, a := range ids {
+		if a != id {
+			out = append(out, a)
+		}
+	}
+	if len(out) == len(ids) {
+		return
+	}
+	_, _ = pool.Exec(ctx, `UPDATE discord_settings SET admin_discord_ids=$1, updated_at=now() WHERE id=1`, strings.Join(out, ","))
+}
+
 func splitIDs(s string) []string {
 	parts := strings.Split(s, ",")
 	out := make([]string, 0, len(parts))

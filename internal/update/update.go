@@ -16,6 +16,7 @@ const settingsKey = "app_update"
 
 type Status struct {
 	AutoEnabled   bool       `json:"auto_enabled"`
+	HelperOK      bool       `json:"helper_ok"`
 	SocketOK      bool       `json:"socket_ok"`
 	CanApply      bool       `json:"can_apply"`
 	Available     bool       `json:"available"`
@@ -65,6 +66,7 @@ func ProjectName() string {
 }
 
 func Load(ctx context.Context, pool *pgxpool.Pool) Status {
+	reconcile(ctx, pool)
 	st := stored{LastStatus: "idle"}
 	var raw []byte
 	_ = pool.QueryRow(ctx, `SELECT value FROM server_settings WHERE key=$1`, settingsKey).Scan(&raw)
@@ -74,11 +76,13 @@ func Load(ctx context.Context, pool *pgxpool.Pool) Status {
 	mu.Lock()
 	ch, ap := checking, applying
 	mu.Unlock()
-	sock := SocketOK()
+	helper := HelperOK()
+	updating := ap || st.LastStatus == "updating" || RequestPending()
 	return Status{
 		AutoEnabled:   st.AutoEnabled,
-		SocketOK:      sock,
-		CanApply:      sock,
+		HelperOK:      helper,
+		SocketOK:      helper,
+		CanApply:      helper,
 		Available:     st.Available,
 		Version:       version.Version,
 		Image:         ImageRef(),
@@ -90,7 +94,7 @@ func Load(ctx context.Context, pool *pgxpool.Pool) Status {
 		LastError:     st.LastError,
 		LastAppliedBy: st.LastAppliedBy,
 		Checking:      ch,
-		Updating:      ap,
+		Updating:      updating,
 	}
 }
 
@@ -140,11 +144,9 @@ func Check(ctx context.Context, pool *pgxpool.Pool) (Status, error) {
 	_ = save(ctx, pool, st)
 
 	img := ImageRef()
-	current := ""
-	if SocketOK() {
-		if d, err := RunningDigest(ctx, img, ProjectName()); err == nil {
-			current = d
-		}
+	current := AppliedDigest()
+	if current == "" {
+		current = st.CurrentDigest
 	}
 	latest, err := RegistryDigest(ctx, img)
 	if err != nil {
@@ -182,7 +184,7 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, by string) error {
 	st.LastAppliedBy = by
 	_ = save(ctx, pool, st)
 
-	if err := PullAndRecreate(ctx, ImageRef(), ProjectName()); err != nil {
+	if err := RequestUpdate(by); err != nil {
 		st.LastStatus = "error"
 		st.LastError = err.Error()
 		_ = save(ctx, pool, st)
@@ -190,10 +192,37 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, by string) error {
 	}
 	st.LastAppliedAt = &now
 	st.Available = false
-	st.LastStatus = "ok"
+	st.LastStatus = "updating"
 	st.LastError = ""
 	_ = save(ctx, pool, st)
 	return nil
+}
+
+func reconcile(ctx context.Context, pool *pgxpool.Pool) {
+	st := loadStored(ctx, pool)
+	if st.LastStatus != "updating" {
+		return
+	}
+	if RequestPending() {
+		return
+	}
+	d := AppliedDigest()
+	if d == "" {
+		return
+	}
+	if st.CurrentDigest != "" && digestEqual(st.CurrentDigest, d) && st.LastAppliedAt != nil {
+		st.LastStatus = "ok"
+		st.LastError = ""
+		_ = save(ctx, pool, st)
+		return
+	}
+	now := time.Now().UTC()
+	st.CurrentDigest = d
+	st.LastAppliedAt = &now
+	st.LastStatus = "ok"
+	st.LastError = ""
+	st.Available = st.LatestDigest != "" && !digestEqual(d, st.LatestDigest)
+	_ = save(ctx, pool, st)
 }
 
 func Tick(ctx context.Context, pool *pgxpool.Pool) {
@@ -202,7 +231,7 @@ func Tick(ctx context.Context, pool *pgxpool.Pool) {
 		return
 	}
 	if st.LastCheckAt != nil && time.Since(*st.LastCheckAt) < time.Hour {
-		if st.Available && SocketOK() {
+		if st.Available && HelperOK() {
 			_ = Apply(ctx, pool, "auto")
 		}
 		return

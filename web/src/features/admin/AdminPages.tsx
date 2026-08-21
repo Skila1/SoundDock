@@ -11,6 +11,19 @@ import { PageHeader } from "@/components/ui/empty";
 import { relativeTime } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import type { User } from "@/types/api";
+
+type AdminUserRow = {
+  id: string;
+  username: string;
+  display_name?: string;
+  email?: string | null;
+  disabled: boolean;
+  created_at: string;
+  discord_id?: string | null;
+  discord_username?: string | null;
+  role?: string;
+};
 
 export function AdminRoles() {
   return (
@@ -33,21 +46,23 @@ export function AdminRoles() {
 
 export function AdminUsers() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["admin-users"], queryFn: () => api.get<any[]>("/api/v1/admin/users") });
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
+  const q = useQuery({ queryKey: ["admin-users"], queryFn: () => api.get<AdminUserRow[]>("/api/v1/admin/users") });
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<AdminUserRow | null>(null);
   const [form, setForm] = useState({ username: "", password: "", role: "User" });
-  const rows = (q.data || []).filter((u) => `${u.username} ${u.display_name || ""} ${u.email || ""} ${u.discord_id || ""} ${u.discord_username || ""}`.toLowerCase().includes(filter.toLowerCase()));
+  const rows = (q.data || []).filter((u) => `${u.username} ${u.display_name || ""} ${u.email || ""} ${u.discord_id || ""} ${u.discord_username || ""} ${u.role || ""}`.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div>
-      <PageHeader title="Users" actions={<Button onClick={() => setOpen(true)}>Create user</Button>} />
+      <PageHeader title="Users" description="Click a user to change access, unlink Discord, or delete them." actions={<Button onClick={() => setOpen(true)}>Create user</Button>} />
       <Input className="mb-4 max-w-sm" placeholder="Search users" value={filter} onChange={(e) => setFilter(e.target.value)} />
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-left text-sm">
-          <thead className="bg-surface-2 text-muted"><tr><th className="p-3">User</th><th className="p-3">Discord</th><th className="p-3">Status</th><th className="p-3">Created</th><th className="p-3" /></tr></thead>
+          <thead className="bg-surface-2 text-muted"><tr><th className="p-3">User</th><th className="p-3">Discord</th><th className="p-3">Access</th><th className="p-3">Status</th><th className="p-3">Created</th></tr></thead>
           <tbody>
             {rows.map((u) => (
-              <tr key={u.id} className="border-t border-border">
+              <tr key={u.id} className="cursor-pointer border-t border-border hover:bg-surface-2/60" onClick={() => setSelected(u)}>
                 <td className="p-3">
                   <div className="font-medium">{u.display_name || u.username}</div>
                   <div className="text-xs text-subtle">{u.username}{u.email ? ` · ${u.email}` : ""}</div>
@@ -62,18 +77,26 @@ export function AdminUsers() {
                     <span className="text-subtle">—</span>
                   )}
                 </td>
+                <td className="p-3"><Badge tone={u.role === "Administrator" ? "success" : "neutral"}>{u.role || "User"}</Badge></td>
                 <td className="p-3"><Badge tone={u.disabled ? "danger" : "success"}>{u.disabled ? "Disabled" : "Active"}</Badge></td>
                 <td className="p-3 text-muted">{relativeTime(u.created_at)}</td>
-                <td className="p-3 text-right">
-                  <Button size="sm" variant="ghost" onClick={() => api.patch(`/api/v1/admin/users/${u.id}`, { disabled: !u.disabled }).then(() => { toast.success(u.disabled ? "Enabled" : "Disabled"); qc.invalidateQueries({ queryKey: ["admin-users"] }); })}>
-                    {u.disabled ? "Enable" : "Disable"}
-                  </Button>
-                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <ManageUserDialog
+        user={selected}
+        selfId={me.data?.id}
+        onClose={() => setSelected(null)}
+        onChanged={async () => {
+          await qc.invalidateQueries({ queryKey: ["admin-users"] });
+        }}
+        onDeleted={async () => {
+          setSelected(null);
+          await qc.invalidateQueries({ queryKey: ["admin-users"] });
+        }}
+      />
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent title="Create user">
           <form className="space-y-3" onSubmit={async (e) => {
@@ -91,6 +114,126 @@ export function AdminUsers() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+function ManageUserDialog({
+  user,
+  selfId,
+  onClose,
+  onChanged,
+  onDeleted
+}: {
+  user: AdminUserRow | null;
+  selfId?: string;
+  onClose: () => void;
+  onChanged: () => Promise<void>;
+  onDeleted: () => Promise<void>;
+}) {
+  const [role, setRole] = useState("User");
+  const [disabled, setDisabled] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  useEffect(() => {
+    if (!user) {
+      setConfirmDelete(false);
+      return;
+    }
+    setRole(user.role || "User");
+    setDisabled(!!user.disabled);
+    setConfirmDelete(false);
+  }, [user]);
+  const isSelf = !!user && user.id === selfId;
+  async function saveAccess() {
+    if (!user) return;
+    setBusy(true);
+    try {
+      await api.patch(`/api/v1/admin/users/${user.id}`, { role, disabled });
+      toast.success("Access saved");
+      await onChanged();
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save access");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function unlinkDiscord() {
+    if (!user) return;
+    setBusy(true);
+    try {
+      await api.del(`/api/v1/admin/users/${user.id}/identities/discord`);
+      toast.success("Discord unlinked");
+      await onChanged();
+      onClose();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not unlink Discord");
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function wipeUser() {
+    if (!user) return;
+    setBusy(true);
+    try {
+      await api.del(`/api/v1/admin/users/${user.id}`);
+      toast.success("User deleted");
+      await onDeleted();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not delete user");
+      setConfirmDelete(false);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Dialog open={!!user} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent title={user ? (user.display_name || user.username) : "User"}>
+        {user && (
+          <div className="space-y-4">
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+              <dt className="text-muted">Username</dt><dd className="font-medium">{user.username}</dd>
+              <dt className="text-muted">Display name</dt><dd>{user.display_name || "—"}</dd>
+              <dt className="text-muted">Email</dt><dd>{user.email || "—"}</dd>
+              <dt className="text-muted">Discord</dt>
+              <dd>{user.discord_id ? `${user.discord_username || "linked"} · ${user.discord_id}` : "Not linked"}</dd>
+              <dt className="text-muted">Created</dt><dd>{relativeTime(user.created_at)}</dd>
+            </dl>
+            <Field label="Role">
+              <Select value={role} onValueChange={setRole} options={[{ value: "User", label: "User" }, { value: "Administrator", label: "Administrator" }]} />
+            </Field>
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+              <div>
+                <div className="text-sm font-medium">Disabled</div>
+                <p className="text-xs text-subtle">{isSelf ? "You cannot disable your own account." : "Blocked from signing in. Sessions are ended."}</p>
+              </div>
+              <Switch checked={disabled} onCheckedChange={(v) => { if (!isSelf) setDisabled(v); }} />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" disabled={busy} onClick={saveAccess}>Save access</Button>
+              {user.discord_id && (
+                <Button type="button" variant="secondary" disabled={busy} onClick={unlinkDiscord}>Unlink Discord</Button>
+              )}
+            </div>
+            <div className="border-t border-border pt-4">
+              {isSelf ? (
+                <p className="text-xs text-subtle">You cannot delete your own account.</p>
+              ) : confirmDelete ? (
+                <div className="space-y-2">
+                  <p className="text-sm text-muted">This wipes the account, sessions, playlists, and Discord link. It cannot be undone.</p>
+                  <div className="flex gap-2">
+                    <Button type="button" variant="destructive" disabled={busy} onClick={wipeUser}>Delete forever</Button>
+                    <Button type="button" variant="ghost" disabled={busy} onClick={() => setConfirmDelete(false)}>Cancel</Button>
+                  </div>
+                </div>
+              ) : (
+                <Button type="button" variant="destructive" disabled={busy} onClick={() => setConfirmDelete(true)}>Delete user</Button>
+              )}
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -627,20 +770,20 @@ export function AdminUpdates() {
   const [busy, setBusy] = useState(false);
   return (
     <div>
-      <PageHeader title="Updates" description="Pull the latest SoundDock image and restart the stack from here." />
+      <PageHeader title="Updates" description="The host systemd helper pulls the new image and restarts SoundDock. The app container does not update itself." />
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge tone={d.available ? "warning" : "success"}>{d.available ? "Update available" : "Up to date"}</Badge>
-        <Badge tone={d.socket_ok ? "success" : "warning"}>{d.socket_ok ? "Docker ready" : "Docker socket missing"}</Badge>
+        <Badge tone={d.helper_ok || d.can_apply ? "success" : "warning"}>{d.helper_ok || d.can_apply ? "Host helper ready" : "Host helper missing"}</Badge>
         <Badge>{d.last_status || "idle"}</Badge>
       </div>
       <div className="mb-4 rounded-xl border border-border bg-surface-1 p-5">
         <div className="text-sm text-muted">Installed version</div>
-        <div className="text-2xl font-semibold">{d.version || "dev"}</div>
+        <div className="text-2xl font-semibold">{d.version || "0.0.1"}</div>
         <p className="mt-1 break-all text-xs text-subtle">{d.image}</p>
         <p className="mt-3 text-sm text-muted">Last check: {d.last_check_at ? relativeTime(d.last_check_at) : "never"}</p>
         <p className="text-sm text-muted">Last update: {d.last_applied_at ? relativeTime(d.last_applied_at) : "never"}{d.last_applied_by ? ` (${d.last_applied_by})` : ""}</p>
         {d.last_error && <p className="mt-2 text-sm text-destructive">{d.last_error}</p>}
-        {!d.socket_ok && <p className="mt-2 text-sm text-muted">Re-run the installer so the Docker socket is mounted. Checking for a newer image still works.</p>}
+        {!(d.helper_ok || d.can_apply) && <p className="mt-2 text-sm text-muted">Re-run the installer so a systemd path unit can apply updates on the host. Update now stays off until that helper is installed.</p>}
         <div className="mt-4 flex flex-wrap gap-2">
           <Button variant="secondary" disabled={busy || d.checking} onClick={async () => {
             setBusy(true);
@@ -658,7 +801,7 @@ export function AdminUpdates() {
             setBusy(true);
             try {
               await api.post("/api/v1/admin/updates/apply");
-              toast.success("Update started. This page will reconnect after restart.");
+              toast.success("Update requested. The host helper will restart SoundDock.");
               const started = Date.now();
               const tick = setInterval(async () => {
                 try {
@@ -671,7 +814,7 @@ export function AdminUpdates() {
                   /* down during restart */
                 }
               }, 2000);
-              setTimeout(() => { clearInterval(tick); location.reload(); }, 120000);
+              setTimeout(() => { clearInterval(tick); location.reload(); }, 180000);
             } catch (e: any) {
               toast.error(e?.message || "Could not start update");
             } finally {
@@ -683,7 +826,7 @@ export function AdminUpdates() {
       <div className="flex max-w-lg items-center justify-between rounded-xl border border-border bg-surface-1 p-4">
         <div>
           <div className="text-sm font-medium">Automatic updates</div>
-          <p className="text-xs text-subtle">When on, SoundDock checks about once an hour and applies a newer image when Docker is available.</p>
+          <p className="text-xs text-subtle">When on, SoundDock checks about once an hour and asks the host helper to apply a newer image.</p>
         </div>
         <Switch checked={!!d.auto_enabled} onCheckedChange={(v) => api.put("/api/v1/admin/updates", { auto_enabled: v }).then(() => { toast.success(v ? "Automatic updates on" : "Automatic updates off"); qc.invalidateQueries({ queryKey: ["admin-updates"] }); })} />
       </div>

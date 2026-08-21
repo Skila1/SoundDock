@@ -310,6 +310,9 @@ case "\$cmd" in
       \${COMPOSE} down -v
       rm -rf "\${PREFIX}"
       rm -f /usr/local/bin/sounddock
+      systemctl disable --now sounddock-update.path >/dev/null 2>&1 || true
+      rm -f /etc/systemd/system/sounddock-update.service /etc/systemd/system/sounddock-update.path /usr/local/lib/sounddock/update.sh
+      systemctl daemon-reload >/dev/null 2>&1 || true
     else
       \${COMPOSE} down
       echo "Data kept in \${PREFIX}/data (pass --purge to delete)."
@@ -328,6 +331,10 @@ case "\$cmd" in
     if command -v cloudflared >/dev/null 2>&1; then
       systemctl is-active cloudflared || true
     fi
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl is-enabled sounddock-update.path 2>/dev/null || true
+      systemctl is-active sounddock-update.path 2>/dev/null || true
+    fi
     ;;
   install)
     echo "Re-run the installer:"
@@ -341,6 +348,82 @@ case "\$cmd" in
 esac
 EOF
   chmod 0755 /usr/local/bin/sounddock
+}
+
+install_update_helper() {
+  need_root
+  mkdir -p "${PREFIX}/update" /usr/local/lib/sounddock
+  chmod 0777 "${PREFIX}/update" || true
+  cat > /usr/local/lib/sounddock/update.sh <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+PREFIX="${PREFIX}"
+REQ="\${PREFIX}/update/request"
+LOG="\${PREFIX}/update/last.log"
+APPLIED="\${PREFIX}/update/applied"
+mkdir -p "\${PREFIX}/update"
+exec >>"\${LOG}" 2>&1
+echo "---- \$(date -u +%Y-%m-%dT%H:%M:%SZ) ----"
+if [[ ! -f "\${REQ}" ]]; then
+  echo "no request"
+  exit 0
+fi
+rm -f "\${REQ}"
+sleep 3
+cd "\${PREFIX}"
+img=""
+if [[ -f .env ]]; then
+  img="\$(grep -E '^SD_IMAGE=' .env | tail -1 | cut -d= -f2- | tr -d '\"' || true)"
+fi
+img="\${img:-ghcr.io/skila1/sounddock:latest}"
+docker compose pull
+docker compose up -d --remove-orphans
+digest="\$(docker image inspect "\${img}" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null || true)"
+if [[ -n "\${digest}" ]]; then
+  printf '%s\\n' "\${digest}" > "\${APPLIED}"
+fi
+echo "done"
+EOF
+  chmod 0755 /usr/local/lib/sounddock/update.sh
+  cat > /etc/systemd/system/sounddock-update.service <<EOF
+[Unit]
+Description=SoundDock host image update
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/sounddock/update.sh
+Nice=5
+TimeoutStartSec=30min
+EOF
+  cat > /etc/systemd/system/sounddock-update.path <<EOF
+[Unit]
+Description=Watch for SoundDock update requests
+
+[Path]
+PathExists=${PREFIX}/update/request
+PathChanged=${PREFIX}/update/request
+Unit=sounddock-update.service
+MakeDirectory=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now sounddock-update.path
+  msg_ok "Host update helper enabled (sounddock-update.path)"
+}
+
+remove_update_helper() {
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now sounddock-update.path >/dev/null 2>&1 || true
+    systemctl stop sounddock-update.service >/dev/null 2>&1 || true
+  fi
+  rm -f /etc/systemd/system/sounddock-update.service /etc/systemd/system/sounddock-update.path /usr/local/lib/sounddock/update.sh
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl daemon-reload || true
+  fi
 }
 
 write_compose() {
@@ -377,13 +460,12 @@ services:
     environment:
       SD_ROLE: all
       SD_COMPOSE_PROJECT: sounddock
+      SD_UPDATE_DIR: /update
       SD_DATABASE_URL: postgres://\${POSTGRES_USER:-sounddock}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-sounddock}?sslmode=disable
     volumes:
       - sounddock_data:/data
       - \${SD_LIBRARY_HOST:-./libraries}:/libraries:ro
-      - /var/run/docker.sock:/var/run/docker.sock
-    group_add:
-      - "\${SD_DOCKER_GID:-0}"
+      - ./update:/update
     ports:
       - "\${SD_PORT:-8080}:8080"
     healthcheck:
@@ -446,11 +528,13 @@ cmd_install() {
   CFG_LIBHOST="${PREFIX}/libraries"
 
   install_docker
-  mkdir -p "${PREFIX}/data/cache" "${PREFIX}/data/backups" "${PREFIX}/data/managed" "${PREFIX}/libraries"
+  mkdir -p "${PREFIX}/data/cache" "${PREFIX}/data/backups" "${PREFIX}/data/managed" "${PREFIX}/libraries" "${PREFIX}/update"
+  chmod 0777 "${PREFIX}/update" || true
   mkdir -p "${CFG_LIBHOST}"
   write_compose
   write_cli
   save_installer
+  install_update_helper
 
   local mk pw
   mk="$(rand)"
@@ -508,6 +592,10 @@ EOF
   msg_info "Pulling ${IMAGE} in ${PREFIX}"
   ${COMPOSE} pull
   ${COMPOSE} up -d
+  digest="$(docker image inspect "${IMAGE}" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null || true)"
+  if [[ -n "${digest}" ]]; then
+    printf '%s\n' "${digest}" > "${PREFIX}/update/applied"
+  fi
   msg_ok "SoundDock is starting"
 
   local i
@@ -562,6 +650,7 @@ cmd_uninstall() {
     ${COMPOSE} down -v
     rm -rf "${PREFIX}"
     rm -f /usr/local/bin/sounddock
+    remove_update_helper
     if command -v cloudflared >/dev/null 2>&1; then
       cloudflared service uninstall >/dev/null 2>&1 || true
     fi
@@ -581,6 +670,9 @@ cmd_doctor() {
   fi
   if command -v cloudflared >/dev/null 2>&1; then
     systemctl is-active cloudflared || true
+  fi
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl is-enabled sounddock-update.path 2>/dev/null || echo "sounddock-update.path: not enabled"
   fi
 }
 

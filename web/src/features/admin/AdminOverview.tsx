@@ -43,7 +43,7 @@ export function AdminOverview() {
         <Card icon={HardDrive} label="Libraries" value={c.libraries ?? "-"} />
         <Card icon={Activity} label="Active streams" value={ov.data?.active_streams ?? 0} />
         <Card icon={Database} label="Database" value={db.data?.database_size || "-"} hint={`migration ${db.data?.migration_version ?? "-"}`} />
-        <Card icon={Server} label="Version" value={ov.data?.version || "dev"} />
+        <Card icon={Server} label="Version" value={ov.data?.version || "0.0.1"} />
       </div>
       <p className="mt-4 text-sm text-muted">{(jobs.data || []).filter((j) => j.status === "running" || j.status === "queued").length} active jobs</p>
     </div>

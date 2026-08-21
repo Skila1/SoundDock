@@ -1,6 +1,6 @@
 .PHONY: build web test tidy docker
 
-VERSION ?= dev
+VERSION ?= $(shell tr -d '[:space:]' < VERSION)
 
 build: web
 	go build -ldflags="-X github.com/sounddock/sounddock/internal/version.Version=$(VERSION)" -o bin/sounddock ./cmd/sounddock
