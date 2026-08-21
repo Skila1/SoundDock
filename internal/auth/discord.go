@@ -183,6 +183,38 @@ func ApplyAdminDiscordIDs(ctx context.Context, pool *pgxpool.Pool, ids []string)
 	return err
 }
 
+func NormalizeAdminDiscordIDs(raw []string) ([]string, error) {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(raw))
+	for _, id := range raw {
+		for _, p := range strings.Split(id, ",") {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			for _, c := range p {
+				if c < '0' || c > '9' {
+					return nil, fmt.Errorf("invalid discord user id")
+				}
+			}
+			if _, ok := seen[p]; ok {
+				continue
+			}
+			seen[p] = struct{}{}
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
+func SaveAdminDiscordIDs(ctx context.Context, pool *pgxpool.Pool, ids []string) error {
+	_, err := pool.Exec(ctx, `UPDATE discord_settings SET admin_discord_ids=$1, updated_at=now() WHERE id=1`, strings.Join(ids, ","))
+	if err != nil {
+		return err
+	}
+	return ApplyAdminDiscordIDs(ctx, pool, ids)
+}
+
 func IsAdminDiscordID(id string, ids []string) bool {
 	for _, a := range ids {
 		if a == id {

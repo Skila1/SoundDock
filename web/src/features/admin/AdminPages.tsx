@@ -244,6 +244,7 @@ export function AdminDiscord() {
   const [guildId, setGuildId] = useState("");
   const [roleOn, setRoleOn] = useState(false);
   const [roleId, setRoleId] = useState("");
+  const [adminIds, setAdminIds] = useState("");
   useEffect(() => {
     if (!d.data) return;
     setGuildOn(!!d.data.registration_guild_enabled);
@@ -252,6 +253,7 @@ export function AdminDiscord() {
     setRoleId(d.data.registration_role_id || "");
     setLoginOn(!!d.data.login_enabled);
     setClientId(d.data.client_id || "");
+    setAdminIds((d.data.admin_discord_ids || []).join(", "));
   }, [d.data]);
   return (
     <div>
@@ -290,6 +292,22 @@ export function AdminDiscord() {
         </Field>
         <Button type="submit">Save sign-in</Button>
       </form>
+      <form className="mb-6 max-w-lg space-y-4 rounded-xl border border-border bg-surface-1 p-4" onSubmit={async (e) => {
+        e.preventDefault();
+        await api.put("/api/v1/admin/integrations/discord", {
+          enabled: d.data?.enabled ?? false,
+          admin_discord_ids: adminIds.split(",").map((s) => s.trim()).filter(Boolean)
+        });
+        toast.success("Discord administrators saved");
+        qc.invalidateQueries({ queryKey: ["discord"] });
+      }}>
+        <h3 className="font-semibold">Administrators</h3>
+        <p className="text-sm text-muted">Paste your Discord user ID so you keep Administrator when you sign in with Discord. Enable Developer Mode in Discord, then right-click your avatar → Copy User ID. Comma-separate extra IDs.</p>
+        <Field label="Discord user IDs" hint="Numeric snowflakes. These accounts skip the registration whitelist and get Administrator on sign-in.">
+          <Input value={adminIds} onChange={(e) => setAdminIds(e.target.value)} placeholder="your Discord user ID" />
+        </Field>
+        <Button type="submit">Save administrators</Button>
+      </form>
       <form className="mb-6 max-w-lg space-y-3 rounded-xl border border-border bg-surface-1 p-4" onSubmit={async (e) => {
         e.preventDefault();
         await api.put("/api/v1/admin/integrations/discord", {
@@ -325,7 +343,7 @@ export function AdminDiscord() {
         qc.invalidateQueries({ queryKey: ["discord"] });
       }}>
         <h3 className="font-semibold">Registration whitelist</h3>
-        <p className="text-sm text-muted">Applies to new Discord accounts only. Existing users and the first Discord administrator can always sign in. Role checks need the bot invited.</p>
+        <p className="text-sm text-muted">Applies to new Discord accounts only. Existing users and Discord IDs listed under Administrators can always sign in. Role checks need the bot invited.</p>
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-medium">Require Discord server</div>

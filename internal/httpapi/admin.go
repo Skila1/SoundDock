@@ -105,7 +105,9 @@ func (s *Server) adminCreateStorage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if body.Type == "local" || body.Type == "managed" {
-		var c struct{ Root string `json:"root"` }
+		var c struct {
+			Root string `json:"root"`
+		}
 		_ = json.Unmarshal(body.Config, &c)
 		if c.Root == "" {
 			c.Root = s.Cfg.ManagedDir
@@ -331,35 +333,36 @@ func (s *Server) discordGet(w http.ResponseWriter, r *http.Request) {
 	reg, _ := auth.LoadDiscordRegistration(r.Context(), s.Pool)
 	oauth := auth.LoadDiscordOAuth(r.Context(), s.Pool, s.Box)
 	writeJSON(w, 200, map[string]any{
-		"enabled":                     enabled,
-		"application_id":              appID,
-		"client_id":                   clientID,
-		"gateway_status":              status,
-		"token_configured":            len(tok) > 0,
-		"secret_configured":           len(sec) > 0,
-		"login_enabled":               oauth.LoginEnabled,
-		"login_ready":                 oauth.Ready(),
-		"oauth_redirect":              auth.DiscordCallbackURL(s.absURL(r)),
-		"admin_discord_ids":           auth.LoadAdminDiscordIDs(r.Context(), s.Pool),
-		"registration_guild_enabled":  reg.GuildEnabled,
-		"registration_guild_id":       reg.GuildID,
-		"registration_role_enabled":   reg.RoleEnabled,
-		"registration_role_id":        reg.RoleID,
+		"enabled":                    enabled,
+		"application_id":             appID,
+		"client_id":                  clientID,
+		"gateway_status":             status,
+		"token_configured":           len(tok) > 0,
+		"secret_configured":          len(sec) > 0,
+		"login_enabled":              oauth.LoginEnabled,
+		"login_ready":                oauth.Ready(),
+		"oauth_redirect":             auth.DiscordCallbackURL(s.absURL(r)),
+		"admin_discord_ids":          auth.LoadAdminDiscordIDs(r.Context(), s.Pool),
+		"registration_guild_enabled": reg.GuildEnabled,
+		"registration_guild_id":      reg.GuildID,
+		"registration_role_enabled":  reg.RoleEnabled,
+		"registration_role_id":       reg.RoleID,
 	})
 }
 
 func (s *Server) discordPut(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Enabled                  bool    `json:"enabled"`
-		LoginEnabled             *bool   `json:"login_enabled"`
-		Token                    *string `json:"token"`
-		ApplicationID            *string `json:"application_id"`
-		ClientID                 *string `json:"client_id"`
-		ClientSecret             *string `json:"client_secret"`
-		RegistrationGuildEnabled *bool   `json:"registration_guild_enabled"`
-		RegistrationGuildID      *string `json:"registration_guild_id"`
-		RegistrationRoleEnabled  *bool   `json:"registration_role_enabled"`
-		RegistrationRoleID       *string `json:"registration_role_id"`
+		Enabled                  bool      `json:"enabled"`
+		LoginEnabled             *bool     `json:"login_enabled"`
+		Token                    *string   `json:"token"`
+		ApplicationID            *string   `json:"application_id"`
+		ClientID                 *string   `json:"client_id"`
+		ClientSecret             *string   `json:"client_secret"`
+		RegistrationGuildEnabled *bool     `json:"registration_guild_enabled"`
+		RegistrationGuildID      *string   `json:"registration_guild_id"`
+		RegistrationRoleEnabled  *bool     `json:"registration_role_enabled"`
+		RegistrationRoleID       *string   `json:"registration_role_id"`
+		AdminDiscordIDs          *[]string `json:"admin_discord_ids"`
 	}
 	_ = decodeJSON(r, &body)
 	if body.Token != nil && *body.Token != "" && s.Box != nil {
@@ -392,6 +395,17 @@ func (s *Server) discordPut(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET registration_guild_enabled=$1, registration_guild_id=$2, registration_role_enabled=$3, registration_role_id=$4, updated_at=now() WHERE id=1`, ge, gid, re, rid)
 	}
+	if body.AdminDiscordIDs != nil {
+		ids, err := auth.NormalizeAdminDiscordIDs(*body.AdminDiscordIDs)
+		if err != nil {
+			writeErr(w, 400, "invalid_id", "Discord user IDs must be numeric snowflakes")
+			return
+		}
+		if err := auth.SaveAdminDiscordIDs(r.Context(), s.Pool, ids); err != nil {
+			writeErr(w, 500, "db", "could not save Discord administrator IDs")
+			return
+		}
+	}
 	s.Audit.Event(r.Context(), &currentUser(r).ID, "discord.update", "", r.RemoteAddr, nil)
 	s.discordGet(w, r)
 }
@@ -413,8 +427,8 @@ func (s *Server) discordInvite(w http.ResponseWriter, r *http.Request) {
 	perms := "36727808" // Connect, Speak, View Channel, Send Messages, Embed Links, Attach Files, Use App Commands-ish
 	url := "https://discord.com/oauth2/authorize?client_id=" + *appID + "&scope=bot%20applications.commands&permissions=" + perms
 	writeJSON(w, 200, map[string]any{
-		"url": url,
-		"scopes": []string{"bot", "applications.commands"},
+		"url":         url,
+		"scopes":      []string{"bot", "applications.commands"},
 		"permissions": []string{"Connect", "Speak", "View Channel", "Send Messages", "Embed Links", "Attach Files", "Use Application Commands"},
 	})
 }

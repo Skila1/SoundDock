@@ -35,3 +35,16 @@ func TestCheckDiscordRegistrationOff(t *testing.T) {
 		t.Fatal("empty guild id should fail")
 	}
 }
+
+func TestNormalizeAdminDiscordIDs(t *testing.T) {
+	got, err := NormalizeAdminDiscordIDs([]string{" 123 ", "456,123", "789"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || got[0] != "123" || got[1] != "456" || got[2] != "789" {
+		t.Fatalf("got %#v", got)
+	}
+	if _, err := NormalizeAdminDiscordIDs([]string{"abc"}); err == nil {
+		t.Fatal("expected invalid")
+	}
+}
