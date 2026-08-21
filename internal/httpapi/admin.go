@@ -70,9 +70,14 @@ func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT id, username, email, disabled, created_at FROM users ORDER BY created_at`)
+	rows, _ := s.Pool.Query(r.Context(), `
+		SELECT u.id, u.username, u.display_name, u.email, u.disabled, u.created_at,
+			i.provider_user_id, i.provider_username
+		FROM users u
+		LEFT JOIN user_identities i ON i.user_id = u.id AND i.provider = 'discord'
+		ORDER BY u.created_at`)
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "username", "email", "disabled", "created_at"))
+	writeJSON(w, 200, scanMaps(rows, "id", "username", "display_name", "email", "disabled", "created_at", "discord_id", "discord_username"))
 }
 
 func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request) {

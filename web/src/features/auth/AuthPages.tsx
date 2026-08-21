@@ -144,7 +144,7 @@ export function SetupPage({ onDone, discordConfigured }: { onDone: () => void; d
             <Logo className="h-28 w-auto" />
           </div>
           <h1 className="text-xl font-semibold">First setup</h1>
-          <p className="text-sm text-muted">Create a local administrator. You can enable Discord later under Admin. If Discord is already on, the first Discord sign-in is also an administrator.</p>
+          <p className="text-sm text-muted">Create a local administrator. You can enable Discord later under Admin. The first Discord sign-in links to this administrator.</p>
         </div>
         {localErr && <p className="rounded-lg bg-destructive/15 px-3 py-2 text-sm text-destructive">{localErr}</p>}
         {discordConfigured && (

@@ -37,18 +37,31 @@ export function AdminUsers() {
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ username: "", password: "", role: "User" });
-  const rows = (q.data || []).filter((u) => `${u.username} ${u.email || ""}`.toLowerCase().includes(filter.toLowerCase()));
+  const rows = (q.data || []).filter((u) => `${u.username} ${u.display_name || ""} ${u.email || ""} ${u.discord_id || ""} ${u.discord_username || ""}`.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div>
       <PageHeader title="Users" actions={<Button onClick={() => setOpen(true)}>Create user</Button>} />
       <Input className="mb-4 max-w-sm" placeholder="Search users" value={filter} onChange={(e) => setFilter(e.target.value)} />
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-left text-sm">
-          <thead className="bg-surface-2 text-muted"><tr><th className="p-3">User</th><th className="p-3">Status</th><th className="p-3">Created</th><th className="p-3" /></tr></thead>
+          <thead className="bg-surface-2 text-muted"><tr><th className="p-3">User</th><th className="p-3">Discord</th><th className="p-3">Status</th><th className="p-3">Created</th><th className="p-3" /></tr></thead>
           <tbody>
             {rows.map((u) => (
               <tr key={u.id} className="border-t border-border">
-                <td className="p-3"><div className="font-medium">{u.username}</div><div className="text-xs text-subtle">{u.email || "-"}</div></td>
+                <td className="p-3">
+                  <div className="font-medium">{u.display_name || u.username}</div>
+                  <div className="text-xs text-subtle">{u.username}{u.email ? ` · ${u.email}` : ""}</div>
+                </td>
+                <td className="p-3">
+                  {u.discord_id ? (
+                    <>
+                      <div className="font-medium">{u.discord_username || "—"}</div>
+                      <div className="text-xs text-subtle">{u.discord_id}</div>
+                    </>
+                  ) : (
+                    <span className="text-subtle">—</span>
+                  )}
+                </td>
                 <td className="p-3"><Badge tone={u.disabled ? "danger" : "success"}>{u.disabled ? "Disabled" : "Active"}</Badge></td>
                 <td className="p-3 text-muted">{relativeTime(u.created_at)}</td>
                 <td className="p-3 text-right">
@@ -302,7 +315,7 @@ export function AdminDiscord() {
         qc.invalidateQueries({ queryKey: ["discord"] });
       }}>
         <h3 className="font-semibold">Administrators</h3>
-        <p className="text-sm text-muted">Paste your Discord user ID so you keep Administrator when you sign in with Discord. Enable Developer Mode in Discord, then right-click your avatar → Copy User ID. Comma-separate extra IDs.</p>
+        <p className="text-sm text-muted">The first Discord sign-in links to the first local administrator and stores that Discord user ID. Later Discord users keep their Discord username, display name, and ID.</p>
         <Field label="Discord user IDs" hint="Numeric snowflakes. These accounts skip the registration whitelist and get Administrator on sign-in.">
           <Input value={adminIds} onChange={(e) => setAdminIds(e.target.value)} placeholder="your Discord user ID" />
         </Field>

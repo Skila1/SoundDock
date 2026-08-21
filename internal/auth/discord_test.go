@@ -5,6 +5,26 @@ import (
 	"testing"
 )
 
+func TestDiscordProfileNames(t *testing.T) {
+	p := DiscordProfile{ID: "288559247741157386", Username: "skila", Global: "Skila"}
+	if DiscordDisplayName(p) != "Skila" {
+		t.Fatalf("display %q", DiscordDisplayName(p))
+	}
+	if DiscordAccountUsername(p) != "skila" {
+		t.Fatalf("username %q", DiscordAccountUsername(p))
+	}
+	if !isDiscordStubUsername("discord_288559247741157386", p.ID) {
+		t.Fatal("expected stub")
+	}
+	if isDiscordStubUsername("Skila", p.ID) {
+		t.Fatal("local admin is not a stub")
+	}
+	empty := DiscordProfile{ID: "1"}
+	if DiscordAccountUsername(empty) != "discord_1" || DiscordDisplayName(empty) != "discord_1" {
+		t.Fatal("empty profile fallback")
+	}
+}
+
 func TestIsAdminID(t *testing.T) {
 	ids := []string{"123", "456"}
 	if !IsAdminDiscordID("123", ids) {

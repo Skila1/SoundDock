@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
 )
@@ -130,41 +132,155 @@ func (c DiscordOAuthConfig) Ready() bool {
 	return c.LoginEnabled && c.ClientID != "" && c.Secret != ""
 }
 
-func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile) (*User, error) {
-	display := p.Global
-	if display == "" {
-		display = p.Username
+func DiscordDisplayName(p DiscordProfile) string {
+	if g := strings.TrimSpace(p.Global); g != "" {
+		return g
 	}
-	uname := "discord_" + p.ID
-	var uid uuid.UUID
-	err := s.pool.QueryRow(ctx, `SELECT user_id FROM user_identities WHERE provider='discord' AND provider_user_id=$1`, p.ID).Scan(&uid)
+	if u := strings.TrimSpace(p.Username); u != "" {
+		return u
+	}
+	return "discord_" + p.ID
+}
+
+func DiscordAccountUsername(p DiscordProfile) string {
+	if u := strings.TrimSpace(p.Username); u != "" {
+		return u
+	}
+	return "discord_" + p.ID
+}
+
+func isDiscordStubUsername(username, discordID string) bool {
+	return username == "discord_"+discordID
+}
+
+func uniqueViolation(err error) bool {
+	var pe *pgconn.PgError
+	return errors.As(err, &pe) && pe.Code == "23505"
+}
+
+func (s *Service) firstAdminWithoutDiscord(ctx context.Context) (uuid.UUID, bool) {
+	var id uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		SELECT u.id
+		FROM users u
+		JOIN user_roles ur ON ur.user_id = u.id
+		JOIN roles r ON r.id = ur.role_id AND r.name = 'Administrator'
+		WHERE NOT EXISTS (
+			SELECT 1 FROM user_identities i
+			WHERE i.user_id = u.id AND i.provider = 'discord'
+		)
+		ORDER BY u.created_at ASC
+		LIMIT 1`).Scan(&id)
+	return id, err == nil
+}
+
+func (s *Service) attachDiscordIdentity(ctx context.Context, uid uuid.UUID, p DiscordProfile) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO user_identities (user_id, provider, provider_user_id, provider_username)
+		VALUES ($1,'discord',$2,$3)
+		ON CONFLICT (provider, provider_user_id) DO UPDATE
+		SET user_id=EXCLUDED.user_id, provider_username=EXCLUDED.provider_username`,
+		uid, p.ID, strings.TrimSpace(p.Username))
+	return err
+}
+
+func (s *Service) mergeDiscordStubIntoAdmin(ctx context.Context, stub, admin uuid.UUID, p DiscordProfile) error {
+	tx, err := s.pool.Begin(ctx)
 	if err != nil {
-		hash, herr := HashPassword(uuid.NewString() + uuid.NewString())
-		if herr != nil {
-			return nil, herr
-		}
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+		UPDATE user_identities
+		SET user_id=$1, provider_username=$3
+		WHERE provider='discord' AND provider_user_id=$2`, admin, p.ID, strings.TrimSpace(p.Username)); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id=$1`, stub); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *Service) createDiscordLocalUser(ctx context.Context, p DiscordProfile) (uuid.UUID, error) {
+	display := DiscordDisplayName(p)
+	uname := DiscordAccountUsername(p)
+	hash, err := HashPassword(uuid.NewString() + uuid.NewString())
+	if err != nil {
+		return uuid.Nil, err
+	}
+	var uid uuid.UUID
+	err = s.pool.QueryRow(ctx, `
+		INSERT INTO users (username, password_hash, display_name)
+		VALUES ($1,$2,$3) RETURNING id`, uname, hash, display).Scan(&uid)
+	if uniqueViolation(err) {
+		uname = uname + "_" + p.ID
 		err = s.pool.QueryRow(ctx, `
 			INSERT INTO users (username, password_hash, display_name)
-			VALUES ($1,$2,$3)
-			ON CONFLICT (username) DO UPDATE SET display_name=EXCLUDED.display_name
-			RETURNING id`, uname, hash, display).Scan(&uid)
-		if err != nil {
-			return nil, err
-		}
-		_, _ = s.pool.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name='User' ON CONFLICT DO NOTHING`, uid)
-		_, _ = s.pool.Exec(ctx, `INSERT INTO user_identities (user_id, provider, provider_user_id, provider_username) VALUES ($1,'discord',$2,$3)
-			ON CONFLICT (provider, provider_user_id) DO UPDATE SET user_id=EXCLUDED.user_id, provider_username=EXCLUDED.provider_username`, uid, p.ID, p.Username)
-	} else {
-		_, _ = s.pool.Exec(ctx, `UPDATE users SET display_name=$2, updated_at=now() WHERE id=$1 AND display_name=''`, uid, display)
-		_, _ = s.pool.Exec(ctx, `UPDATE user_identities SET provider_username=$2 WHERE provider='discord' AND provider_user_id=$1`, p.ID, p.Username)
+			VALUES ($1,$2,$3) RETURNING id`, uname, hash, display).Scan(&uid)
 	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	_, _ = s.pool.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name='User' ON CONFLICT DO NOTHING`, uid)
+	if err := s.attachDiscordIdentity(ctx, uid, p); err != nil {
+		return uuid.Nil, err
+	}
+	return uid, nil
+}
+
+func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile) (*User, error) {
+	display := DiscordDisplayName(p)
+	adminID, adminOpen := s.firstAdminWithoutDiscord(ctx)
+
+	var uid uuid.UUID
+	var existingName string
+	err := s.pool.QueryRow(ctx, `
+		SELECT i.user_id, u.username
+		FROM user_identities i
+		JOIN users u ON u.id = i.user_id
+		WHERE i.provider='discord' AND i.provider_user_id=$1`, p.ID).Scan(&uid, &existingName)
+
+	switch {
+	case err == nil:
+		if adminOpen && uid != adminID && isDiscordStubUsername(existingName, p.ID) {
+			if err := s.mergeDiscordStubIntoAdmin(ctx, uid, adminID, p); err != nil {
+				return nil, err
+			}
+			uid = adminID
+		} else {
+			_, _ = s.pool.Exec(ctx, `UPDATE user_identities SET provider_username=$2 WHERE provider='discord' AND provider_user_id=$1`, p.ID, strings.TrimSpace(p.Username))
+			if isDiscordStubUsername(existingName, p.ID) {
+				newName := DiscordAccountUsername(p)
+				if _, uerr := s.pool.Exec(ctx, `UPDATE users SET username=$2, display_name=$3, updated_at=now() WHERE id=$1`, uid, newName, display); uniqueViolation(uerr) {
+					_, _ = s.pool.Exec(ctx, `UPDATE users SET display_name=$2, updated_at=now() WHERE id=$1`, uid, display)
+				}
+			} else if existingName == DiscordAccountUsername(p) || strings.HasSuffix(existingName, "_"+p.ID) {
+				_, _ = s.pool.Exec(ctx, `UPDATE users SET display_name=$2, updated_at=now() WHERE id=$1`, uid, display)
+			}
+		}
+	case errors.Is(err, pgx.ErrNoRows):
+		if adminOpen {
+			uid = adminID
+			if err := s.attachDiscordIdentity(ctx, uid, p); err != nil {
+				return nil, err
+			}
+		} else {
+			uid, err = s.createDiscordLocalUser(ctx, p)
+			if err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, err
+	}
+
 	admins, _ := s.AdministratorCount(ctx)
 	stored := LoadAdminDiscordIDs(ctx, s.pool)
-	if admins == 0 || IsAdminDiscordID(p.ID, stored) {
+	linkedFirstAdmin := adminOpen && uid == adminID
+	if admins == 0 || linkedFirstAdmin || IsAdminDiscordID(p.ID, stored) {
 		_, _ = s.pool.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name='Administrator' ON CONFLICT DO NOTHING`, uid)
-		if admins == 0 {
-			RecordAdminDiscordID(ctx, s.pool, p.ID)
-		}
+		RecordAdminDiscordID(ctx, s.pool, p.ID)
 	}
 	return s.GetUser(ctx, uid)
 }
