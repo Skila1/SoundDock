@@ -49,6 +49,7 @@ func FromFile(path string) (Probe, error) {
 		base := filepath.Base(path)
 		p.Title = strings.TrimSuffix(base, filepath.Ext(base))
 	}
+	applyFilenameFallback(&p, path)
 	if p.Disc == 0 {
 		p.Disc = 1
 	}
@@ -69,11 +70,11 @@ func ffprobe(path string) (Probe, error) {
 			Tags     map[string]string `json:"tags"`
 		} `json:"format"`
 		Streams []struct {
-			CodecType  string `json:"codec_type"`
-			CodecName  string `json:"codec_name"`
-			SampleRate string `json:"sample_rate"`
-			Channels   int    `json:"channels"`
-			BitsPerRaw *int   `json:"bits_per_raw_sample,omitempty"`
+			CodecType  string            `json:"codec_type"`
+			CodecName  string            `json:"codec_name"`
+			SampleRate string            `json:"sample_rate"`
+			Channels   int               `json:"channels"`
+			BitsPerRaw *int              `json:"bits_per_raw_sample,omitempty"`
 			Tags       map[string]string `json:"tags"`
 		} `json:"streams"`
 	}

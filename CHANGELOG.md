@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.0.9
+
+- Use artist and title from `321. Artist - Song.mp3` names when tags are missing. Playlist numbers are not kept as the track title.
+
 ## 0.0.8
 
 - Updates page shows the new version and changelog before you install.

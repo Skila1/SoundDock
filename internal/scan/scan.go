@@ -314,6 +314,10 @@ func nullTitle(t, key string) string {
 	if t != "" {
 		return t
 	}
+	_, title := metadata.ParseAudioName(key)
+	if title != "" {
+		return title
+	}
 	return strings.TrimSuffix(filepath.Base(key), filepath.Ext(key))
 }
 
