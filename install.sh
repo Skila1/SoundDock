@@ -200,9 +200,14 @@ collect_config() {
     return
   fi
 
-  ui_msg "SoundDock" "Use Tab and Enter to move. Use Spacebar on checklists.\n\nThis installs Docker if needed, writes ${PREFIX}, and starts SoundDock." 11 || true
+  ui_msg "SoundDock" "Use Tab and Enter to move. Use Spacebar on checklists.\n\nThis writes a Docker Compose project. After install you run docker compose from that directory (down, up, logs, pull)." 12 || true
 
-  if ! ui_yesno "Install SoundDock" "Install SoundDock to ${PREFIX}?\n\nImage: ${IMAGE}"; then
+  PREFIX="$(ui_input "Install directory" "Docker Compose project directory." "${PREFIX}")" || exit 0
+  PREFIX="${PREFIX:-/opt/sounddock}"
+  PREFIX="${PREFIX%/}"
+  CFG_LIBHOST="${SD_LIBRARY_HOST:-${PREFIX}/libraries}"
+
+  if ! ui_yesno "Install SoundDock" "Create a Compose project at ${PREFIX}?\n\nImage: ${IMAGE}\nThen: cd ${PREFIX} && docker compose ps"; then
     echo "Cancelled."
     exit 0
   fi
@@ -238,7 +243,7 @@ collect_config() {
   fi
 
   local summary
-  summary="Prefix: ${PREFIX}\nURL: ${CFG_PUBLIC}\nLibraries: ${CFG_LIBHOST}\nDiscord sign-in: ${CFG_DC}\nDiscord bot: $([[ -n "${CFG_BOTTOK}" ]] && echo yes || echo no)\nCloudflare Tunnel: $([[ -n "${CFG_CFTOK}" ]] && echo yes || echo no)"
+  summary="Compose project: ${PREFIX}\nURL: ${CFG_PUBLIC}\nLibraries: ${CFG_LIBHOST}\nDiscord sign-in: ${CFG_DC}\nDiscord bot: $([[ -n "${CFG_BOTTOK}" ]] && echo yes || echo no)\nCloudflare Tunnel: $([[ -n "${CFG_CFTOK}" ]] && echo yes || echo no)\n\nThen: cd ${PREFIX} && docker compose ..."
   if ! ui_yesno "Ready" "${summary}\n\nStart install?" 16; then
     echo "Cancelled."
     exit 0
@@ -301,6 +306,7 @@ case "\$cmd" in
     ;;
   *)
     echo "Usage: sudo sounddock status|update|logs|uninstall|doctor"
+    echo "Or:    cd ${PREFIX} && docker compose ps|logs|down|up -d"
     exit 1
     ;;
 esac
@@ -310,6 +316,8 @@ EOF
 
 write_compose() {
   cat > "${PREFIX}/docker-compose.yml" <<EOF
+name: sounddock
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -328,7 +336,7 @@ services:
     networks: [sounddock]
 
   sounddock:
-    image: ${IMAGE}
+    image: \${SD_IMAGE:-ghcr.io/skila1/sounddock:latest}
     command: ["all"]
     restart: unless-stopped
     stop_grace_period: 45s
@@ -353,7 +361,7 @@ services:
     networks: [sounddock]
 
   discord-worker:
-    image: ${IMAGE}
+    image: \${SD_IMAGE:-ghcr.io/skila1/sounddock:latest}
     command: ["discord"]
     restart: unless-stopped
     profiles: ["discord"]
@@ -424,9 +432,11 @@ cmd_install() {
     msg_info "Keeping existing ${PREFIX}/.env secrets"
     grep -q '^SD_IMAGE=' "${PREFIX}/.env" || echo "SD_IMAGE=${IMAGE}" >> "${PREFIX}/.env"
     grep -q '^SD_DISCORD_ENABLED=' "${PREFIX}/.env" || echo "SD_DISCORD_ENABLED=${CFG_DC}" >> "${PREFIX}/.env"
+    grep -q '^SD_LIBRARY_HOST=' "${PREFIX}/.env" || echo "SD_LIBRARY_HOST=${CFG_LIBHOST}" >> "${PREFIX}/.env"
     sed -i.bak \
       -e "s|^SD_PUBLIC_URL=.*|SD_PUBLIC_URL=${CFG_PUBLIC}|" \
       -e "s|^SD_IMAGE=.*|SD_IMAGE=${IMAGE}|" \
+      -e "s|^SD_LIBRARY_HOST=.*|SD_LIBRARY_HOST=${CFG_LIBHOST}|" \
       -e "s|^SD_DISCORD_ENABLED=.*|SD_DISCORD_ENABLED=${CFG_DC}|" \
       -e "s|^SD_DISCORD_CLIENT_ID=.*|SD_DISCORD_CLIENT_ID=${CFG_DCID}|" \
       -e "s|^SD_DISCORD_CLIENT_SECRET=.*|SD_DISCORD_CLIENT_SECRET=${CFG_DCSEC}|" \
@@ -450,6 +460,7 @@ SD_DISCORD_CLIENT_ID=${CFG_DCID}
 SD_DISCORD_CLIENT_SECRET=${CFG_DCSEC}
 SD_ADMIN_DISCORD_ID=${CFG_ADMIN}
 SD_IMAGE=${IMAGE}
+SD_LIBRARY_HOST=${CFG_LIBHOST}
 SD_PORT=8080
 POSTGRES_USER=sounddock
 POSTGRES_PASSWORD=${pw}
@@ -469,36 +480,50 @@ EOF
       echo "CLOUDFLARE_TUNNEL_TOKEN=${CFG_CFTOK}" >> "${PREFIX}/.env"
   fi
 
-  local pflag=()
-  if grep -q '^SD_DISCORD_BOT_TOKEN=.\+' "${PREFIX}/.env" 2>/dev/null; then
-    pflag+=(--profile discord)
+  local profiles=()
+  if [[ -n "${CFG_BOTTOK}" ]] || grep -q '^SD_DISCORD_BOT_TOKEN=.\+' "${PREFIX}/.env" 2>/dev/null; then
+    profiles+=(discord)
   fi
-  if grep -q '^CLOUDFLARE_TUNNEL_TOKEN=.\+' "${PREFIX}/.env" 2>/dev/null; then
-    pflag+=(--profile cloudflare)
+  if [[ -n "${CFG_CFTOK}" ]] || grep -q '^CLOUDFLARE_TUNNEL_TOKEN=.\+' "${PREFIX}/.env" 2>/dev/null; then
+    profiles+=(cloudflare)
+  fi
+  local profile_csv=""
+  if [[ ${#profiles[@]} -gt 0 ]]; then
+    profile_csv="$(IFS=,; echo "${profiles[*]}")"
+    if grep -q '^COMPOSE_PROFILES=' "${PREFIX}/.env"; then
+      sed -i.bak -e "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=${profile_csv}|" "${PREFIX}/.env"
+    else
+      echo "COMPOSE_PROFILES=${profile_csv}" >> "${PREFIX}/.env"
+    fi
   fi
 
   cd "${PREFIX}"
-  msg_info "Pulling ${IMAGE}"
-  SD_LIBRARY_HOST="${CFG_LIBHOST}" SD_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]+"${pflag[@]}"}" pull
-  SD_LIBRARY_HOST="${CFG_LIBHOST}" SD_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]+"${pflag[@]}"}" up -d
+  msg_info "Pulling ${IMAGE} in ${PREFIX}"
+  ${COMPOSE} pull
+  ${COMPOSE} up -d
   msg_ok "SoundDock is starting"
 
   local done
-  done="URL: ${CFG_PUBLIC}\nData: ${PREFIX}\n"
+  done="Compose project: ${PREFIX}\nURL: ${CFG_PUBLIC}\n\ncd ${PREFIX}\ndocker compose ps\ndocker compose logs -f\ndocker compose down\ndocker compose up -d\n"
   if [[ "${CFG_DC}" == "true" ]]; then
-    done+="Discord sign-in is on.\n"
+    done+="\nDiscord sign-in is on."
   else
-    done+="Discord is off. Create the first administrator in the browser.\n"
+    done+="\nDiscord is off. Create the first administrator in the browser."
   fi
-  done+="\nThen:\n  sudo sounddock status\n  sudo sounddock logs"
   if ui_ok; then
-    ui_msg "Installed" "${done}" 16 || true
+    ui_msg "Installed" "${done}" 18 || true
   fi
   echo
-  echo -e " ${BOLD}${BL}SoundDock is starting.${CL}"
+  echo -e " ${BOLD}${BL}SoundDock is a Docker Compose project in ${PREFIX}${CL}"
   echo "  URL:  ${CFG_PUBLIC}"
-  echo "  Data: ${PREFIX}"
-  echo "  sudo sounddock status | update | logs | doctor | uninstall"
+  echo
+  echo "  cd ${PREFIX}"
+  echo "  docker compose ps"
+  echo "  docker compose logs -f"
+  echo "  docker compose down"
+  echo "  docker compose pull && docker compose up -d"
+  echo
+  echo "  Optional helper: sudo sounddock status|update|logs|doctor|uninstall"
 }
 
 cmd_status() { [[ -f "${PREFIX}/docker-compose.yml" ]] || { echo "Not installed." >&2; exit 1; }; cd "${PREFIX}" && ${COMPOSE} ps; }

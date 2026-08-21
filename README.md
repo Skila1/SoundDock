@@ -8,15 +8,17 @@ SoundDock is an open-source, self-hosted music platform for organising, streamin
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
 ```
 
-A whiptail installer (same idea as Proxmox helper scripts) walks through public URL, Discord, the bot, and Cloudflare Tunnel. Docker is installed if missing. Then:
+A whiptail installer (same idea as Proxmox helper scripts) writes a Docker Compose project (default `/opt/sounddock`), installs Docker if missing, and starts it. Then you manage it like any Compose stack:
 
 ```bash
-sudo sounddock status
-sudo sounddock update
-sudo sounddock logs
-sudo sounddock doctor
-sudo sounddock uninstall
+cd /opt/sounddock
+docker compose ps
+docker compose logs -f
+docker compose down
+docker compose pull && docker compose up -d
 ```
+
+Optional helper: `sudo sounddock status|update|logs|doctor|uninstall` (same directory).
 
 Unattended (no TUI):
 
