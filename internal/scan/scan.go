@@ -19,6 +19,7 @@ import (
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/metadata"
 	"github.com/sounddock/sounddock/internal/storage"
+	"github.com/sounddock/sounddock/internal/transcode"
 	"github.com/sounddock/sounddock/internal/webhooks"
 )
 
@@ -145,6 +146,33 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		hash = hex.EncodeToString(hw.Sum(nil))
 		probe, _ = metadata.FromFile(name)
 		localPath = name
+	}
+
+	if localPath != "" && prov.Capabilities().Write && transcode.NeedsCompress(e.Key, probe.Codec) {
+		if flac, err := transcode.CompressToFLAC(ctx, localPath); err == nil {
+			in, _ := os.Stat(localPath)
+			out, _ := os.Stat(flac)
+			if out != nil && (in == nil || out.Size() < in.Size()) {
+				newKey := transcode.ReplaceExt(e.Key, ".flac")
+				if f, oerr := os.Open(flac); oerr == nil {
+					werr := prov.Write(ctx, newKey, f, storage.WriteInfo{Size: out.Size()})
+					f.Close()
+					if werr == nil {
+						if newKey != e.Key {
+							_ = prov.Delete(ctx, e.Key)
+						}
+						e.Key = newKey
+						e.Size = out.Size()
+						size = out.Size()
+						if h, herr := hashFile(flac); herr == nil {
+							hash = h
+						}
+						probe, _ = metadata.FromFile(flac)
+					}
+				}
+			}
+			os.Remove(flac)
+		}
 	}
 
 	artistName := probe.AlbumArtist

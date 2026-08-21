@@ -16,34 +16,39 @@ import (
 const settingsKey = "app_update"
 
 type Status struct {
-	AutoEnabled   bool       `json:"auto_enabled"`
-	HelperOK      bool       `json:"helper_ok"`
-	SocketOK      bool       `json:"socket_ok"`
-	CanApply      bool       `json:"can_apply"`
-	Available     bool       `json:"available"`
-	Version       string     `json:"version"`
-	Image         string     `json:"image"`
-	CurrentDigest string     `json:"current_digest"`
-	LatestDigest  string     `json:"latest_digest"`
-	LastCheckAt   *time.Time `json:"last_check_at"`
-	LastAppliedAt *time.Time `json:"last_applied_at"`
-	LastStatus    string     `json:"last_status"`
-	LastError     string     `json:"last_error"`
-	LastAppliedBy string     `json:"last_applied_by"`
-	Checking      bool       `json:"checking"`
-	Updating      bool       `json:"updating"`
+	AutoEnabled   bool             `json:"auto_enabled"`
+	HelperOK      bool             `json:"helper_ok"`
+	SocketOK      bool             `json:"socket_ok"`
+	CanApply      bool             `json:"can_apply"`
+	Available     bool             `json:"available"`
+	Version       string           `json:"version"`
+	LatestVersion string           `json:"latest_version"`
+	Image         string           `json:"image"`
+	CurrentDigest string           `json:"current_digest"`
+	LatestDigest  string           `json:"latest_digest"`
+	Changelog     []ChangelogEntry `json:"changelog"`
+	Progress      *Progress        `json:"progress,omitempty"`
+	LastCheckAt   *time.Time       `json:"last_check_at"`
+	LastAppliedAt *time.Time       `json:"last_applied_at"`
+	LastStatus    string           `json:"last_status"`
+	LastError     string           `json:"last_error"`
+	LastAppliedBy string           `json:"last_applied_by"`
+	Checking      bool             `json:"checking"`
+	Updating      bool             `json:"updating"`
 }
 
 type stored struct {
-	AutoEnabled   bool       `json:"auto_enabled"`
-	Available     bool       `json:"available"`
-	CurrentDigest string     `json:"current_digest"`
-	LatestDigest  string     `json:"latest_digest"`
-	LastCheckAt   *time.Time `json:"last_check_at"`
-	LastAppliedAt *time.Time `json:"last_applied_at"`
-	LastStatus    string     `json:"last_status"`
-	LastError     string     `json:"last_error"`
-	LastAppliedBy string     `json:"last_applied_by"`
+	AutoEnabled   bool             `json:"auto_enabled"`
+	Available     bool             `json:"available"`
+	CurrentDigest string           `json:"current_digest"`
+	LatestDigest  string           `json:"latest_digest"`
+	LatestVersion string           `json:"latest_version"`
+	Changelog     []ChangelogEntry `json:"changelog"`
+	LastCheckAt   *time.Time       `json:"last_check_at"`
+	LastAppliedAt *time.Time       `json:"last_applied_at"`
+	LastStatus    string           `json:"last_status"`
+	LastError     string           `json:"last_error"`
+	LastAppliedBy string           `json:"last_applied_by"`
 }
 
 var (
@@ -80,16 +85,29 @@ func Load(ctx context.Context, pool *pgxpool.Pool) Status {
 	helper := HelperOK()
 	sock := SocketOK()
 	updating := ap || st.LastStatus == "updating" || RequestPending()
+	prog := ReadHostProgress(updating)
+	var progress *Progress
+	if updating || prog.Stage == "error" {
+		cp := prog
+		progress = &cp
+	}
+	latestVer := st.LatestVersion
+	if latestVer == "" {
+		latestVer = version.Version
+	}
 	return Status{
 		AutoEnabled:   st.AutoEnabled,
 		HelperOK:      helper,
 		SocketOK:      sock,
-		CanApply:      helper || sock,
+		CanApply:      helper,
 		Available:     st.Available,
 		Version:       version.Version,
+		LatestVersion: latestVer,
 		Image:         ImageRef(),
 		CurrentDigest: st.CurrentDigest,
 		LatestDigest:  st.LatestDigest,
+		Changelog:     st.Changelog,
+		Progress:      progress,
 		LastCheckAt:   st.LastCheckAt,
 		LastAppliedAt: st.LastAppliedAt,
 		LastStatus:    st.LastStatus,
@@ -165,6 +183,15 @@ func Check(ctx context.Context, pool *pgxpool.Pool) (Status, error) {
 	st.CurrentDigest = current
 	st.LatestDigest = latest
 	st.Available = latest != "" && (current == "" || !digestEqual(current, latest))
+	if lv, notes := FetchReleaseNotes(ctx, version.Version); lv != "" || len(notes) > 0 {
+		if lv != "" {
+			st.LatestVersion = lv
+			if compareVersions(lv, version.Version) > 0 {
+				st.Available = true
+			}
+		}
+		st.Changelog = notes
+	}
 	st.LastStatus = "ok"
 	_ = save(ctx, pool, st)
 	return Load(ctx, pool), nil
@@ -192,13 +219,10 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, by string) error {
 	_ = save(ctx, pool, st)
 
 	var err error
-	switch {
-	case SocketOK():
-		err = PullAndSwap(ctx, ImageRef(), ProjectName())
-	case HelperOK():
+	if HelperOK() {
 		err = RequestUpdate(by)
-	default:
-		err = fmt.Errorf("no update helper")
+	} else {
+		err = fmt.Errorf("host update helper is not available. Re-run the installer so sounddock-update.path can pull images on the host")
 	}
 	if err != nil {
 		st.LastStatus = "error"
@@ -257,7 +281,7 @@ func Tick(ctx context.Context, pool *pgxpool.Pool) {
 		return
 	}
 	if st.LastCheckAt != nil && time.Since(*st.LastCheckAt) < time.Hour {
-		if st.Available && (HelperOK() || SocketOK()) {
+		if st.Available && HelperOK() {
 			_ = Apply(ctx, pool, "auto")
 		}
 		return

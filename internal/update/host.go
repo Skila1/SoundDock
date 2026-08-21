@@ -1,6 +1,7 @@
 package update
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,9 @@ import (
 	"strings"
 	"time"
 )
+
+//go:embed host-update.sh
+var hostUpdateScript []byte
 
 func RequestDir() string {
 	if v := strings.TrimSpace(os.Getenv("SD_UPDATE_DIR")); v != "" {
@@ -53,10 +57,19 @@ func RequestPending() bool {
 	return true
 }
 
+func WriteHostRunner() error {
+	dir := RequestDir()
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "run.sh"), hostUpdateScript, 0o755)
+}
+
 func RequestUpdate(by string) error {
 	if !HelperOK() {
 		return fmt.Errorf("host update helper is not available")
 	}
+	_ = WriteHostRunner()
 	dir := RequestDir()
 	payload, _ := json.Marshal(map[string]string{
 		"at":    time.Now().UTC().Format(time.RFC3339),

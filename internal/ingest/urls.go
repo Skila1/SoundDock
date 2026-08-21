@@ -18,6 +18,7 @@ import (
 	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/ssrf"
 	"github.com/sounddock/sounddock/internal/storage"
+	"github.com/sounddock/sounddock/internal/transcode"
 )
 
 const maxImportURLs = 200
@@ -148,6 +149,24 @@ func (s *Service) importURL(ctx context.Context, raw string, libID uuid.UUID, ge
 			return nil
 		}
 		return s.scanner.ScanLibrary(ctx, resolved, prov, root, "import", uuid.Nil)
+	}
+	stored, storedName := transcode.PrepareStore(ctx, name, "import"+ext, "")
+	if stored != name {
+		os.Remove(name)
+		name = stored
+		ext = path.Ext(storedName)
+		hf, err := os.Open(name)
+		if err != nil {
+			os.Remove(name)
+			return err
+		}
+		hw = sha256.New()
+		n, err = io.Copy(hw, hf)
+		hf.Close()
+		if err != nil {
+			os.Remove(name)
+			return err
+		}
 	}
 	hash := hex.EncodeToString(hw.Sum(nil))
 	var existing string

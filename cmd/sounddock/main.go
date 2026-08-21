@@ -114,6 +114,7 @@ func main() {
 		srv.Web = fsys
 	}
 	srv.OpenAPI = openapi.Spec
+	_ = update.WriteHostRunner()
 
 	runner.Register("library.scan", sc.Handler(srv.ProviderFor))
 	runner.Register("ingest.url", ing.URLHandler(srv.ProviderFor))

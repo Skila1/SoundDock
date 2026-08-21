@@ -28,6 +28,47 @@ func TestDigestEqual(t *testing.T) {
 	}
 }
 
+func TestParseChangelog(t *testing.T) {
+	md := "# Changelog\n\n## 0.0.8\n\n- Host pull progress.\n- Changelog on the Updates page.\n\n## 0.0.7\n\n- Zip uploads.\n"
+	latest, notes := ParseChangelog(md, "0.0.7")
+	if latest != "0.0.8" {
+		t.Fatalf("latest %s", latest)
+	}
+	if len(notes) != 1 || notes[0].Version != "0.0.8" || len(notes[0].Notes) != 2 {
+		t.Fatalf("%#v", notes)
+	}
+	_, none := ParseChangelog(md, "0.0.8")
+	if len(none) != 0 {
+		t.Fatalf("expected no newer notes, got %#v", none)
+	}
+}
+
+func TestInferProgress(t *testing.T) {
+	p := inferProgress("----\nsounddock Pulling\na1b2: Downloading 40%\n", true)
+	if p.Stage != "pulling" || p.Percent < 10 {
+		t.Fatalf("%#v", p)
+	}
+	p = inferProgress("pulled\nStarted\ndone\n", false)
+	if p.Stage != "done" || p.Percent != 100 {
+		t.Fatalf("%#v", p)
+	}
+}
+
+func TestWriteHostRunner(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SD_UPDATE_DIR", dir)
+	if err := WriteHostRunner(); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "run.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "docker compose pull") || !strings.Contains(string(b), "docker compose up -d") {
+		t.Fatalf("script %s", b)
+	}
+}
+
 func TestRequestUpdate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SD_UPDATE_DIR", dir)

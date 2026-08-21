@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/storage"
+	"github.com/sounddock/sounddock/internal/transcode"
 )
 
 const (
@@ -123,9 +125,35 @@ func (s *Service) extractZip(ctx context.Context, staging string, sessionID uuid
 			zr.Close()
 			return 0, "", uuid.Nil, nil, err
 		}
-		key := path.Join(root, rel)
-		err = prov.Write(ctx, key, rc, storage.WriteInfo{Size: int64(f.UncompressedSize64)})
+		tmp, err := os.CreateTemp("", "sd-zip-*"+path.Ext(base))
+		if err != nil {
+			rc.Close()
+			zr.Close()
+			return 0, "", uuid.Nil, nil, err
+		}
+		_, err = io.Copy(tmp, rc)
+		tmp.Close()
 		rc.Close()
+		if err != nil {
+			os.Remove(tmp.Name())
+			zr.Close()
+			return 0, "", uuid.Nil, nil, err
+		}
+		out, storeName := transcode.PrepareStore(ctx, tmp.Name(), rel, "")
+		if out != tmp.Name() {
+			os.Remove(tmp.Name())
+		}
+		key := path.Join(root, storeName)
+		sf, err := os.Open(out)
+		if err != nil {
+			os.Remove(out)
+			zr.Close()
+			return 0, "", uuid.Nil, nil, err
+		}
+		st, _ := sf.Stat()
+		err = prov.Write(ctx, key, sf, storage.WriteInfo{Size: st.Size()})
+		sf.Close()
+		os.Remove(out)
 		if err != nil {
 			zr.Close()
 			return 0, "", uuid.Nil, nil, err

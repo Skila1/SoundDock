@@ -668,8 +668,8 @@ func (s *Server) adminUpdatesCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUpdatesApply(w http.ResponseWriter, r *http.Request) {
-	if !update.HelperOK() && !update.SocketOK() {
-		writeErr(w, 503, "no_helper", "Docker is not available to apply updates.")
+	if !update.HelperOK() {
+		writeErr(w, 503, "no_helper", "The host update helper is not running. Re-run the installer so sounddock-update.path can pull images.")
 		return
 	}
 	u := currentUser(r)
@@ -687,7 +687,7 @@ func (s *Server) adminUpdatesApply(w http.ResponseWriter, r *http.Request) {
 		uid = &u.ID
 	}
 	s.Audit.Event(r.Context(), uid, "updates.apply", id.String(), r.RemoteAddr, nil)
-	writeJSON(w, 202, map[string]any{"ok": true, "job_id": id, "message": "Update started. The app will restart when the new image is ready."})
+	writeJSON(w, 202, map[string]any{"ok": true, "job_id": id, "message": "The host is pulling the new image. SoundDock stays up until the new container starts."})
 }
 
 var _ = storage.ErrNotFound

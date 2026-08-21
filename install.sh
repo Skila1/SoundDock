@@ -298,10 +298,10 @@ cmd="\${1:-}"
 case "\$cmd" in
   status) cd_prefix; \${COMPOSE} ps ;;
   logs) cd_prefix; \${COMPOSE} logs -f --tail=200 ;;
-  update)
+	update)
     cd_prefix
     \${COMPOSE} pull
-    \${COMPOSE} up -d
+    \${COMPOSE} up -d --remove-orphans
     ;;
   uninstall)
     need_root
@@ -311,7 +311,7 @@ case "\$cmd" in
       rm -rf "\${PREFIX}"
       rm -f /usr/local/bin/sounddock
       systemctl disable --now sounddock-update.path >/dev/null 2>&1 || true
-      rm -f /etc/systemd/system/sounddock-update.service /etc/systemd/system/sounddock-update.path /usr/local/lib/sounddock/update.sh
+      rm -f /etc/systemd/system/sounddock-update.service /etc/systemd/system/sounddock-update.path /usr/local/lib/sounddock/update.sh /usr/local/lib/sounddock/host-update.sh
       systemctl daemon-reload >/dev/null 2>&1 || true
     else
       \${COMPOSE} down
@@ -355,35 +355,101 @@ install_update_helper() {
   mkdir -p "${PREFIX}/update" /usr/local/lib/sounddock
   chmod 0777 "${PREFIX}/update" || true
   printf '1\n' > "${PREFIX}/update/helper"
+  cat > /usr/local/lib/sounddock/host-update.sh <<'HOST'
+#!/usr/bin/env bash
+# Host-side SoundDock updater. The app only writes update/request.
+set -euo pipefail
+
+if [[ -n "${SD_UPDATE_PREFIX:-}" ]]; then
+  PREFIX="${SD_UPDATE_PREFIX}"
+elif [[ "$(basename "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")" == "update" ]]; then
+  PREFIX="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+else
+  echo "SD_UPDATE_PREFIX is not set" >&2
+  exit 1
+fi
+
+UPDATE="${PREFIX}/update"
+REQ="${UPDATE}/request"
+LOG="${UPDATE}/last.log"
+APPLIED="${UPDATE}/applied"
+PROG="${UPDATE}/progress.json"
+mkdir -p "${UPDATE}"
+
+progress_write() {
+  local percent="$1" stage="$2" detail="$3"
+  detail="${detail//$'\r'/}"
+  detail="${detail//\\/\\\\}"
+  detail="${detail//\"/\\\"}"
+  detail="${detail//$'\n'/ }"
+  printf '{"percent":%s,"stage":"%s","detail":"%s"}\n' "${percent}" "${stage}" "${detail}" > "${PROG}.tmp"
+  mv -f "${PROG}.tmp" "${PROG}"
+}
+
+{
+  echo "---- $(date -u +%Y-%m-%dT%H:%M:%SZ) ----"
+  if [[ ! -f "${REQ}" ]]; then
+    echo "no request"
+    progress_write 0 "idle" "No update request"
+    exit 0
+  fi
+  rm -f "${REQ}"
+  progress_write 5 "queued" "Host received update request"
+  sleep 1
+  cd "${PREFIX}"
+  img=""
+  if [[ -f .env ]]; then
+    img="$(grep -E '^SD_IMAGE=' .env | tail -1 | cut -d= -f2- | tr -d '"' || true)"
+  fi
+  img="${img:-ghcr.io/skila1/sounddock:latest}"
+
+  progress_write 10 "pulling" "Pulling ${img}"
+  set +e
+  docker compose pull >>"${LOG}" 2>&1 &
+  pull_pid=$!
+  pct=10
+  while kill -0 "${pull_pid}" 2>/dev/null; do
+    sleep 2
+    if (( pct < 72 )); then
+      pct=$((pct + 2))
+    fi
+    last="$(tail -n 1 "${LOG}" 2>/dev/null | tr -d '\r' || true)"
+    if [[ "${last}" =~ ([0-9]{1,3})% ]]; then
+      mapped=$((10 + BASH_REMATCH[1] * 62 / 100))
+      if (( mapped > pct )); then
+        pct="${mapped}"
+      fi
+    fi
+    progress_write "${pct}" "pulling" "${last:-Downloading layers}"
+  done
+  wait "${pull_pid}"
+  pull_st=$?
+  set -e
+  if [[ "${pull_st}" -ne 0 ]]; then
+    progress_write 0 "error" "Image pull failed"
+    echo "pull failed: ${pull_st}"
+    exit "${pull_st}"
+  fi
+
+  progress_write 80 "restarting" "Starting updated containers"
+  docker compose up -d --remove-orphans
+  digest="$(docker image inspect "${img}" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null || true)"
+  if [[ -n "${digest}" ]]; then
+    printf '%s\n' "${digest}" > "${APPLIED}"
+  fi
+  progress_write 100 "done" "Update complete"
+  echo "done"
+} >>"${LOG}" 2>&1
+HOST
+  chmod 0755 /usr/local/lib/sounddock/host-update.sh
   cat > /usr/local/lib/sounddock/update.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-PREFIX="${PREFIX}"
-REQ="\${PREFIX}/update/request"
-LOG="\${PREFIX}/update/last.log"
-APPLIED="\${PREFIX}/update/applied"
-mkdir -p "\${PREFIX}/update"
-exec >>"\${LOG}" 2>&1
-echo "---- \$(date -u +%Y-%m-%dT%H:%M:%SZ) ----"
-if [[ ! -f "\${REQ}" ]]; then
-  echo "no request"
-  exit 0
+export SD_UPDATE_PREFIX="${PREFIX}"
+if [[ -f "${PREFIX}/update/run.sh" ]]; then
+  exec /bin/bash "${PREFIX}/update/run.sh"
 fi
-rm -f "\${REQ}"
-sleep 3
-cd "\${PREFIX}"
-img=""
-if [[ -f .env ]]; then
-  img="\$(grep -E '^SD_IMAGE=' .env | tail -1 | cut -d= -f2- | tr -d '\"' || true)"
-fi
-img="\${img:-ghcr.io/skila1/sounddock:latest}"
-docker compose pull
-docker compose up -d --remove-orphans
-digest="\$(docker image inspect "\${img}" --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' 2>/dev/null || true)"
-if [[ -n "\${digest}" ]]; then
-  printf '%s\\n' "\${digest}" > "\${APPLIED}"
-fi
-echo "done"
+exec /bin/bash /usr/local/lib/sounddock/host-update.sh
 EOF
   chmod 0755 /usr/local/lib/sounddock/update.sh
   cat > /etc/systemd/system/sounddock-update.service <<EOF
@@ -421,7 +487,7 @@ remove_update_helper() {
     systemctl disable --now sounddock-update.path >/dev/null 2>&1 || true
     systemctl stop sounddock-update.service >/dev/null 2>&1 || true
   fi
-  rm -f /etc/systemd/system/sounddock-update.service /etc/systemd/system/sounddock-update.path /usr/local/lib/sounddock/update.sh
+  rm -f /etc/systemd/system/sounddock-update.service /etc/systemd/system/sounddock-update.path /usr/local/lib/sounddock/update.sh /usr/local/lib/sounddock/host-update.sh
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
   fi

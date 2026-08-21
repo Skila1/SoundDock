@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,6 +18,8 @@ import (
 	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/storage"
 )
+
+var ingestSem = make(chan struct{}, 16)
 
 type Service struct {
 	pool     *pgxpool.Pool
@@ -131,7 +134,14 @@ func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(c
 	if s.scanner == nil {
 		return nil
 	}
-	return s.scanner.IngestKey(ctx, libID, prov, key)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		ingestSem <- struct{}{}
+		defer func() { <-ingestSem }()
+		_ = s.scanner.IngestKey(ctx, libID, prov, key)
+	}()
+	return nil
 }
 
 func (s *Service) ScanUploads(ctx context.Context, lib uuid.UUID, getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) error {

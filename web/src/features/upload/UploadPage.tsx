@@ -11,7 +11,7 @@ import { toast } from "sonner";
 type Item = { file: File; status: "queued" | "uploading" | "done" | "error"; progress: number; error?: string };
 
 const CHUNK = 8 * 1024 * 1024;
-const WORKERS = 4;
+const WORKERS = 100;
 
 function fileLabel(file: File) {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
@@ -107,7 +107,7 @@ export function UploadPage() {
 
   return (
     <div>
-      <PageHeader title="Upload" description="Drop a folder, many files, or a zip. SoundDock reads tags after they land." />
+      <PageHeader title="Upload" description="Drop a folder, many files, or a zip. Up to 100 files upload at once. WAV and AIFF are stored as FLAC." />
       <div
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files); }}
@@ -116,7 +116,7 @@ export function UploadPage() {
       >
         <Up className="mb-2 h-8 w-8 text-accent" />
         <p className="font-medium">Drop audio files, folders, or a zip</p>
-        <p className="text-sm text-muted">FLAC, MP3, M4A, Ogg, Opus, WAV, AIFF, ZIP</p>
+        <p className="text-sm text-muted">FLAC, MP3, M4A, Ogg, Opus, WAV, AIFF, ZIP. Uncompressed files are compressed automatically.</p>
         <div className="mt-3 flex gap-2">
           <Button type="button" size="sm" onClick={(e) => { e.stopPropagation(); input.current?.click(); }}>Choose files</Button>
           <Button type="button" size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); folder.current?.click(); }}>Choose folder</Button>
