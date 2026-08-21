@@ -8,6 +8,7 @@
 - Playlist numbers like `321.` are stripped. Scanning also retitles tracks that already stored a hash as the title, and updates their artist and album.
 - When tags are missing, `Artist - Title` and `Title - Artist` are both understood: tags first, then artists already in the library, then `Artist - Title` as the default.
 - Hover the player volume control and scroll the mouse wheel to raise or lower volume.
+- In-app Update now writes the host request immediately, then pulls via the Docker socket if systemd inotify missed the bind-mount write.
 
 ## 0.0.9
 

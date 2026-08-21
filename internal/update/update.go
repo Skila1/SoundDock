@@ -84,7 +84,7 @@ func Load(ctx context.Context, pool *pgxpool.Pool) Status {
 	mu.Unlock()
 	helper := HelperOK()
 	sock := SocketOK()
-	updating := ap || st.LastStatus == "updating" || RequestPending()
+	updating := ap || st.LastStatus == "updating" || RequestPending() || HelperActive()
 	prog := ReadHostProgress(updating)
 	var progress *Progress
 	if updating || prog.Stage == "error" {
@@ -99,7 +99,7 @@ func Load(ctx context.Context, pool *pgxpool.Pool) Status {
 		AutoEnabled:   st.AutoEnabled,
 		HelperOK:      helper,
 		SocketOK:      sock,
-		CanApply:      helper,
+		CanApply:      helper || sock,
 		Available:     st.Available,
 		Version:       version.Version,
 		LatestVersion: latestVer,
@@ -198,13 +198,71 @@ func Check(ctx context.Context, pool *pgxpool.Pool) (Status, error) {
 }
 
 func Apply(ctx context.Context, pool *pgxpool.Pool, by string) error {
+	started, err := BeginApply(ctx, pool, by)
+	if err != nil {
+		return err
+	}
+	if !started {
+		return nil
+	}
+	return RunApply(ctx, pool, by)
+}
+
+// BeginApply records the update and drops update/request for the host helper.
+// The HTTP handler calls this on the request goroutine so a busy job queue
+// cannot swallow the click. RunApply then waits for the helper or pulls via
+// the Docker socket (host daemon), so the process is not stuck inside the
+// container with no way to recreate itself.
+func BeginApply(ctx context.Context, pool *pgxpool.Pool, by string) (bool, error) {
 	mu.Lock()
 	if applying {
 		mu.Unlock()
-		return nil
+		return false, nil
 	}
 	applying = true
 	mu.Unlock()
+
+	st := loadStored(ctx, pool)
+	now := time.Now().UTC()
+	st.LastStatus = "updating"
+	st.LastError = ""
+	st.LastAppliedBy = by
+	st.LastAppliedAt = &now
+	st.Available = false
+	if err := save(ctx, pool, st); err != nil {
+		mu.Lock()
+		applying = false
+		mu.Unlock()
+		return false, err
+	}
+
+	helper, sock := HelperOK(), SocketOK()
+	if !helper && !sock {
+		st.LastStatus = "error"
+		st.LastError = "host update helper is not available. Re-run the installer so sounddock-update can pull images on the host"
+		_ = save(ctx, pool, st)
+		mu.Lock()
+		applying = false
+		mu.Unlock()
+		return false, fmt.Errorf("%s", st.LastError)
+	}
+	if helper {
+		if err := RequestUpdate(by); err != nil && !sock {
+			st.LastStatus = "error"
+			st.LastError = err.Error()
+			_ = save(ctx, pool, st)
+			mu.Lock()
+			applying = false
+			mu.Unlock()
+			return false, err
+		}
+	} else {
+		writeProgress(8, "queued", "Pulling via the Docker socket")
+	}
+	return true, nil
+}
+
+func RunApply(ctx context.Context, pool *pgxpool.Pool, by string) error {
 	defer func() {
 		mu.Lock()
 		applying = false
@@ -212,35 +270,66 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, by string) error {
 	}()
 
 	st := loadStored(ctx, pool)
-	now := time.Now().UTC()
-	st.LastStatus = "updating"
-	st.LastError = ""
-	st.LastAppliedBy = by
-	_ = save(ctx, pool, st)
+	helper, sock := HelperOK(), SocketOK()
+	if helper && waitHelper(12*time.Second) {
+		return nil
+	}
 
-	var err error
-	if HelperOK() {
-		err = RequestUpdate(by)
-	} else {
-		err = fmt.Errorf("host update helper is not available. Re-run the installer so sounddock-update.path can pull images on the host")
+	if sock {
+		writeProgress(10, "pulling", "Pulling "+ImageRef()+" via Docker socket")
+		ClearRequest()
+		if err := PullAndSwap(ctx, ImageRef(), ProjectName()); err != nil {
+			if helper && HelperActive() {
+				return nil
+			}
+			st.LastStatus = "error"
+			st.LastError = err.Error()
+			_ = save(ctx, pool, st)
+			writeProgress(0, "error", err.Error())
+			return err
+		}
+		writeProgress(80, "restarting", "Starting updated containers")
+		return nil
 	}
-	if err != nil {
-		st.LastStatus = "error"
-		st.LastError = err.Error()
-		_ = save(ctx, pool, st)
-		return err
+
+	if helper {
+		return nil
 	}
-	st.LastAppliedAt = &now
-	st.Available = false
-	st.LastStatus = "updating"
-	st.LastError = ""
+	st.LastStatus = "error"
+	st.LastError = "update did not start"
 	_ = save(ctx, pool, st)
-	return nil
+	return fmt.Errorf("%s", st.LastError)
+}
+
+func waitHelper(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		if helperTookOver() {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+}
+
+func helperTookOver() bool {
+	if RequestPending() {
+		return false
+	}
+	prog := ReadHostProgress(true)
+	switch prog.Stage {
+	case "queued", "pulling", "restarting", "done":
+		return true
+	default:
+		return false
+	}
 }
 
 func reconcile(ctx context.Context, pool *pgxpool.Pool) {
 	st := loadStored(ctx, pool)
-	if RequestPending() {
+	if RequestPending() || HelperActive() {
 		return
 	}
 	if st.LastStatus != "updating" {
@@ -253,7 +342,11 @@ func reconcile(ctx context.Context, pool *pgxpool.Pool) {
 		}
 	}
 	if d == "" {
-		if st.LastCheckAt != nil && time.Since(*st.LastCheckAt) > 10*time.Minute {
+		started := st.LastAppliedAt
+		if started == nil {
+			started = st.LastCheckAt
+		}
+		if started != nil && time.Since(*started) > 30*time.Minute {
 			st.LastStatus = "error"
 			st.LastError = "update did not finish. Use docker compose pull && docker compose up -d on the host."
 			_ = save(ctx, pool, st)
@@ -281,7 +374,7 @@ func Tick(ctx context.Context, pool *pgxpool.Pool) {
 		return
 	}
 	if st.LastCheckAt != nil && time.Since(*st.LastCheckAt) < time.Hour {
-		if st.Available && HelperOK() {
+		if st.Available && CanApply() {
 			_ = Apply(ctx, pool, "auto")
 		}
 		return

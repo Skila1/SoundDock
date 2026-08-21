@@ -26,6 +26,28 @@ type hostProgressFile struct {
 
 var percentRe = regexp.MustCompile(`([0-9]{1,3})%`)
 
+func HelperActive() bool {
+	path := filepath.Join(RequestDir(), "progress.json")
+	st, err := os.Stat(path)
+	if err != nil || time.Since(st.ModTime()) > time.Minute {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var f hostProgressFile
+	if json.Unmarshal(raw, &f) != nil {
+		return false
+	}
+	switch f.Stage {
+	case "queued", "pulling", "restarting", "done":
+		return true
+	default:
+		return false
+	}
+}
+
 func ReadHostProgress(active bool) Progress {
 	logText := tailFile(filepath.Join(RequestDir(), "last.log"), 24)
 	p := Progress{Log: logText}

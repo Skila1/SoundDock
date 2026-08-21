@@ -3,6 +3,8 @@
 # This script runs on the host: docker compose pull, then docker compose up -d.
 set -euo pipefail
 
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin:${PATH:-}"
+
 if [[ -n "${SD_UPDATE_PREFIX:-}" ]]; then
   PREFIX="${SD_UPDATE_PREFIX}"
 elif [[ "$(basename "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)")" == "update" ]]; then
@@ -19,6 +21,14 @@ APPLIED="${UPDATE}/applied"
 PROG="${UPDATE}/progress.json"
 mkdir -p "${UPDATE}"
 
+exec 9>"${UPDATE}/.lock"
+if command -v flock >/dev/null 2>&1; then
+  if ! flock -n 9; then
+    echo "update already running" >>"${LOG}"
+    exit 0
+  fi
+fi
+
 progress_write() {
   local percent="$1" stage="$2" detail="$3"
   detail="${detail//$'\r'/}"
@@ -33,10 +43,14 @@ progress_write() {
   echo "---- $(date -u +%Y-%m-%dT%H:%M:%SZ) ----"
   if [[ ! -f "${REQ}" ]]; then
     echo "no request"
-    progress_write 0 "idle" "No update request"
     exit 0
   fi
   rm -f "${REQ}"
+  if ! command -v docker >/dev/null 2>&1; then
+    progress_write 0 "error" "docker not found on host PATH"
+    echo "docker not found"
+    exit 127
+  fi
   progress_write 5 "queued" "Host received update request"
   sleep 1
   cd "${PREFIX}"

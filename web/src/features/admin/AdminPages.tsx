@@ -811,7 +811,7 @@ export function AdminUpdates() {
 
   return (
     <div>
-      <PageHeader title="Updates" description="Update asks the host to pull the new image, then recreate SoundDock. Postgres stays running and the app stays up until the new container starts." />
+      <PageHeader title="Updates" description="Update pulls the new image on the host, then recreates SoundDock. Postgres stays running and the app stays up until the new container starts." />
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge tone={d.available ? "warning" : "success"}>{d.available ? "Update available" : "Up to date"}</Badge>
         {updating ? <Badge tone="accent">Updating</Badge> : d.can_apply ? <Badge tone="success">Can install</Badge> : <Badge tone="warning">Cannot install</Badge>}
@@ -832,7 +832,7 @@ export function AdminUpdates() {
         <p className="mt-3 text-sm text-muted">Last check: {d.last_check_at ? relativeTime(d.last_check_at) : "never"}</p>
         <p className="text-sm text-muted">Last update: {d.last_applied_at ? relativeTime(d.last_applied_at) : "never"}{d.last_applied_by ? ` (${d.last_applied_by})` : ""}</p>
         {d.last_error && <p className="mt-2 text-sm text-destructive">{d.last_error}</p>}
-        {!d.can_apply && <p className="mt-2 text-sm text-muted">The host helper is not running. Re-run the installer so sounddock-update.path can pull images on the host.</p>}
+        {!d.can_apply && <p className="mt-2 text-sm text-muted">Neither the host helper nor the Docker socket is available. Re-run the installer so sounddock-update can pull images on the host.</p>}
 
         {d.available && !updating && (
           <div className="mt-4 rounded-lg border border-border bg-surface-2 p-4">
@@ -901,7 +901,7 @@ export function AdminUpdates() {
       <div className="flex max-w-lg items-center justify-between rounded-xl border border-border bg-surface-1 p-4">
         <div>
           <div className="text-sm font-medium">Automatic updates</div>
-          <p className="text-xs text-subtle">When on, SoundDock checks about once an hour and asks the host to pull a newer image.</p>
+          <p className="text-xs text-subtle">When on, SoundDock checks about once an hour and pulls a newer image on the host.</p>
         </div>
         <Switch checked={!!d.auto_enabled} onCheckedChange={(v) => api.put("/api/v1/admin/updates", { auto_enabled: v }).then(() => { toast.success(v ? "Automatic updates on" : "Automatic updates off"); qc.invalidateQueries({ queryKey: ["admin-updates"] }); })} />
       </div>

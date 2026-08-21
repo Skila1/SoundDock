@@ -358,7 +358,10 @@ install_update_helper() {
   cat > /usr/local/lib/sounddock/host-update.sh <<'HOST'
 #!/usr/bin/env bash
 # Host-side SoundDock updater. The app only writes update/request.
+# This script runs on the host: docker compose pull, then docker compose up -d.
 set -euo pipefail
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin:${PATH:-}"
 
 if [[ -n "${SD_UPDATE_PREFIX:-}" ]]; then
   PREFIX="${SD_UPDATE_PREFIX}"
@@ -376,6 +379,14 @@ APPLIED="${UPDATE}/applied"
 PROG="${UPDATE}/progress.json"
 mkdir -p "${UPDATE}"
 
+exec 9>"${UPDATE}/.lock"
+if command -v flock >/dev/null 2>&1; then
+  if ! flock -n 9; then
+    echo "update already running" >>"${LOG}"
+    exit 0
+  fi
+fi
+
 progress_write() {
   local percent="$1" stage="$2" detail="$3"
   detail="${detail//$'\r'/}"
@@ -390,10 +401,14 @@ progress_write() {
   echo "---- $(date -u +%Y-%m-%dT%H:%M:%SZ) ----"
   if [[ ! -f "${REQ}" ]]; then
     echo "no request"
-    progress_write 0 "idle" "No update request"
     exit 0
   fi
   rm -f "${REQ}"
+  if ! command -v docker >/dev/null 2>&1; then
+    progress_write 0 "error" "docker not found on host PATH"
+    echo "docker not found"
+    exit 127
+  fi
   progress_write 5 "queued" "Host received update request"
   sleep 1
   cd "${PREFIX}"
@@ -445,6 +460,7 @@ HOST
   cat > /usr/local/lib/sounddock/update.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin:\${PATH:-}"
 export SD_UPDATE_PREFIX="${PREFIX}"
 if [[ -f "${PREFIX}/update/run.sh" ]]; then
   exec /bin/bash "${PREFIX}/update/run.sh"
@@ -460,6 +476,9 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
+WorkingDirectory=${PREFIX}
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/snap/bin
+Environment=SD_UPDATE_PREFIX=${PREFIX}
 ExecStart=/usr/local/lib/sounddock/update.sh
 Nice=5
 TimeoutStartSec=30min
@@ -471,23 +490,39 @@ Description=Watch for SoundDock update requests
 [Path]
 PathExists=${PREFIX}/update/request
 PathChanged=${PREFIX}/update/request
+PathModified=${PREFIX}/update/request
 Unit=sounddock-update.service
 MakeDirectory=true
 
 [Install]
 WantedBy=multi-user.target
 EOF
+  cat > /etc/systemd/system/sounddock-update.timer <<EOF
+[Unit]
+Description=Poll SoundDock update requests (inotify misses container bind-mount writes)
+
+[Timer]
+OnBootSec=20s
+OnUnitInactiveSec=5s
+AccuracySec=1s
+Unit=sounddock-update.service
+
+[Install]
+WantedBy=timers.target
+EOF
   systemctl daemon-reload
   systemctl enable --now sounddock-update.path
-  msg_ok "Host update helper enabled (sounddock-update.path)"
+  systemctl enable --now sounddock-update.timer
+  msg_ok "Host update helper enabled (sounddock-update.path + timer)"
 }
 
 remove_update_helper() {
   if command -v systemctl >/dev/null 2>&1; then
     systemctl disable --now sounddock-update.path >/dev/null 2>&1 || true
+    systemctl disable --now sounddock-update.timer >/dev/null 2>&1 || true
     systemctl stop sounddock-update.service >/dev/null 2>&1 || true
   fi
-  rm -f /etc/systemd/system/sounddock-update.service /etc/systemd/system/sounddock-update.path /usr/local/lib/sounddock/update.sh /usr/local/lib/sounddock/host-update.sh
+  rm -f /etc/systemd/system/sounddock-update.service /etc/systemd/system/sounddock-update.path /etc/systemd/system/sounddock-update.timer /usr/local/lib/sounddock/update.sh /usr/local/lib/sounddock/host-update.sh
   if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload || true
   fi
@@ -740,6 +775,7 @@ cmd_doctor() {
   fi
   if command -v systemctl >/dev/null 2>&1; then
     systemctl is-enabled sounddock-update.path 2>/dev/null || echo "sounddock-update.path: not enabled"
+    systemctl is-enabled sounddock-update.timer 2>/dev/null || echo "sounddock-update.timer: not enabled"
   fi
 }
 

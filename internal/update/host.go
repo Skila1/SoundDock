@@ -20,6 +20,10 @@ func RequestDir() string {
 	return "/update"
 }
 
+func CanApply() bool {
+	return HelperOK() || SocketOK()
+}
+
 func HelperOK() bool {
 	dir := RequestDir()
 	if _, err := os.Stat(filepath.Join(dir, "helper")); err != nil {
@@ -50,11 +54,16 @@ func RequestPending() bool {
 	if err != nil {
 		return false
 	}
-	if time.Since(st.ModTime()) > 10*time.Minute {
+	if time.Since(st.ModTime()) > 30*time.Minute {
 		_ = os.Remove(filepath.Join(RequestDir(), "request"))
 		return false
 	}
 	return true
+}
+
+func ClearRequest() {
+	_ = os.Remove(filepath.Join(RequestDir(), "request"))
+	_ = os.Remove(filepath.Join(RequestDir(), "request.tmp"))
 }
 
 func WriteHostRunner() error {
@@ -63,6 +72,18 @@ func WriteHostRunner() error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(dir, "run.sh"), hostUpdateScript, 0o755)
+}
+
+func writeProgress(percent int, stage, detail string) {
+	dir := RequestDir()
+	_ = os.MkdirAll(dir, 0o777)
+	b, _ := json.Marshal(hostProgressFile{Percent: percent, Stage: stage, Detail: detail})
+	tmp := filepath.Join(dir, "progress.json.tmp")
+	dst := filepath.Join(dir, "progress.json")
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, dst)
 }
 
 func RequestUpdate(by string) error {
@@ -78,8 +99,15 @@ func RequestUpdate(by string) error {
 	})
 	tmp := filepath.Join(dir, "request.tmp")
 	dst := filepath.Join(dir, "request")
-	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
+	// Remove first so systemd PathExists sees a create. Overlay/bind-mount
+	// inotify often misses container writes; the timer + docker socket cover that.
+	_ = os.Remove(dst)
+	if err := os.WriteFile(tmp, payload, 0o666); err != nil {
 		return err
 	}
-	return os.Rename(tmp, dst)
+	if err := os.Rename(tmp, dst); err != nil {
+		return err
+	}
+	writeProgress(5, "queued", "Waiting for the host helper")
+	return nil
 }

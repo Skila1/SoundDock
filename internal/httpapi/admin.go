@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -691,8 +692,8 @@ func (s *Server) adminUpdatesCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUpdatesApply(w http.ResponseWriter, r *http.Request) {
-	if !update.HelperOK() {
-		writeErr(w, 503, "no_helper", "The host update helper is not running. Re-run the installer so sounddock-update.path can pull images.")
+	if !update.CanApply() {
+		writeErr(w, 503, "no_helper", "The host update helper is not running. Re-run the installer so sounddock-update can pull images on the host.")
 		return
 	}
 	u := currentUser(r)
@@ -700,17 +701,24 @@ func (s *Server) adminUpdatesApply(w http.ResponseWriter, r *http.Request) {
 	if u != nil && u.Username != "" {
 		who = u.Username
 	}
-	id, err := s.Jobs.Enqueue(r.Context(), "app.update.apply", map[string]any{"by": who})
+	started, err := update.BeginApply(r.Context(), s.Pool, who)
 	if err != nil {
-		writeErr(w, 500, "job", "could not start update")
+		writeErr(w, 500, "update", err.Error())
 		return
+	}
+	if started {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer cancel()
+			_ = update.RunApply(ctx, s.Pool, who)
+		}()
 	}
 	var uid *uuid.UUID
 	if u != nil {
 		uid = &u.ID
 	}
-	s.Audit.Event(r.Context(), uid, "updates.apply", id.String(), r.RemoteAddr, nil)
-	writeJSON(w, 202, map[string]any{"ok": true, "job_id": id, "message": "The host is pulling the new image. SoundDock stays up until the new container starts."})
+	s.Audit.Event(r.Context(), uid, "updates.apply", "", r.RemoteAddr, nil)
+	writeJSON(w, 202, map[string]any{"ok": true, "message": "The host is pulling the new image. SoundDock stays up until the new container starts."})
 }
 
 var _ = storage.ErrNotFound

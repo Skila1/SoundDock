@@ -98,7 +98,7 @@ func TestRequestUpdate(t *testing.T) {
 		t.Fatalf("digest %s", AppliedDigest())
 	}
 	old := filepath.Join(dir, "request")
-	past := time.Now().Add(-20 * time.Minute)
+	past := time.Now().Add(-31 * time.Minute)
 	if err := os.Chtimes(old, past, past); err != nil {
 		t.Fatal(err)
 	}
@@ -107,5 +107,40 @@ func TestRequestUpdate(t *testing.T) {
 	}
 	if _, err := os.Stat(old); err == nil {
 		t.Fatal("stale request should be removed")
+	}
+}
+
+func TestRequestUpdateReplaces(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("SD_UPDATE_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "helper"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequestUpdate("first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := RequestUpdate("second"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, "request"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), "second") {
+		t.Fatalf("got %s", b)
+	}
+	if !HelperActive() {
+		t.Fatal("queued progress should look active")
+	}
+	if !RequestPending() {
+		t.Fatal("request should still be pending")
+	}
+	if helperTookOver() {
+		t.Fatal("container-written queued progress is not a host takeover")
+	}
+	_ = os.Remove(filepath.Join(dir, "request"))
+	writeProgress(12, "pulling", "Downloading layers")
+	if !helperTookOver() {
+		t.Fatal("host pull progress after removing request is a takeover")
 	}
 }
