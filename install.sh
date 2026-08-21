@@ -397,8 +397,7 @@ save_installer() {
   if [[ -n "${src}" && -f "${src}" && "${src}" != *bash ]]; then
     cp "${src}" "${PREFIX}/install.sh"
   else
-    curl -fsSL "${SCRIPT_SRC}" -o "${PREFIX}/install.sh" || \
-      curl -fsSL "https://git.aspecracing.com.au/Skila/SoundDock/raw/branch/main/install.sh" -o "${PREFIX}/install.sh" || true
+    curl -fsSL "${SCRIPT_SRC}" -o "${PREFIX}/install.sh" || true
   fi
   if [[ -f "${PREFIX}/install.sh" ]]; then
     chmod 0755 "${PREFIX}/install.sh"
