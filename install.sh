@@ -1,15 +1,49 @@
 #!/usr/bin/env bash
-# SoundDock one-click installer. Pulls the published Docker image. No git clone required.
+# SoundDock installer. Whiptail TUI (Proxmox helper style). Do not apt install docker.
 #
-#   curl -fsSL https://raw.githubusercontent.com/sounddock/sounddock/main/install.sh | sudo bash
-#   sudo bash install.sh install|status|update|logs|uninstall|doctor
+#   sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
+#
+# After install: sudo sounddock status|update|logs|uninstall|doctor
+# Unattended:    sudo env SD_UNATTENDED=1 bash -c "$(curl -fsSL ...)"
 #
 set -euo pipefail
 
 PREFIX="${SD_PREFIX:-/opt/sounddock}"
-IMAGE="${SD_IMAGE:-ghcr.io/sounddock/sounddock:latest}"
+IMAGE="${SD_IMAGE:-ghcr.io/skila1/sounddock:latest}"
+SCRIPT_SRC="${SD_INSTALL_URL:-https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh}"
 COMPOSE="docker compose"
 CMD="${1:-install}"
+BACKTITLE="SoundDock Installer"
+export TERM="${TERM:-xterm}"
+
+YW=$'\033[33m'
+GN=$'\033[1;92m'
+BL=$'\033[36m'
+RD=$'\033[1;31m'
+CL=$'\033[m'
+BOLD=$'\033[1m'
+
+msg_info() { echo -e " ${YW}[*]${CL} $1"; }
+msg_ok() { echo -e " ${GN}[ok]${CL} $1"; }
+msg_err() { echo -e " ${RD}[err]${CL} $1" >&2; }
+
+header_info() {
+  if [[ -e /dev/tty ]]; then
+    clear >/dev/tty 2>/dev/null || true
+    cat >/dev/tty <<'EOF'
+
+  ███████╗ ██████╗ ██╗   ██╗███╗   ██╗██████╗ ██████╗  ██████╗  ██████╗██╗  ██╗
+  ██╔════╝██╔═══██╗██║   ██║████╗  ██║██╔══██╗██╔══██╗██╔═══██╗██╔════╝██║ ██╔╝
+  ███████╗██║   ██║██║   ██║██╔██╗ ██║██║  ██║██║  ██║██║   ██║██║     █████╔╝
+  ╚════██║██║   ██║██║   ██║██║╚██╗██║██║  ██║██║  ██║██║   ██║██║     ██╔═██╗
+  ███████║╚██████╔╝╚██████╔╝██║ ╚████║██████╔╝██████╔╝╚██████╔╝╚██████╗██║  ██╗
+  ╚══════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═══╝╚═════╝ ╚═════╝  ╚═════╝  ╚═════╝╚═╝  ╚═╝
+
+  Your music. Your server. Your way.
+
+EOF
+  fi
+}
 
 need_root() {
   if [[ "${EUID}" -ne 0 ]]; then
@@ -28,18 +62,71 @@ detect_os() {
   fi
 }
 
-install_docker() {
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+ensure_whiptail() {
+  if command -v whiptail >/dev/null 2>&1; then
     return
   fi
-  echo "Installing Docker Engine + Compose plugin…"
+  msg_info "Installing whiptail"
+  case "$(detect_os)" in
+    ubuntu|debian)
+      apt-get update -y
+      apt-get install -y whiptail ca-certificates curl
+      ;;
+    fedora|rhel|centos)
+      dnf install -y newt ca-certificates curl || yum install -y newt ca-certificates curl
+      ;;
+    arch)
+      pacman -Sy --noconfirm libnewt curl
+      ;;
+    *)
+      msg_err "Install whiptail (newt), then re-run."
+      exit 1
+      ;;
+  esac
+  msg_ok "whiptail ready"
+}
+
+ui_ok() {
+  [[ -e /dev/tty && "${SD_UNATTENDED:-0}" != "1" ]] && command -v whiptail >/dev/null 2>&1
+}
+
+# Dialogs talk to the real terminal so curl|bash still works.
+ui_yesno() {
+  whiptail --backtitle "${BACKTITLE}" --title "$1" --yesno "$2" "${3:-12}" 72 </dev/tty
+}
+
+ui_msg() {
+  whiptail --backtitle "${BACKTITLE}" --title "$1" --msgbox "$2" "${3:-12}" 72 </dev/tty
+}
+
+ui_input() {
+  local out
+  out=$(whiptail --backtitle "${BACKTITLE}" --title "$1" --inputbox "$2" 12 72 "$3" 3>&1 1>&2 2>&3 </dev/tty) || return 1
+  printf '%s' "${out}"
+}
+
+ui_pass() {
+  local out
+  out=$(whiptail --backtitle "${BACKTITLE}" --title "$1" --passwordbox "$2" 12 72 3>&1 1>&2 2>&3 </dev/tty) || return 1
+  printf '%s' "${out}"
+}
+
+install_docker() {
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    systemctl enable --now docker 2>/dev/null || true
+    msg_ok "Docker already installed"
+    return
+  fi
+  msg_info "Installing Docker Engine + Compose plugin"
   local os
   os="$(detect_os)"
   case "$os" in
     ubuntu|debian)
       apt-get update -y
       apt-get install -y ca-certificates curl
-      curl -fsSL https://get.docker.com | sh
+      curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+      sh /tmp/get-docker.sh
+      rm -f /tmp/get-docker.sh
       ;;
     fedora|rhel|centos)
       dnf install -y docker docker-compose-plugin || yum install -y docker
@@ -50,13 +137,176 @@ install_docker() {
       systemctl enable --now docker
       ;;
     *)
-      echo "Install Docker Desktop / Engine with the Compose plugin, then re-run." >&2
+      msg_err "Install Docker Engine with the Compose plugin, then re-run."
       exit 1
       ;;
   esac
+  systemctl enable --now docker 2>/dev/null || true
+  if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+    msg_err "Docker Engine or the Compose plugin is missing after install."
+    exit 1
+  fi
+  msg_ok "Docker installed"
 }
 
-rand() { openssl rand -base64 32 | tr -d '\n/=+' | head -c 48; }
+rand() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 36 | tr -d '\n/=+' | head -c 48
+  else
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 48
+  fi
+}
+
+default_public_url() {
+  if [[ -n "${SD_PUBLIC_URL:-}" ]]; then
+    echo "${SD_PUBLIC_URL}"
+    return
+  fi
+  local ip
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if [[ -n "${ip}" ]]; then
+    echo "http://${ip}:8080"
+  else
+    echo "http://127.0.0.1:8080"
+  fi
+}
+
+# Filled by collect_config
+CFG_PUBLIC=""
+CFG_LIBHOST=""
+CFG_DC="false"
+CFG_DCID=""
+CFG_DCSEC=""
+CFG_ADMIN=""
+CFG_BOTTOK=""
+CFG_CFTOK=""
+
+collect_config() {
+  CFG_PUBLIC="$(default_public_url)"
+  CFG_LIBHOST="${SD_LIBRARY_HOST:-${PREFIX}/libraries}"
+  CFG_DCID="${SD_DISCORD_CLIENT_ID:-}"
+  CFG_DCSEC="${SD_DISCORD_CLIENT_SECRET:-}"
+  CFG_ADMIN="${SD_ADMIN_DISCORD_ID:-}"
+  CFG_BOTTOK="${SD_DISCORD_BOT_TOKEN:-}"
+  CFG_CFTOK="${CLOUDFLARE_TUNNEL_TOKEN:-}"
+  if [[ "${SD_DISCORD_ENABLED:-}" == "true" || -n "${CFG_DCID}" ]]; then
+    CFG_DC="true"
+  else
+    CFG_DC="false"
+  fi
+
+  if ! ui_ok; then
+    msg_info "No TUI (set SD_UNATTENDED=1 or no /dev/tty). Using defaults / env."
+    return
+  fi
+
+  ui_msg "SoundDock" "Use Tab and Enter to move. Use Spacebar on checklists.\n\nThis installs Docker if needed, writes ${PREFIX}, and starts SoundDock." 11 || true
+
+  if ! ui_yesno "Install SoundDock" "Install SoundDock to ${PREFIX}?\n\nImage: ${IMAGE}"; then
+    echo "Cancelled."
+    exit 0
+  fi
+
+  CFG_PUBLIC="$(ui_input "Public URL" "URL you will open in a browser (no trailing slash)." "${CFG_PUBLIC}")" || exit 0
+  CFG_PUBLIC="${CFG_PUBLIC:-$(default_public_url)}"
+  CFG_LIBHOST="$(ui_input "Library folder" "Host folder mounted read-only at /libraries inside the container." "${CFG_LIBHOST}")" || exit 0
+  CFG_LIBHOST="${CFG_LIBHOST:-${PREFIX}/libraries}"
+
+  if ui_yesno "Discord sign-in" "Enable Discord sign-in (including Discord admin)?\n\nSelect No to create a local administrator in the browser." 13; then
+    CFG_DC="true"
+    ui_msg "Discord app" "Create an application at:\nhttps://discord.com/developers/applications\n\nOAuth2 Redirects:\n${CFG_PUBLIC}/api/v1/auth/discord/callback\n\nScopes: identify" 16 || true
+    CFG_DCID="$(ui_input "Discord client ID" "Application client ID." "${CFG_DCID}")" || exit 0
+    CFG_DCSEC="$(ui_pass "Discord client secret" "Application client secret.")" || exit 0
+    CFG_ADMIN="$(ui_input "Admin Discord ID" "Your Discord user snowflake (optional, blank for none). Comma-separated for several." "${CFG_ADMIN}")" || exit 0
+    if [[ -z "${CFG_DCID}" || -z "${CFG_DCSEC}" ]]; then
+      ui_msg "Discord" "Client ID and secret are required when Discord sign-in is enabled." 10 || true
+      exit 1
+    fi
+    if ui_yesno "Discord bot" "Enable the native Discord voice worker now?\n\nIt plays your SoundDock library only. No YouTube or Spotify." 13; then
+      CFG_BOTTOK="$(ui_pass "Bot token" "Bot token (leave empty to set later in Admin).")" || exit 0
+    fi
+  else
+    CFG_DC="false"
+    CFG_DCID=""
+    CFG_DCSEC=""
+    CFG_ADMIN=""
+    CFG_BOTTOK=""
+  fi
+
+  if ui_yesno "Cloudflare Tunnel" "Add a Cloudflare Tunnel token now?\n\nSelect No to skip (you can publish later)." 12; then
+    CFG_CFTOK="$(ui_pass "Tunnel token" "Cloudflare Tunnel token.")" || exit 0
+  fi
+
+  local summary
+  summary="Prefix: ${PREFIX}\nURL: ${CFG_PUBLIC}\nLibraries: ${CFG_LIBHOST}\nDiscord sign-in: ${CFG_DC}\nDiscord bot: $([[ -n "${CFG_BOTTOK}" ]] && echo yes || echo no)\nCloudflare Tunnel: $([[ -n "${CFG_CFTOK}" ]] && echo yes || echo no)"
+  if ! ui_yesno "Ready" "${summary}\n\nStart install?" 16; then
+    echo "Cancelled."
+    exit 0
+  fi
+}
+
+write_cli() {
+  cat > /usr/local/bin/sounddock <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+PREFIX="${PREFIX}"
+COMPOSE="docker compose"
+need_root() {
+  if [[ "\${EUID}" -ne 0 ]]; then
+    echo "Run as root (sudo sounddock ...)." >&2
+    exit 1
+  fi
+}
+need_install() {
+  if [[ ! -f "\${PREFIX}/docker-compose.yml" ]]; then
+    echo "SoundDock is not installed. Run:" >&2
+    echo '  sudo bash -c "$(curl -fsSL ${SCRIPT_SRC})"' >&2
+    exit 1
+  fi
+}
+cd_prefix() { need_install; cd "\${PREFIX}"; }
+cmd="\${1:-}"
+case "\$cmd" in
+  status) cd_prefix; \${COMPOSE} ps ;;
+  logs) cd_prefix; \${COMPOSE} logs -f --tail=200 ;;
+  update)
+    cd_prefix
+    \${COMPOSE} pull
+    \${COMPOSE} up -d
+    ;;
+  uninstall)
+    need_root
+    cd_prefix
+    if [[ "\${2:-}" == "--purge" ]]; then
+      \${COMPOSE} down -v
+      rm -rf "\${PREFIX}"
+      rm -f /usr/local/bin/sounddock
+    else
+      \${COMPOSE} down
+      echo "Data kept in \${PREFIX}/data (pass --purge to delete)."
+    fi
+    ;;
+  doctor)
+    command -v docker
+    docker compose version
+    curl -fsS http://127.0.0.1:8080/healthz || true
+    echo
+    if [[ -f "\${PREFIX}/docker-compose.yml" ]]; then
+      cd "\${PREFIX}" && \${COMPOSE} ps
+    fi
+    ;;
+  install)
+    echo "Re-run the installer:"
+    echo '  sudo bash -c "$(curl -fsSL ${SCRIPT_SRC})"'
+    ;;
+  *)
+    echo "Usage: sudo sounddock status|update|logs|uninstall|doctor"
+    exit 1
+    ;;
+esac
+EOF
+  chmod 0755 /usr/local/bin/sounddock
+}
 
 write_compose() {
   cat > "${PREFIX}/docker-compose.yml" <<EOF
@@ -142,57 +392,52 @@ networks:
 EOF
 }
 
+save_installer() {
+  local src="${BASH_SOURCE[0]:-}"
+  if [[ -n "${src}" && -f "${src}" && "${src}" != *bash ]]; then
+    cp "${src}" "${PREFIX}/install.sh"
+  else
+    curl -fsSL "${SCRIPT_SRC}" -o "${PREFIX}/install.sh" || \
+      curl -fsSL "https://git.aspecracing.com.au/Skila/SoundDock/raw/branch/main/install.sh" -o "${PREFIX}/install.sh" || true
+  fi
+  if [[ -f "${PREFIX}/install.sh" ]]; then
+    chmod 0755 "${PREFIX}/install.sh"
+  fi
+}
+
 cmd_install() {
   need_root
+  header_info
+  ensure_whiptail
+  collect_config
+
   install_docker
   mkdir -p "${PREFIX}/data/cache" "${PREFIX}/data/backups" "${PREFIX}/data/managed" "${PREFIX}/libraries"
+  mkdir -p "${CFG_LIBHOST}"
   write_compose
-
-  echo
-  read -r -p "Public URL [http://127.0.0.1:8080]: " public
-  public="${public:-http://127.0.0.1:8080}"
-  read -r -p "Host library folder [${PREFIX}/libraries]: " libhost
-  libhost="${libhost:-${PREFIX}/libraries}"
-  mkdir -p "${libhost}"
-
-  echo
-  echo "Discord sign-in is optional. If you skip it, you create a local administrator in the web UI."
-  read -r -p "Enable Discord sign-in (including Discord admin)? [Y/n]: " usedc
-  local dcid="" dcsec="" adminid="" dcenabled="true"
-  if [[ "${usedc}" =~ ^[Nn] ]]; then
-    dcenabled="false"
-  else
-    echo "Create an app at https://discord.com/developers/applications"
-    echo "  OAuth2 Redirects:  ${public}/api/v1/auth/discord/callback"
-    echo "  Scopes: identify (guilds / guilds.members.read if you whitelist a server or role later)"
-    read -r -p "Discord client ID: " dcid
-    read -r -p "Discord client secret: " dcsec
-    read -r -p "Admin Discord user ID (snowflake, blank for none): " adminid
-    if [[ -z "${dcid}" || -z "${dcsec}" ]]; then
-      echo "Discord client ID and secret are required when Discord sign-in is enabled." >&2
-      exit 1
-    fi
-  fi
+  write_cli
+  save_installer
 
   local mk pw
   mk="$(rand)"
   pw="$(rand)"
   if [[ -f "${PREFIX}/.env" ]] && grep -q SD_MASTER_KEY "${PREFIX}/.env"; then
-    echo "Keeping existing ${PREFIX}/.env secrets; updating settings."
-    grep -q SD_DISCORD_ENABLED "${PREFIX}/.env" || echo "SD_DISCORD_ENABLED=${dcenabled}" >> "${PREFIX}/.env"
-    grep -q SD_DISCORD_CLIENT_ID "${PREFIX}/.env" || echo "SD_DISCORD_CLIENT_ID=${dcid}" >> "${PREFIX}/.env"
+    msg_info "Keeping existing ${PREFIX}/.env secrets"
+    grep -q '^SD_IMAGE=' "${PREFIX}/.env" || echo "SD_IMAGE=${IMAGE}" >> "${PREFIX}/.env"
+    grep -q '^SD_DISCORD_ENABLED=' "${PREFIX}/.env" || echo "SD_DISCORD_ENABLED=${CFG_DC}" >> "${PREFIX}/.env"
     sed -i.bak \
-      -e "s|^SD_PUBLIC_URL=.*|SD_PUBLIC_URL=${public}|" \
-      -e "s|^SD_DISCORD_ENABLED=.*|SD_DISCORD_ENABLED=${dcenabled}|" \
-      -e "s|^SD_DISCORD_CLIENT_ID=.*|SD_DISCORD_CLIENT_ID=${dcid}|" \
-      -e "s|^SD_DISCORD_CLIENT_SECRET=.*|SD_DISCORD_CLIENT_SECRET=${dcsec}|" \
-      -e "s|^SD_ADMIN_DISCORD_ID=.*|SD_ADMIN_DISCORD_ID=${adminid}|" \
+      -e "s|^SD_PUBLIC_URL=.*|SD_PUBLIC_URL=${CFG_PUBLIC}|" \
+      -e "s|^SD_IMAGE=.*|SD_IMAGE=${IMAGE}|" \
+      -e "s|^SD_DISCORD_ENABLED=.*|SD_DISCORD_ENABLED=${CFG_DC}|" \
+      -e "s|^SD_DISCORD_CLIENT_ID=.*|SD_DISCORD_CLIENT_ID=${CFG_DCID}|" \
+      -e "s|^SD_DISCORD_CLIENT_SECRET=.*|SD_DISCORD_CLIENT_SECRET=${CFG_DCSEC}|" \
+      -e "s|^SD_ADMIN_DISCORD_ID=.*|SD_ADMIN_DISCORD_ID=${CFG_ADMIN}|" \
       "${PREFIX}/.env" || true
   else
     cat > "${PREFIX}/.env" <<EOF
 SD_ROLE=all
 SD_HTTP_ADDR=:8080
-SD_PUBLIC_URL=${public}
+SD_PUBLIC_URL=${CFG_PUBLIC}
 SD_INSTANCE_NAME=SoundDock
 SD_DATABASE_URL=postgres://sounddock:${pw}@postgres:5432/sounddock?sslmode=disable
 SD_MASTER_KEY=${mk}
@@ -201,10 +446,10 @@ SD_CACHE_DIR=/data/cache
 SD_BACKUP_DIR=/data/backups
 SD_MANAGED_DIR=/data/managed
 SD_COOKIE_SECURE=false
-SD_DISCORD_ENABLED=${dcenabled}
-SD_DISCORD_CLIENT_ID=${dcid}
-SD_DISCORD_CLIENT_SECRET=${dcsec}
-SD_ADMIN_DISCORD_ID=${adminid}
+SD_DISCORD_ENABLED=${CFG_DC}
+SD_DISCORD_CLIENT_ID=${CFG_DCID}
+SD_DISCORD_CLIENT_SECRET=${CFG_DCSEC}
+SD_ADMIN_DISCORD_ID=${CFG_ADMIN}
 SD_IMAGE=${IMAGE}
 SD_PORT=8080
 POSTGRES_USER=sounddock
@@ -214,46 +459,50 @@ EOF
     chmod 0600 "${PREFIX}/.env"
   fi
 
-  local profiles=()
-  echo
-  if [[ "${dcenabled}" == "true" ]]; then
-    read -r -p "Enable native Discord bot worker now? [y/N]: " dcbot
-    if [[ "${dcbot}" =~ ^[Yy] ]]; then
-      read -r -p "Discord bot token (optional, can set later): " bottok
-      if [[ -n "${bottok}" ]]; then
-        echo "SD_DISCORD_BOT_TOKEN=${bottok}" >> "${PREFIX}/.env"
-      fi
-      profiles+=("discord")
-    fi
+  if [[ -n "${CFG_BOTTOK}" ]]; then
+    grep -q '^SD_DISCORD_BOT_TOKEN=' "${PREFIX}/.env" && \
+      sed -i.bak -e "s|^SD_DISCORD_BOT_TOKEN=.*|SD_DISCORD_BOT_TOKEN=${CFG_BOTTOK}|" "${PREFIX}/.env" || \
+      echo "SD_DISCORD_BOT_TOKEN=${CFG_BOTTOK}" >> "${PREFIX}/.env"
   fi
-  read -r -p "Cloudflare Tunnel token (blank to skip): " cftok
-  if [[ -n "${cftok}" ]]; then
-    echo "CLOUDFLARE_TUNNEL_TOKEN=${cftok}" >> "${PREFIX}/.env"
-    profiles+=("cloudflare")
+  if [[ -n "${CFG_CFTOK}" ]]; then
+    grep -q '^CLOUDFLARE_TUNNEL_TOKEN=' "${PREFIX}/.env" && \
+      sed -i.bak -e "s|^CLOUDFLARE_TUNNEL_TOKEN=.*|CLOUDFLARE_TUNNEL_TOKEN=${CFG_CFTOK}|" "${PREFIX}/.env" || \
+      echo "CLOUDFLARE_TUNNEL_TOKEN=${CFG_CFTOK}" >> "${PREFIX}/.env"
   fi
 
   local pflag=()
-  for p in "${profiles[@]+"${profiles[@]}"}"; do
-    pflag+=(--profile "$p")
-  done
+  if grep -q '^SD_DISCORD_BOT_TOKEN=.\+' "${PREFIX}/.env" 2>/dev/null; then
+    pflag+=(--profile discord)
+  fi
+  if grep -q '^CLOUDFLARE_TUNNEL_TOKEN=.\+' "${PREFIX}/.env" 2>/dev/null; then
+    pflag+=(--profile cloudflare)
+  fi
 
   cd "${PREFIX}"
-  echo "Pulling ${IMAGE}..."
-  SD_LIBRARY_HOST="${libhost}" SD_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]}" pull
-  SD_LIBRARY_HOST="${libhost}" SD_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]}" up -d
-  echo
-  echo "SoundDock is starting."
-  echo "  URL: ${public}"
-  if [[ "${dcenabled}" == "true" ]]; then
-    echo "  Sign in with Discord. Admin Discord ID: ${adminid:-none}"
+  msg_info "Pulling ${IMAGE}"
+  SD_LIBRARY_HOST="${CFG_LIBHOST}" SD_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]+"${pflag[@]}"}" pull
+  SD_LIBRARY_HOST="${CFG_LIBHOST}" SD_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]+"${pflag[@]}"}" up -d
+  msg_ok "SoundDock is starting"
+
+  local done
+  done="URL: ${CFG_PUBLIC}\nData: ${PREFIX}\n"
+  if [[ "${CFG_DC}" == "true" ]]; then
+    done+="Discord sign-in is on.\n"
   else
-    echo "  Discord is off. Open the URL and create the first administrator."
+    done+="Discord is off. Create the first administrator in the browser.\n"
   fi
-  echo "  Data: ${PREFIX}/data"
-  echo "  Control: sudo $0 status|update|logs|uninstall|doctor"
+  done+="\nThen:\n  sudo sounddock status\n  sudo sounddock logs"
+  if ui_ok; then
+    ui_msg "Installed" "${done}" 16 || true
+  fi
+  echo
+  echo -e " ${BOLD}${BL}SoundDock is starting.${CL}"
+  echo "  URL:  ${CFG_PUBLIC}"
+  echo "  Data: ${PREFIX}"
+  echo "  sudo sounddock status | update | logs | doctor | uninstall"
 }
 
-cmd_status() { cd "${PREFIX}" && ${COMPOSE} ps; }
+cmd_status() { [[ -f "${PREFIX}/docker-compose.yml" ]] || { echo "Not installed." >&2; exit 1; }; cd "${PREFIX}" && ${COMPOSE} ps; }
 cmd_logs() { cd "${PREFIX}" && ${COMPOSE} logs -f --tail=200; }
 cmd_update() {
   cd "${PREFIX}"
@@ -267,6 +516,7 @@ cmd_uninstall() {
   if [[ "${1:-}" == "--purge" ]]; then
     ${COMPOSE} down -v
     rm -rf "${PREFIX}"
+    rm -f /usr/local/bin/sounddock
   else
     echo "Data kept in ${PREFIX}/data (pass --purge to delete)."
   fi
@@ -275,6 +525,10 @@ cmd_doctor() {
   command -v docker
   docker compose version
   curl -fsS http://127.0.0.1:8080/healthz || true
+  echo
+  if [[ -f "${PREFIX}/docker-compose.yml" ]]; then
+    cd "${PREFIX}" && ${COMPOSE} ps
+  fi
 }
 
 case "$CMD" in

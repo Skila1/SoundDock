@@ -5,14 +5,23 @@
 SoundDock is an open-source, self-hosted music platform for organising, streaming and integrating your own music library.
 
 ```bash
-export SD_IMAGE=ghcr.io/skila1/sounddock:latest
-curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh | sudo bash
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
 ```
 
-That installs Docker if needed, writes `/opt/sounddock`, pulls the image, and starts SoundDock. Discord sign-in is optional. If you skip it, create the first administrator in the browser.
+A whiptail installer (same idea as Proxmox helper scripts) walks through public URL, Discord, the bot, and Cloudflare Tunnel. Docker is installed if missing. Then:
 
 ```bash
-sudo bash install.sh status|update|logs|uninstall|doctor
+sudo sounddock status
+sudo sounddock update
+sudo sounddock logs
+sudo sounddock doctor
+sudo sounddock uninstall
+```
+
+Unattended (no TUI):
+
+```bash
+sudo env SD_UNATTENDED=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
 ```
 
 You bring the files. SoundDock does not provide catalogues, rip YouTube or Spotify, or bypass DRM.

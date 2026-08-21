@@ -1,27 +1,29 @@
 # Installation
 
-The installer asks whether to use Discord. If you skip Discord, open the web UI and create the first administrator with a username and password.
-
-If Discord is on, `SD_ADMIN_DISCORD_ID` in `.env` is granted Administrator on every start. Leave it empty if you do not want that.
-
-## One-click (recommended)
+One command. A whiptail TUI (Proxmox helper style) collects options, installs Docker if needed, writes `/opt/sounddock`, pulls the image, and starts SoundDock. Do not `apt install docker`.
 
 ```bash
-export SD_IMAGE=ghcr.io/skila1/sounddock:latest
-curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh | sudo bash
+sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
 ```
 
-Installs Docker if needed, writes `/opt/sounddock`, pulls the published image, and starts Compose. You will be asked for:
-
-- Public URL
-- Whether to enable Discord sign-in
-- If yes: Discord OAuth client ID and secret (redirect `{PUBLIC_URL}/api/v1/auth/discord/callback`) and optional admin Discord user ID
+Use Tab / Enter. Spacebar on any checklist. Cancel aborts.
 
 ```bash
-sudo bash install.sh status|update|logs|uninstall|doctor
+sudo sounddock status
+sudo sounddock update
+sudo sounddock logs
+sudo sounddock doctor
+sudo sounddock uninstall          # keeps /opt/sounddock/data
+sudo sounddock uninstall --purge
 ```
 
-Uninstall keeps `/opt/sounddock/data` unless `--purge`.
+Image: `ghcr.io/skila1/sounddock:latest`. Unattended:
+
+```bash
+sudo env SD_UNATTENDED=1 SD_PUBLIC_URL=https://music.example.com bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
+```
+
+Discord OAuth redirect if you enable it in the TUI: `{PUBLIC_URL}/api/v1/auth/discord/callback`.
 
 ## Development
 
