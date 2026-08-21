@@ -11,6 +11,27 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["logo.png", "favicon.svg"],
+      workbox: {
+        navigateFallback: "index.html",
+        navigateFallbackDenylist: [
+          /^\/api\//,
+          /^\/rest\//,
+          /^\/healthz/,
+          /^\/readyz/,
+          /^\/metrics/,
+          /^\/openapi/
+        ],
+        runtimeCaching: [
+          {
+            urlPattern: ({ url }) =>
+              url.pathname.startsWith("/api/") ||
+              url.pathname.startsWith("/rest/") ||
+              url.pathname === "/healthz" ||
+              url.pathname === "/readyz",
+            handler: "NetworkOnly"
+          }
+        ]
+      },
       manifest: {
         name: "SoundDock",
         short_name: "SoundDock",

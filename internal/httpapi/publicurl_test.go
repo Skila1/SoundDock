@@ -3,7 +3,9 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/sounddock/sounddock/internal/config"
 )
@@ -29,5 +31,18 @@ func TestAbsURLCFRay(t *testing.T) {
 	r.Header.Set("CF-Ray", "abc")
 	if got := s.absURL(r); got != "https://bot.nxsrp.com" {
 		t.Fatalf("got %s", got)
+	}
+}
+
+func TestSPADoesNotServeAPI(t *testing.T) {
+	s := &Server{Web: fstest.MapFS{"index.html": {Data: []byte("<html>app</html>")}}}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/discord/callback?code=x&state=y", nil)
+	s.spa().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("code %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "<html>") {
+		t.Fatal("served spa html for api callback")
 	}
 }

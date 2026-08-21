@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,59 @@ const errCopy: Record<string, string> = {
   account: "Could not create your account.",
   session: "Could not start a session."
 };
+
+export function isDiscordOAuthCallbackPath() {
+  if (typeof window === "undefined") return false;
+  const p = window.location.pathname;
+  if (p === "/api/v1/auth/discord/callback") return true;
+  if (p === "/api/v1/auth/discord") {
+    const q = new URLSearchParams(window.location.search);
+    return q.has("code") || q.has("error");
+  }
+  return false;
+}
+
+/** If the PWA served the SPA on the OAuth callback URL, finish login via fetch (not a document navigation). */
+export function DiscordCallbackCatch() {
+  const [msg, setMsg] = useState("Completing Discord sign-in...");
+  const started = useRef(false);
+  useEffect(() => {
+    if (started.current) return;
+    started.current = true;
+    const target = window.location.pathname + window.location.search;
+    (async () => {
+      try {
+        const res = await fetch(target, { credentials: "include", redirect: "follow" });
+        if (res.redirected) {
+          const dest = new URL(res.url);
+          window.location.replace(dest.pathname + dest.search || "/");
+          return;
+        }
+        const ct = res.headers.get("content-type") || "";
+        if (ct.includes("text/html")) {
+          const key = "sd_oauth_sw_bypass";
+          if (sessionStorage.getItem(key) !== target && "serviceWorker" in navigator) {
+            sessionStorage.setItem(key, target);
+            const regs = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(regs.map((r) => r.unregister()));
+            window.location.replace(target);
+            return;
+          }
+          setMsg("Discord sign-in did not complete. Try Continue with Discord again.");
+          return;
+        }
+        window.location.replace("/");
+      } catch {
+        setMsg("Could not complete Discord sign-in. Try again.");
+      }
+    })();
+  }, []);
+  return (
+    <div className="flex min-h-dvh items-center justify-center bg-background p-4">
+      <p className="text-sm text-muted">{msg}</p>
+    </div>
+  );
+}
 
 export function LoginPage({
   onDone,

@@ -77,6 +77,7 @@ func (s *Server) Router() http.Handler {
 		ExposedHeaders:   []string{"Upload-Offset", "Location"},
 		AllowCredentials: true,
 	}))
+	r.Use(noStoreAPI)
 
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
 	r.Get("/readyz", s.readyz)
@@ -231,7 +232,7 @@ func (s *Server) Router() http.Handler {
 	r.Get("/api/docs", s.docs)
 
 	if s.Web != nil {
-		r.Handle("/*", s.spa())
+		r.NotFound(s.spa().ServeHTTP)
 	}
 	return r
 }
@@ -322,8 +323,22 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func noStoreAPI(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/rest/") {
+			w.Header().Set("Cache-Control", "private, no-store, no-cache, must-revalidate")
+			w.Header().Set("CDN-Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (s *Server) spa() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/rest/") {
+			writeErr(w, http.StatusNotFound, "not_found", "unknown api route")
+			return
+		}
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p == "" {
 			p = "index.html"

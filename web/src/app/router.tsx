@@ -4,7 +4,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { api } from "@/lib/api";
 import { AppShell } from "@/app/layout/AppShell";
 import { BootScreen, ForbiddenPage, NotFoundPage } from "@/app/errors";
-import { LoginPage, SetupPage } from "@/features/auth/AuthPages";
+import { DiscordCallbackCatch, isDiscordOAuthCallbackPath, LoginPage, SetupPage } from "@/features/auth/AuthPages";
 import { HomePage } from "@/features/home/HomePage";
 import { Skeleton } from "@/components/ui/misc";
 import type { User } from "@/types/api";
@@ -64,6 +64,9 @@ export function AppRouter() {
     retry: false
   });
 
+  if (isDiscordOAuthCallbackPath()) {
+    return <DiscordCallbackCatch />;
+  }
   if (setup.isLoading || (me.isLoading && !me.isError)) return <BootScreen />;
   if (setup.data?.needed) return <SetupPage discordConfigured={!!setup.data?.discord_configured} onDone={() => { setup.refetch(); me.refetch(); }} />;
   if (me.isError || !me.data) {
