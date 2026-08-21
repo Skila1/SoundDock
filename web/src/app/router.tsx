@@ -4,7 +4,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { api } from "@/lib/api";
 import { AppShell } from "@/app/layout/AppShell";
 import { BootScreen, ForbiddenPage, NotFoundPage } from "@/app/errors";
-import { LoginPage } from "@/features/auth/AuthPages";
+import { LoginPage, SetupPage } from "@/features/auth/AuthPages";
 import { HomePage } from "@/features/home/HomePage";
 import { Skeleton } from "@/components/ui/misc";
 import type { User } from "@/types/api";
@@ -54,7 +54,10 @@ function Fallback() {
 }
 
 export function AppRouter() {
-  const setup = useQuery({ queryKey: ["setup"], queryFn: () => api.get<{ needed: boolean; discord_only?: boolean }>("/api/v1/setup/status") });
+  const setup = useQuery({
+    queryKey: ["setup"],
+    queryFn: () => api.get<{ needed: boolean; discord_enabled?: boolean; discord_configured?: boolean }>("/api/v1/setup/status")
+  });
   const me = useQuery({
     queryKey: ["me"],
     queryFn: () => api.get<User>("/api/v1/me"),
@@ -62,7 +65,10 @@ export function AppRouter() {
   });
 
   if (setup.isLoading || (me.isLoading && !me.isError)) return <BootScreen />;
-  if (me.isError || !me.data) return <LoginPage onDone={() => me.refetch()} />;
+  if (setup.data?.needed) return <SetupPage onDone={() => { setup.refetch(); me.refetch(); }} />;
+  if (me.isError || !me.data) {
+    return <LoginPage discordConfigured={!!setup.data?.discord_configured} onDone={() => me.refetch()} />;
+  }
 
   const user = me.data;
   return (

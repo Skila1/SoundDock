@@ -10,9 +10,9 @@ SoundDock is designed to be internet-exposable. Please report vulnerabilities pr
 
 ## Hardening checklist
 
-- Set a long random `SOUNDDOCK_MASTER_KEY`
-- Use HTTPS (`SOUNDDOCK_PUBLIC_URL`, `SOUNDDOCK_COOKIE_SECURE=true`)
-- Restrict `SOUNDDOCK_TRUSTED_PROXIES`
+- Set a long random `SD_MASTER_KEY`
+- Use HTTPS (`SD_PUBLIC_URL`, `SD_COOKIE_SECURE=true`)
+- Restrict `SD_TRUSTED_PROXIES`
 - Keep `/metrics` disabled or token-protected
 - Run containers as non-root (default image)
 - Backups include secrets wrapped by the master key. Store the key offline.

@@ -6,8 +6,8 @@
 #
 set -euo pipefail
 
-PREFIX="${SOUNDDOCK_PREFIX:-/opt/sounddock}"
-IMAGE="${SOUNDDOCK_IMAGE:-ghcr.io/sounddock/sounddock:latest}"
+PREFIX="${SD_PREFIX:-/opt/sounddock}"
+IMAGE="${SD_IMAGE:-ghcr.io/sounddock/sounddock:latest}"
 COMPOSE="docker compose"
 CMD="${1:-install}"
 
@@ -87,13 +87,13 @@ services:
         condition: service_healthy
     env_file: [.env]
     environment:
-      SOUNDDOCK_ROLE: all
-      SOUNDDOCK_DATABASE_URL: postgres://\${POSTGRES_USER:-sounddock}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-sounddock}?sslmode=disable
+      SD_ROLE: all
+      SD_DATABASE_URL: postgres://\${POSTGRES_USER:-sounddock}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-sounddock}?sslmode=disable
     volumes:
       - sounddock_data:/data
-      - \${SOUNDDOCK_LIBRARY_HOST:-./libraries}:/libraries:ro
+      - \${SD_LIBRARY_HOST:-./libraries}:/libraries:ro
     ports:
-      - "\${SOUNDDOCK_PORT:-8080}:8080"
+      - "\${SD_PORT:-8080}:8080"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
       interval: 10s
@@ -114,12 +114,12 @@ services:
         condition: service_healthy
     env_file: [.env]
     environment:
-      SOUNDDOCK_ROLE: discord
-      SOUNDDOCK_DATABASE_URL: postgres://\${POSTGRES_USER:-sounddock}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-sounddock}?sslmode=disable
-      SOUNDDOCK_HTTP_ADDR: ":8081"
+      SD_ROLE: discord
+      SD_DATABASE_URL: postgres://\${POSTGRES_USER:-sounddock}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-sounddock}?sslmode=disable
+      SD_HTTP_ADDR: ":8081"
     volumes:
       - sounddock_data:/data
-      - \${SOUNDDOCK_LIBRARY_HOST:-./libraries}:/libraries:ro
+      - \${SD_LIBRARY_HOST:-./libraries}:/libraries:ro
     networks: [sounddock]
 
   cloudflared:
@@ -149,56 +149,64 @@ cmd_install() {
   write_compose
 
   echo
-  echo "SoundDock uses Discord sign-in only."
-  echo "Create an app at https://discord.com/developers/applications"
-  echo "  OAuth2 → Redirects:  <your-public-url>/api/v1/auth/discord/callback"
-  echo "  Scopes: identify"
-  echo
   read -r -p "Public URL [http://127.0.0.1:8080]: " public
   public="${public:-http://127.0.0.1:8080}"
-  read -r -p "Discord client ID: " dcid
-  read -r -p "Discord client secret: " dcsec
-  read -r -p "Admin Discord user ID (snowflake): " adminid
   read -r -p "Host library folder [${PREFIX}/libraries]: " libhost
   libhost="${libhost:-${PREFIX}/libraries}"
   mkdir -p "${libhost}"
 
-  if [[ -z "${dcid}" || -z "${dcsec}" || -z "${adminid}" ]]; then
-    echo "Discord client ID, secret, and admin user ID are required." >&2
-    exit 1
+  echo
+  echo "Discord sign-in is optional. If you skip it, you create a local administrator in the web UI."
+  read -r -p "Enable Discord sign-in (including Discord admin)? [Y/n]: " usedc
+  local dcid="" dcsec="" adminid="" dcenabled="true"
+  if [[ "${usedc}" =~ ^[Nn] ]]; then
+    dcenabled="false"
+  else
+    echo "Create an app at https://discord.com/developers/applications"
+    echo "  OAuth2 Redirects:  ${public}/api/v1/auth/discord/callback"
+    echo "  Scopes: identify (guilds / guilds.members.read if you whitelist a server or role later)"
+    read -r -p "Discord client ID: " dcid
+    read -r -p "Discord client secret: " dcsec
+    read -r -p "Admin Discord user ID (snowflake, blank for none): " adminid
+    if [[ -z "${dcid}" || -z "${dcsec}" ]]; then
+      echo "Discord client ID and secret are required when Discord sign-in is enabled." >&2
+      exit 1
+    fi
   fi
 
   local mk pw
   mk="$(rand)"
   pw="$(rand)"
-  if [[ -f "${PREFIX}/.env" ]] && grep -q SOUNDDOCK_MASTER_KEY "${PREFIX}/.env"; then
-    echo "Keeping existing ${PREFIX}/.env secrets; updating Discord settings."
-    grep -q SOUNDDOCK_DISCORD_CLIENT_ID "${PREFIX}/.env" || echo "SOUNDDOCK_DISCORD_CLIENT_ID=${dcid}" >> "${PREFIX}/.env"
-    # rewrite discord keys
+  if [[ -f "${PREFIX}/.env" ]] && grep -q SD_MASTER_KEY "${PREFIX}/.env"; then
+    echo "Keeping existing ${PREFIX}/.env secrets; updating settings."
+    grep -q SD_DISCORD_ENABLED "${PREFIX}/.env" || echo "SD_DISCORD_ENABLED=${dcenabled}" >> "${PREFIX}/.env"
+    grep -q SD_DISCORD_CLIENT_ID "${PREFIX}/.env" || echo "SD_DISCORD_CLIENT_ID=${dcid}" >> "${PREFIX}/.env"
     sed -i.bak \
-      -e "s|^SOUNDDOCK_PUBLIC_URL=.*|SOUNDDOCK_PUBLIC_URL=${public}|" \
-      -e "s|^SOUNDDOCK_DISCORD_CLIENT_ID=.*|SOUNDDOCK_DISCORD_CLIENT_ID=${dcid}|" \
-      -e "s|^SOUNDDOCK_DISCORD_CLIENT_SECRET=.*|SOUNDDOCK_DISCORD_CLIENT_SECRET=${dcsec}|" \
-      -e "s|^SOUNDDOCK_ADMIN_DISCORD_ID=.*|SOUNDDOCK_ADMIN_DISCORD_ID=${adminid}|" \
+      -e "s|^SD_PUBLIC_URL=.*|SD_PUBLIC_URL=${public}|" \
+      -e "s|^SD_DISCORD_ENABLED=.*|SD_DISCORD_ENABLED=${dcenabled}|" \
+      -e "s|^SD_DISCORD_CLIENT_ID=.*|SD_DISCORD_CLIENT_ID=${dcid}|" \
+      -e "s|^SD_DISCORD_CLIENT_SECRET=.*|SD_DISCORD_CLIENT_SECRET=${dcsec}|" \
+      -e "s|^SD_ADMIN_DISCORD_ID=.*|SD_ADMIN_DISCORD_ID=${adminid}|" \
       "${PREFIX}/.env" || true
   else
     cat > "${PREFIX}/.env" <<EOF
-SOUNDDOCK_ROLE=all
-SOUNDDOCK_HTTP_ADDR=:8080
-SOUNDDOCK_PUBLIC_URL=${public}
-SOUNDDOCK_INSTANCE_NAME=SoundDock
-SOUNDDOCK_DATABASE_URL=postgres://sounddock:${pw}@postgres:5432/sounddock?sslmode=disable
-SOUNDDOCK_MASTER_KEY=${mk}
-SOUNDDOCK_DATA_DIR=/data
-SOUNDDOCK_CACHE_DIR=/data/cache
-SOUNDDOCK_BACKUP_DIR=/data/backups
-SOUNDDOCK_MANAGED_DIR=/data/managed
-SOUNDDOCK_COOKIE_SECURE=false
-SOUNDDOCK_DISCORD_CLIENT_ID=${dcid}
-SOUNDDOCK_DISCORD_CLIENT_SECRET=${dcsec}
-SOUNDDOCK_ADMIN_DISCORD_ID=${adminid}
-SOUNDDOCK_IMAGE=${IMAGE}
-SOUNDDOCK_PORT=8080
+SD_ROLE=all
+SD_HTTP_ADDR=:8080
+SD_PUBLIC_URL=${public}
+SD_INSTANCE_NAME=SoundDock
+SD_DATABASE_URL=postgres://sounddock:${pw}@postgres:5432/sounddock?sslmode=disable
+SD_MASTER_KEY=${mk}
+SD_DATA_DIR=/data
+SD_CACHE_DIR=/data/cache
+SD_BACKUP_DIR=/data/backups
+SD_MANAGED_DIR=/data/managed
+SD_COOKIE_SECURE=false
+SD_DISCORD_ENABLED=${dcenabled}
+SD_DISCORD_CLIENT_ID=${dcid}
+SD_DISCORD_CLIENT_SECRET=${dcsec}
+SD_ADMIN_DISCORD_ID=${adminid}
+SD_IMAGE=${IMAGE}
+SD_PORT=8080
 POSTGRES_USER=sounddock
 POSTGRES_PASSWORD=${pw}
 POSTGRES_DB=sounddock
@@ -208,13 +216,15 @@ EOF
 
   local profiles=()
   echo
-  read -r -p "Enable native Discord bot worker now? [y/N]: " dcbot
-  if [[ "${dcbot}" =~ ^[Yy] ]]; then
-    read -r -p "Discord bot token (optional, can set later): " bottok
-    if [[ -n "${bottok}" ]]; then
-      echo "SOUNDDOCK_DISCORD_BOT_TOKEN=${bottok}" >> "${PREFIX}/.env"
+  if [[ "${dcenabled}" == "true" ]]; then
+    read -r -p "Enable native Discord bot worker now? [y/N]: " dcbot
+    if [[ "${dcbot}" =~ ^[Yy] ]]; then
+      read -r -p "Discord bot token (optional, can set later): " bottok
+      if [[ -n "${bottok}" ]]; then
+        echo "SD_DISCORD_BOT_TOKEN=${bottok}" >> "${PREFIX}/.env"
+      fi
+      profiles+=("discord")
     fi
-    profiles+=("discord")
   fi
   read -r -p "Cloudflare Tunnel token (blank to skip): " cftok
   if [[ -n "${cftok}" ]]; then
@@ -228,13 +238,17 @@ EOF
   done
 
   cd "${PREFIX}"
-  echo "Pulling ${IMAGE}…"
-  SOUNDDOCK_LIBRARY_HOST="${libhost}" SOUNDDOCK_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]}" pull
-  SOUNDDOCK_LIBRARY_HOST="${libhost}" SOUNDDOCK_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]}" up -d
+  echo "Pulling ${IMAGE}..."
+  SD_LIBRARY_HOST="${libhost}" SD_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]}" pull
+  SD_LIBRARY_HOST="${libhost}" SD_IMAGE="${IMAGE}" ${COMPOSE} "${pflag[@]}" up -d
   echo
   echo "SoundDock is starting."
   echo "  URL: ${public}"
-  echo "  Sign in with Discord. Admin is Discord user ${adminid}."
+  if [[ "${dcenabled}" == "true" ]]; then
+    echo "  Sign in with Discord. Admin Discord ID: ${adminid:-none}"
+  else
+    echo "  Discord is off. Open the URL and create the first administrator."
+  fi
   echo "  Data: ${PREFIX}/data"
   echo "  Control: sudo $0 status|update|logs|uninstall|doctor"
 }

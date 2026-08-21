@@ -8,9 +8,9 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     environment:
-      SOUNDDOCK_COOKIE_SECURE: "false"
-      SOUNDDOCK_PUBLIC_URL: http://localhost:8080
-      SOUNDDOCK_LOG_LEVEL: debug
+      SD_COOKIE_SECURE: "false"
+      SD_PUBLIC_URL: http://localhost:8080
+      SD_LOG_LEVEL: debug
   discord-worker:
     image: sounddock:local
 

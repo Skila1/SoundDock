@@ -74,7 +74,19 @@ func (s *Server) patchMe(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
-	writeErr(w, 400, "discord_only", "Accounts are signed in with Discord; there is no password to change")
+	var body struct {
+		Current string `json:"current"`
+		New     string `json:"new"`
+	}
+	if err := decodeJSON(r, &body); err != nil || body.New == "" {
+		writeErr(w, 400, "invalid", "current and new password required")
+		return
+	}
+	if err := s.Auth.ChangePassword(r.Context(), currentUser(r).ID, body.Current, body.New); err != nil {
+		writeErr(w, 400, "password", "could not change password")
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func (s *Server) mySessions(w http.ResponseWriter, r *http.Request) {

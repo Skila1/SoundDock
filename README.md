@@ -20,7 +20,7 @@ License: **GNU Affero General Public License v3.0 or later**.
 curl -fsSL https://raw.githubusercontent.com/sounddock/sounddock/main/install.sh | sudo bash
 ```
 
-The installer installs Docker if needed, writes `/opt/sounddock/docker-compose.yml` + `.env`, **pulls the published image**, and starts SoundDock. Sign-in is Discord only. Set your Discord application OAuth redirect to `https://your-host/api/v1/auth/discord/callback` and `SOUNDDOCK_ADMIN_DISCORD_ID` to your Discord user snowflake.
+The installer installs Docker if needed, writes `/opt/sounddock/docker-compose.yml` + `.env`, **pulls the published image**, and starts SoundDock. Discord sign-in is optional. If you enable it, set the OAuth redirect to `https://your-host/api/v1/auth/discord/callback` and optionally `SD_ADMIN_DISCORD_ID`. If you skip Discord, create the first administrator in the web UI.
 
 Control: `sudo bash /opt/sounddock/../install.sh` is not needed; keep a copy of `install.sh` or re-download:
 
@@ -32,8 +32,8 @@ sudo bash install.sh status|update|logs|uninstall|doctor
 
 ```bash
 cp .env.example .env
-# set POSTGRES_PASSWORD, SOUNDDOCK_MASTER_KEY, SOUNDDOCK_DISCORD_CLIENT_ID,
-# SOUNDDOCK_DISCORD_CLIENT_SECRET, SOUNDDOCK_ADMIN_DISCORD_ID
+# set POSTGRES_PASSWORD, SD_MASTER_KEY
+# optional Discord: SD_DISCORD_ENABLED=true, SD_DISCORD_CLIENT_ID, SD_DISCORD_CLIENT_SECRET, SD_ADMIN_DISCORD_ID
 docker compose up -d --build
 ```
 
@@ -48,16 +48,17 @@ Cloudflare Tunnel: `docker compose --profile cloudflare up -d`
 # PostgreSQL 16
 docker run -d --name sd-pg -e POSTGRES_PASSWORD=sounddock -e POSTGRES_USER=sounddock -e POSTGRES_DB=sounddock -p 5432:5432 postgres:16-alpine
 
-export SOUNDDOCK_DATABASE_URL='postgres://sounddock:sounddock@127.0.0.1:5432/sounddock?sslmode=disable'
-export SOUNDDOCK_MASTER_KEY='dev-master-key-change-me'
-export SOUNDDOCK_DISCORD_CLIENT_ID=...
-export SOUNDDOCK_DISCORD_CLIENT_SECRET=...
-export SOUNDDOCK_ADMIN_DISCORD_ID=...
+export SD_DATABASE_URL='postgres://sounddock:sounddock@127.0.0.1:5432/sounddock?sslmode=disable'
+export SD_MASTER_KEY='dev-master-key-change-me'
+export SD_DISCORD_ENABLED=true
+export SD_DISCORD_CLIENT_ID=...
+export SD_DISCORD_CLIENT_SECRET=...
+export SD_ADMIN_DISCORD_ID=...
 cd web && npm install && npm run build && cd ..
 go run ./cmd/sounddock all
 ```
 
-Open http://localhost:8080 and sign in with Discord.
+Open http://localhost:8080. With Discord on, sign in with Discord. With Discord off, create the first administrator.
 
 ## Documentation
 

@@ -307,11 +307,11 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"codecs":           []string{"mp3", "flac", "aac", "m4a", "alac", "ogg", "opus", "wav"},
 		"opensubsonic":     s.Cfg.OpenSubsonic,
 		"discord_optional": true,
-		"discord_auth":     true,
+		"discord_auth":     s.Cfg.DiscordLoginEnabled(),
 		"features": map[string]bool{
 			"search": true, "playlists": true, "uploads": true, "remote_import": true,
 			"external_playlists": true, "webhooks": true, "pwa": true, "replaygain": true, "crossfade": true,
-			"discord_login": true,
+			"discord_login": s.Cfg.DiscordLoginEnabled(),
 		},
 	})
 }

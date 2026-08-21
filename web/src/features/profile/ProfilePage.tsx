@@ -14,7 +14,7 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
   const [xf, setXf] = useState(String(user.crossfade_seconds || 0));
   return (
     <div className="max-w-lg">
-      <PageHeader title="Profile" description="Signed in with Discord" />
+      <PageHeader title="Profile" />
       <form
         className="space-y-4 rounded-xl border border-border bg-surface-1 p-5"
         onSubmit={async (e) => {
@@ -30,6 +30,21 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
         </Field>
         <Field label="Crossfade (seconds)"><Input type="number" min={0} max={12} value={xf} onChange={(e) => setXf(e.target.value)} /></Field>
         <Button type="submit">Save</Button>
+      </form>
+      <form
+        className="mt-6 space-y-4 rounded-xl border border-border bg-surface-1 p-5"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const fd = new FormData(e.currentTarget);
+          await api.post("/api/v1/me/password", { current: fd.get("current"), new: fd.get("next") });
+          toast.success("Password updated");
+          e.currentTarget.reset();
+        }}
+      >
+        <h2 className="font-semibold">Password</h2>
+        <Field label="Current"><Input name="current" type="password" autoComplete="current-password" required /></Field>
+        <Field label="New"><Input name="next" type="password" autoComplete="new-password" required /></Field>
+        <Button type="submit">Change password</Button>
       </form>
       <div className="mt-6 flex gap-2">
         <Button variant="outline" onClick={() => (window.location.href = "/settings/connected")}>Connected services</Button>

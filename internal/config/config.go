@@ -39,6 +39,7 @@ type Config struct {
 	MeiliKey       string
 	ShutdownWait   time.Duration
 
+	DiscordEnabled      bool
 	DiscordClientID     string
 	DiscordClientSecret string
 	DiscordBotToken     string
@@ -46,36 +47,41 @@ type Config struct {
 }
 
 func Load() Config {
-	role := Role(env("SOUNDDOCK_ROLE", "all"))
+	role := Role(env("SD_ROLE", "all"))
 	if role == "" {
 		role = RoleAll
 	}
 	return Config{
 		Role:           role,
-		HTTPAddr:       env("SOUNDDOCK_HTTP_ADDR", ":8080"),
-		PublicURL:      strings.TrimRight(env("SOUNDDOCK_PUBLIC_URL", "http://localhost:8080"), "/"),
-		InstanceName:   env("SOUNDDOCK_INSTANCE_NAME", "SoundDock"),
-		TrustedProxies: splitCSV(env("SOUNDDOCK_TRUSTED_PROXIES", "127.0.0.1/32,::1/128")),
-		DatabaseURL:    env("SOUNDDOCK_DATABASE_URL", "postgres://sounddock:sounddock@127.0.0.1:5432/sounddock?sslmode=disable"),
-		MasterKey:      env("SOUNDDOCK_MASTER_KEY", ""),
-		DataDir:        env("SOUNDDOCK_DATA_DIR", "./data"),
-		CacheDir:       env("SOUNDDOCK_CACHE_DIR", "./data/cache"),
-		BackupDir:      env("SOUNDDOCK_BACKUP_DIR", "./data/backups"),
-		ManagedDir:     env("SOUNDDOCK_MANAGED_DIR", "./data/managed"),
-		UseSecureCookie: envBool("SOUNDDOCK_COOKIE_SECURE", false),
-		LogLevel:       env("SOUNDDOCK_LOG_LEVEL", "info"),
-		OpenSubsonic:   envBool("SOUNDDOCK_OPENSUBSONIC", false),
-		MetricsEnabled: envBool("SOUNDDOCK_METRICS_ENABLED", false),
-		MetricsToken:   env("SOUNDDOCK_METRICS_TOKEN", ""),
-		RedisURL:       env("SOUNDDOCK_REDIS_URL", ""),
-		MeiliURL:       env("SOUNDDOCK_MEILISEARCH_URL", ""),
-		MeiliKey:       env("SOUNDDOCK_MEILISEARCH_KEY", ""),
+		HTTPAddr:       env("SD_HTTP_ADDR", ":8080"),
+		PublicURL:      strings.TrimRight(env("SD_PUBLIC_URL", "http://localhost:8080"), "/"),
+		InstanceName:   env("SD_INSTANCE_NAME", "SoundDock"),
+		TrustedProxies: splitCSV(env("SD_TRUSTED_PROXIES", "127.0.0.1/32,::1/128")),
+		DatabaseURL:    env("SD_DATABASE_URL", "postgres://sounddock:sounddock@127.0.0.1:5432/sounddock?sslmode=disable"),
+		MasterKey:      env("SD_MASTER_KEY", ""),
+		DataDir:        env("SD_DATA_DIR", "./data"),
+		CacheDir:       env("SD_CACHE_DIR", "./data/cache"),
+		BackupDir:      env("SD_BACKUP_DIR", "./data/backups"),
+		ManagedDir:     env("SD_MANAGED_DIR", "./data/managed"),
+		UseSecureCookie: envBool("SD_COOKIE_SECURE", false),
+		LogLevel:       env("SD_LOG_LEVEL", "info"),
+		OpenSubsonic:   envBool("SD_OPENSUBSONIC", false),
+		MetricsEnabled: envBool("SD_METRICS_ENABLED", false),
+		MetricsToken:   env("SD_METRICS_TOKEN", ""),
+		RedisURL:       env("SD_REDIS_URL", ""),
+		MeiliURL:       env("SD_MEILISEARCH_URL", ""),
+		MeiliKey:       env("SD_MEILISEARCH_KEY", ""),
 		ShutdownWait:   40 * time.Second,
-		DiscordClientID:     env("SOUNDDOCK_DISCORD_CLIENT_ID", ""),
-		DiscordClientSecret: env("SOUNDDOCK_DISCORD_CLIENT_SECRET", ""),
-		DiscordBotToken:     env("SOUNDDOCK_DISCORD_BOT_TOKEN", ""),
-		AdminDiscordIDs:     splitCSV(env("SOUNDDOCK_ADMIN_DISCORD_ID", env("SOUNDDOCK_ADMIN_DISCORD_IDS", ""))),
+		DiscordEnabled:      envBool("SD_DISCORD_ENABLED", true),
+		DiscordClientID:     env("SD_DISCORD_CLIENT_ID", ""),
+		DiscordClientSecret: env("SD_DISCORD_CLIENT_SECRET", ""),
+		DiscordBotToken:     env("SD_DISCORD_BOT_TOKEN", ""),
+		AdminDiscordIDs:     splitCSV(env("SD_ADMIN_DISCORD_ID", env("SD_ADMIN_DISCORD_IDS", ""))),
 	}
+}
+
+func (c Config) DiscordLoginEnabled() bool {
+	return c.DiscordEnabled && c.DiscordClientID != "" && c.DiscordClientSecret != ""
 }
 
 func (c Config) CookieSecure() bool {

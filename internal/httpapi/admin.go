@@ -3,9 +3,11 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/auth"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/scan"
@@ -326,15 +328,30 @@ func (s *Server) discordGet(w http.ResponseWriter, r *http.Request) {
 	var appID, status *string
 	var tok []byte
 	_ = s.Pool.QueryRow(r.Context(), `SELECT enabled, application_id, last_gateway_status, bot_token_enc FROM discord_settings WHERE id=1`).Scan(&enabled, &appID, &status, &tok)
-	writeJSON(w, 200, map[string]any{"enabled": enabled, "application_id": appID, "gateway_status": status, "token_configured": len(tok) > 0})
+	reg, _ := auth.LoadDiscordRegistration(r.Context(), s.Pool)
+	writeJSON(w, 200, map[string]any{
+		"enabled":                     enabled,
+		"application_id":              appID,
+		"gateway_status":              status,
+		"token_configured":            len(tok) > 0,
+		"login_enabled":               s.Cfg.DiscordLoginEnabled(),
+		"registration_guild_enabled":  reg.GuildEnabled,
+		"registration_guild_id":       reg.GuildID,
+		"registration_role_enabled":   reg.RoleEnabled,
+		"registration_role_id":        reg.RoleID,
+	})
 }
 
 func (s *Server) discordPut(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Enabled       bool    `json:"enabled"`
-		Token         *string `json:"token"`
-		ApplicationID *string `json:"application_id"`
-		ClientID      *string `json:"client_id"`
+		Enabled                  bool    `json:"enabled"`
+		Token                    *string `json:"token"`
+		ApplicationID            *string `json:"application_id"`
+		ClientID                 *string `json:"client_id"`
+		RegistrationGuildEnabled *bool   `json:"registration_guild_enabled"`
+		RegistrationGuildID      *string `json:"registration_guild_id"`
+		RegistrationRoleEnabled  *bool   `json:"registration_role_enabled"`
+		RegistrationRoleID       *string `json:"registration_role_id"`
 	}
 	_ = decodeJSON(r, &body)
 	if body.Token != nil && *body.Token != "" && s.Box != nil {
@@ -342,6 +359,23 @@ func (s *Server) discordPut(w http.ResponseWriter, r *http.Request) {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET enabled=$1, bot_token_enc=$2, application_id=coalesce($3, application_id), client_id=coalesce($4, client_id), updated_at=now() WHERE id=1`, body.Enabled, enc, body.ApplicationID, body.ClientID)
 	} else {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET enabled=$1, application_id=coalesce($2, application_id), updated_at=now() WHERE id=1`, body.Enabled, body.ApplicationID)
+	}
+	if body.RegistrationGuildEnabled != nil || body.RegistrationGuildID != nil || body.RegistrationRoleEnabled != nil || body.RegistrationRoleID != nil {
+		cur, _ := auth.LoadDiscordRegistration(r.Context(), s.Pool)
+		ge, gid, re, rid := cur.GuildEnabled, cur.GuildID, cur.RoleEnabled, cur.RoleID
+		if body.RegistrationGuildEnabled != nil {
+			ge = *body.RegistrationGuildEnabled
+		}
+		if body.RegistrationGuildID != nil {
+			gid = strings.TrimSpace(*body.RegistrationGuildID)
+		}
+		if body.RegistrationRoleEnabled != nil {
+			re = *body.RegistrationRoleEnabled
+		}
+		if body.RegistrationRoleID != nil {
+			rid = strings.TrimSpace(*body.RegistrationRoleID)
+		}
+		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET registration_guild_enabled=$1, registration_guild_id=$2, registration_role_enabled=$3, registration_role_id=$4, updated_at=now() WHERE id=1`, ge, gid, re, rid)
 	}
 	s.Audit.Event(r.Context(), &currentUser(r).ID, "discord.update", "", r.RemoteAddr, nil)
 	s.discordGet(w, r)

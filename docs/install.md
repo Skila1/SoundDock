@@ -1,18 +1,21 @@
 # Installation
 
-Sign-in is **Discord only**. There is no first-run admin password. The administrator is `SOUNDDOCK_ADMIN_DISCORD_ID` in `.env`, applied on every container start.
+The installer asks whether to use Discord. If you skip Discord, open the web UI and create the first administrator with a username and password.
+
+If Discord is on, `SD_ADMIN_DISCORD_ID` in `.env` is granted Administrator on every start. Leave it empty if you do not want that.
 
 ## One-click (recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/sounddock/sounddock/main/install.sh | sudo bash
+export SD_IMAGE=ghcr.io/skila1/sounddock:latest
+curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh | sudo bash
 ```
 
-Installs Docker if needed, writes `/opt/sounddock`, **pulls** `ghcr.io/sounddock/sounddock:latest`, and starts Compose. You will be asked for:
+Installs Docker if needed, writes `/opt/sounddock`, pulls the published image, and starts Compose. You will be asked for:
 
 - Public URL
-- Discord OAuth client ID and secret (scope `identify`, redirect `{PUBLIC_URL}/api/v1/auth/discord/callback`)
-- Your Discord user ID (snowflake). This account is administrator.
+- Whether to enable Discord sign-in
+- If yes: Discord OAuth client ID and secret (redirect `{PUBLIC_URL}/api/v1/auth/discord/callback`) and optional admin Discord user ID
 
 ```bash
 sudo bash install.sh status|update|logs|uninstall|doctor

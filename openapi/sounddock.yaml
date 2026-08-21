@@ -14,7 +14,7 @@ paths:
           description: OK
   /setup:
     post:
-      summary: Create the first administrator
+      summary: Create the first administrator when Discord sign-in is off
       requestBody:
         content:
           application/json:
@@ -26,7 +26,7 @@ paths:
                 email: { type: string }
   /auth/login:
     post:
-      summary: Disabled. SoundDock uses Discord OAuth only.
+      summary: Username/password sign-in (always available for local accounts)
   /auth/discord:
     get:
       summary: Redirect to Discord OAuth sign-in

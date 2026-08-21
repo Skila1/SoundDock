@@ -23,6 +23,49 @@ type DiscordProfile struct {
 	Avatar   string `json:"avatar"`
 }
 
+type DiscordOAuth struct {
+	Profile     DiscordProfile
+	AccessToken string
+}
+
+type DiscordRegistration struct {
+	GuildEnabled bool
+	GuildID      string
+	RoleEnabled  bool
+	RoleID       string
+}
+
+func DiscordUserExists(ctx context.Context, pool *pgxpool.Pool, discordID string) (bool, error) {
+	var n int
+	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM user_identities WHERE provider='discord' AND provider_user_id=$1`, discordID).Scan(&n)
+	return n > 0, err
+}
+
+func LoadDiscordRegistration(ctx context.Context, pool *pgxpool.Pool) (DiscordRegistration, error) {
+	var r DiscordRegistration
+	err := pool.QueryRow(ctx, `
+		SELECT registration_guild_enabled, registration_guild_id, registration_role_enabled, registration_role_id
+		FROM discord_settings WHERE id=1`).Scan(&r.GuildEnabled, &r.GuildID, &r.RoleEnabled, &r.RoleID)
+	return r, err
+}
+
+func (r DiscordRegistration) NeedGuildsScope() bool {
+	return r.GuildEnabled || r.RoleEnabled
+}
+
+func (r DiscordRegistration) NeedRoleScope() bool {
+	return r.RoleEnabled
+}
+
+func guildIDsContain(ids []string, want string) bool {
+	for _, id := range ids {
+		if id == want {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile, adminIDs []string) (*User, error) {
 	display := p.Global
 	if display == "" {
@@ -51,7 +94,7 @@ func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile, admin
 		_, _ = s.pool.Exec(ctx, `UPDATE users SET display_name=$2, updated_at=now() WHERE id=$1 AND display_name=''`, uid, display)
 		_, _ = s.pool.Exec(ctx, `UPDATE user_identities SET provider_username=$2 WHERE provider='discord' AND provider_user_id=$1`, p.ID, p.Username)
 	}
-	if isAdminID(p.ID, adminIDs) {
+	if IsAdminDiscordID(p.ID, adminIDs) {
 		_, _ = s.pool.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name='Administrator' ON CONFLICT DO NOTHING`, uid)
 	}
 	return s.GetUser(ctx, uid)
@@ -82,7 +125,7 @@ func ApplyAdminDiscordIDs(ctx context.Context, pool *pgxpool.Pool, ids []string)
 	return err
 }
 
-func isAdminID(id string, ids []string) bool {
+func IsAdminDiscordID(id string, ids []string) bool {
 	for _, a := range ids {
 		if a == id {
 			return true
@@ -91,12 +134,15 @@ func isAdminID(id string, ids []string) bool {
 	return false
 }
 
-func DiscordAuthURL(clientID, redirect, state, challenge string) string {
+func DiscordAuthURL(clientID, redirect, state, challenge, scope string) string {
+	if scope == "" {
+		scope = "identify"
+	}
 	q := url.Values{
 		"client_id":             {clientID},
 		"response_type":         {"code"},
 		"redirect_uri":          {redirect},
-		"scope":                 {"identify"},
+		"scope":                 {scope},
 		"state":                 {state},
 		"code_challenge":        {challenge},
 		"code_challenge_method": {"S256"},
@@ -105,8 +151,19 @@ func DiscordAuthURL(clientID, redirect, state, challenge string) string {
 	return "https://discord.com/oauth2/authorize?" + q.Encode()
 }
 
-func ExchangeDiscordCode(ctx context.Context, clientID, secret, redirect, code, verifier string) (DiscordProfile, error) {
-	var p DiscordProfile
+func DiscordLoginScope(reg DiscordRegistration) string {
+	parts := []string{"identify"}
+	if reg.NeedGuildsScope() {
+		parts = append(parts, "guilds")
+	}
+	if reg.NeedRoleScope() {
+		parts = append(parts, "guilds.members.read")
+	}
+	return strings.Join(parts, " ")
+}
+
+func ExchangeDiscordCode(ctx context.Context, clientID, secret, redirect, code, verifier string) (DiscordOAuth, error) {
+	var out DiscordOAuth
 	form := url.Values{
 		"client_id": {clientID}, "client_secret": {secret}, "grant_type": {"authorization_code"},
 		"code": {code}, "redirect_uri": {redirect}, "code_verifier": {verifier},
@@ -114,45 +171,131 @@ func ExchangeDiscordCode(ctx context.Context, clientID, secret, redirect, code, 
 	cli := &http.Client{Timeout: 20 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://discord.com/api/oauth2/token", strings.NewReader(form.Encode()))
 	if err != nil {
-		return p, err
+		return out, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := cli.Do(req)
 	if err != nil {
-		return p, err
+		return out, err
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 400 {
-		return p, fmt.Errorf("discord token: %s", truncate(string(b), 180))
+		return out, fmt.Errorf("discord token: %s", truncate(string(b), 180))
 	}
 	var tok struct {
 		AccessToken string `json:"access_token"`
 	}
 	if err := json.Unmarshal(b, &tok); err != nil || tok.AccessToken == "" {
-		return p, fmt.Errorf("discord token missing")
+		return out, fmt.Errorf("discord token missing")
 	}
+	out.AccessToken = tok.AccessToken
 	ureq, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://discord.com/api/users/@me", nil)
 	if err != nil {
-		return p, err
+		return out, err
 	}
 	ureq.Header.Set("Authorization", "Bearer "+tok.AccessToken)
 	uresp, err := cli.Do(ureq)
 	if err != nil {
-		return p, err
+		return out, err
 	}
 	defer uresp.Body.Close()
 	ub, _ := io.ReadAll(io.LimitReader(uresp.Body, 1<<20))
 	if uresp.StatusCode >= 400 {
-		return p, fmt.Errorf("discord profile: %s", uresp.Status)
+		return out, fmt.Errorf("discord profile: %s", uresp.Status)
 	}
-	if err := json.Unmarshal(ub, &p); err != nil {
-		return p, err
+	if err := json.Unmarshal(ub, &out.Profile); err != nil {
+		return out, err
 	}
-	if p.ID == "" {
-		return p, fmt.Errorf("discord profile missing id")
+	if out.Profile.ID == "" {
+		return out, fmt.Errorf("discord profile missing id")
 	}
-	return p, nil
+	return out, nil
+}
+
+func CheckDiscordRegistration(ctx context.Context, accessToken string, reg DiscordRegistration) error {
+	if !reg.GuildEnabled && !reg.RoleEnabled {
+		return nil
+	}
+	cli := &http.Client{Timeout: 20 * time.Second}
+	if reg.GuildEnabled {
+		if strings.TrimSpace(reg.GuildID) == "" {
+			return fmt.Errorf("not_in_server")
+		}
+		ids, err := discordUserGuildIDs(ctx, cli, accessToken)
+		if err != nil {
+			return err
+		}
+		if !guildIDsContain(ids, strings.TrimSpace(reg.GuildID)) {
+			return fmt.Errorf("not_in_server")
+		}
+	}
+	if reg.RoleEnabled {
+		if strings.TrimSpace(reg.GuildID) == "" || strings.TrimSpace(reg.RoleID) == "" {
+			return fmt.Errorf("missing_role")
+		}
+		roles, err := discordMemberRoles(ctx, cli, accessToken, strings.TrimSpace(reg.GuildID))
+		if err != nil {
+			return err
+		}
+		if !guildIDsContain(roles, strings.TrimSpace(reg.RoleID)) {
+			return fmt.Errorf("missing_role")
+		}
+	}
+	return nil
+}
+
+func discordUserGuildIDs(ctx context.Context, cli *http.Client, token string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://discord.com/api/users/@me/guilds", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := cli.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("not_in_server")
+	}
+	var guilds []struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(b, &guilds); err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(guilds))
+	for _, g := range guilds {
+		ids = append(ids, g.ID)
+	}
+	return ids, nil
+}
+
+func discordMemberRoles(ctx context.Context, cli *http.Client, token, guildID string) ([]string, error) {
+	u := "https://discord.com/api/users/@me/guilds/" + url.PathEscape(guildID) + "/member"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := cli.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("missing_role")
+	}
+	var mem struct {
+		Roles []string `json:"roles"`
+	}
+	if err := json.Unmarshal(b, &mem); err != nil {
+		return nil, err
+	}
+	return mem.Roles, nil
 }
 
 func truncate(s string, n int) string {
