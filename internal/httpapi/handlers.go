@@ -120,7 +120,7 @@ func (s *Server) startDiscordLink(w http.ResponseWriter, r *http.Request) {
 	tok, _ := cryptox.RandomToken(24)
 	hash := cryptox.HashToken(tok)
 	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO identity_link_challenges (token_hash, provider, user_id, expires_at) VALUES ($1,'discord',$2,now()+interval '10 minutes')`, hash, currentUser(r).ID)
-	writeJSON(w, 200, map[string]string{"url": s.Cfg.PublicURL + "/link/discord?challenge=" + tok, "challenge": tok})
+	writeJSON(w, 200, map[string]string{"url": s.absURL(r) + "/link/discord?challenge=" + tok, "challenge": tok})
 }
 
 func (s *Server) confirmDiscordLink(w http.ResponseWriter, r *http.Request) {

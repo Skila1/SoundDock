@@ -157,93 +157,40 @@ rand() {
   fi
 }
 
-default_public_url() {
-  if [[ -n "${SD_PUBLIC_URL:-}" ]]; then
-    echo "${SD_PUBLIC_URL}"
-    return
-  fi
-  local ip
-  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  if [[ -n "${ip}" ]]; then
-    echo "http://${ip}:8080"
-  else
-    echo "http://127.0.0.1:8080"
-  fi
-}
-
 # Filled by collect_config
-CFG_PUBLIC=""
 CFG_LIBHOST=""
-CFG_DC="false"
-CFG_DCID=""
-CFG_DCSEC=""
-CFG_ADMIN=""
-CFG_BOTTOK=""
 CFG_CFTOK=""
 
 collect_config() {
-  CFG_PUBLIC="$(default_public_url)"
   CFG_LIBHOST="${SD_LIBRARY_HOST:-${PREFIX}/libraries}"
-  CFG_DCID="${SD_DISCORD_CLIENT_ID:-}"
-  CFG_DCSEC="${SD_DISCORD_CLIENT_SECRET:-}"
-  CFG_ADMIN="${SD_ADMIN_DISCORD_ID:-}"
-  CFG_BOTTOK="${SD_DISCORD_BOT_TOKEN:-}"
   CFG_CFTOK="${CLOUDFLARE_TUNNEL_TOKEN:-}"
-  if [[ "${SD_DISCORD_ENABLED:-}" == "true" || -n "${CFG_DCID}" ]]; then
-    CFG_DC="true"
-  else
-    CFG_DC="false"
-  fi
 
   if ! ui_ok; then
     msg_info "No TUI (set SD_UNATTENDED=1 or no /dev/tty). Using defaults / env."
     return
   fi
 
-  ui_msg "SoundDock" "Use Tab and Enter to move. Use Spacebar on checklists.\n\nThis writes a Docker Compose project. After install you run docker compose from that directory (down, up, logs, pull)." 12 || true
+  ui_msg "SoundDock" "Use Tab and Enter to move.\n\nThis writes a Docker Compose project. Docker publishes a port. Cloudflare Tunnel (optional) is the public URL. Discord is configured later in the web Admin page." 13 || true
 
   PREFIX="$(ui_input "Install directory" "Docker Compose project directory." "${PREFIX}")" || exit 0
   PREFIX="${PREFIX:-/opt/sounddock}"
   PREFIX="${PREFIX%/}"
   CFG_LIBHOST="${SD_LIBRARY_HOST:-${PREFIX}/libraries}"
 
-  if ! ui_yesno "Install SoundDock" "Create a Compose project at ${PREFIX}?\n\nImage: ${IMAGE}\nThen: cd ${PREFIX} && docker compose ps"; then
+  if ! ui_yesno "Install SoundDock" "Create a Compose project at ${PREFIX}?\n\nImage: ${IMAGE}\nPort: 8080 on the host\nThen: cd ${PREFIX} && docker compose ps"; then
     echo "Cancelled."
     exit 0
   fi
 
-  CFG_PUBLIC="$(ui_input "Public URL" "URL you will open in a browser (no trailing slash)." "${CFG_PUBLIC}")" || exit 0
-  CFG_PUBLIC="${CFG_PUBLIC:-$(default_public_url)}"
   CFG_LIBHOST="$(ui_input "Library folder" "Host folder mounted read-only at /libraries inside the container." "${CFG_LIBHOST}")" || exit 0
   CFG_LIBHOST="${CFG_LIBHOST:-${PREFIX}/libraries}"
 
-  if ui_yesno "Discord sign-in" "Enable Discord sign-in (including Discord admin)?\n\nSelect No to create a local administrator in the browser." 13; then
-    CFG_DC="true"
-    ui_msg "Discord app" "Create an application at:\nhttps://discord.com/developers/applications\n\nOAuth2 Redirects:\n${CFG_PUBLIC}/api/v1/auth/discord/callback\n\nScopes: identify" 16 || true
-    CFG_DCID="$(ui_input "Discord client ID" "Application client ID." "${CFG_DCID}")" || exit 0
-    CFG_DCSEC="$(ui_pass "Discord client secret" "Application client secret.")" || exit 0
-    CFG_ADMIN="$(ui_input "Admin Discord ID" "Your Discord user snowflake (optional, blank for none). Comma-separated for several." "${CFG_ADMIN}")" || exit 0
-    if [[ -z "${CFG_DCID}" || -z "${CFG_DCSEC}" ]]; then
-      ui_msg "Discord" "Client ID and secret are required when Discord sign-in is enabled." 10 || true
-      exit 1
-    fi
-    if ui_yesno "Discord bot" "Enable the native Discord voice worker now?\n\nIt plays your SoundDock library only. No YouTube or Spotify." 13; then
-      CFG_BOTTOK="$(ui_pass "Bot token" "Bot token (leave empty to set later in Admin).")" || exit 0
-    fi
-  else
-    CFG_DC="false"
-    CFG_DCID=""
-    CFG_DCSEC=""
-    CFG_ADMIN=""
-    CFG_BOTTOK=""
-  fi
-
-  if ui_yesno "Cloudflare Tunnel" "Add a Cloudflare Tunnel token now?\n\nSelect No to skip (you can publish later)." 12; then
+  if ui_yesno "Cloudflare Tunnel" "Add a Cloudflare Tunnel token now?\n\nThis is how you get a public URL. Select No to use the host port only." 12; then
     CFG_CFTOK="$(ui_pass "Tunnel token" "Cloudflare Tunnel token.")" || exit 0
   fi
 
   local summary
-  summary="Compose project: ${PREFIX}\nURL: ${CFG_PUBLIC}\nLibraries: ${CFG_LIBHOST}\nDiscord sign-in: ${CFG_DC}\nDiscord bot: $([[ -n "${CFG_BOTTOK}" ]] && echo yes || echo no)\nCloudflare Tunnel: $([[ -n "${CFG_CFTOK}" ]] && echo yes || echo no)\n\nThen: cd ${PREFIX} && docker compose ..."
+  summary="Compose project: ${PREFIX}\nHost port: 8080\nLibraries: ${CFG_LIBHOST}\nCloudflare Tunnel: $([[ -n "${CFG_CFTOK}" ]] && echo yes || echo no)\n\nFirst visit: create a local administrator in the browser.\nDiscord is set up later under Admin."
   if ! ui_yesno "Ready" "${summary}\n\nStart install?" 16; then
     echo "Cancelled."
     exit 0
@@ -428,25 +375,22 @@ cmd_install() {
   local mk pw
   mk="$(rand)"
   pw="$(rand)"
+  local cookie="false"
+  if [[ -n "${CFG_CFTOK}" ]]; then
+    cookie="true"
+  fi
   if [[ -f "${PREFIX}/.env" ]] && grep -q SD_MASTER_KEY "${PREFIX}/.env"; then
     msg_info "Keeping existing ${PREFIX}/.env secrets"
     grep -q '^SD_IMAGE=' "${PREFIX}/.env" || echo "SD_IMAGE=${IMAGE}" >> "${PREFIX}/.env"
-    grep -q '^SD_DISCORD_ENABLED=' "${PREFIX}/.env" || echo "SD_DISCORD_ENABLED=${CFG_DC}" >> "${PREFIX}/.env"
     grep -q '^SD_LIBRARY_HOST=' "${PREFIX}/.env" || echo "SD_LIBRARY_HOST=${CFG_LIBHOST}" >> "${PREFIX}/.env"
     sed -i.bak \
-      -e "s|^SD_PUBLIC_URL=.*|SD_PUBLIC_URL=${CFG_PUBLIC}|" \
       -e "s|^SD_IMAGE=.*|SD_IMAGE=${IMAGE}|" \
       -e "s|^SD_LIBRARY_HOST=.*|SD_LIBRARY_HOST=${CFG_LIBHOST}|" \
-      -e "s|^SD_DISCORD_ENABLED=.*|SD_DISCORD_ENABLED=${CFG_DC}|" \
-      -e "s|^SD_DISCORD_CLIENT_ID=.*|SD_DISCORD_CLIENT_ID=${CFG_DCID}|" \
-      -e "s|^SD_DISCORD_CLIENT_SECRET=.*|SD_DISCORD_CLIENT_SECRET=${CFG_DCSEC}|" \
-      -e "s|^SD_ADMIN_DISCORD_ID=.*|SD_ADMIN_DISCORD_ID=${CFG_ADMIN}|" \
       "${PREFIX}/.env" || true
   else
     cat > "${PREFIX}/.env" <<EOF
 SD_ROLE=all
 SD_HTTP_ADDR=:8080
-SD_PUBLIC_URL=${CFG_PUBLIC}
 SD_INSTANCE_NAME=SoundDock
 SD_DATABASE_URL=postgres://sounddock:${pw}@postgres:5432/sounddock?sslmode=disable
 SD_MASTER_KEY=${mk}
@@ -454,11 +398,8 @@ SD_DATA_DIR=/data
 SD_CACHE_DIR=/data/cache
 SD_BACKUP_DIR=/data/backups
 SD_MANAGED_DIR=/data/managed
-SD_COOKIE_SECURE=false
-SD_DISCORD_ENABLED=${CFG_DC}
-SD_DISCORD_CLIENT_ID=${CFG_DCID}
-SD_DISCORD_CLIENT_SECRET=${CFG_DCSEC}
-SD_ADMIN_DISCORD_ID=${CFG_ADMIN}
+SD_COOKIE_SECURE=${cookie}
+SD_TRUSTED_PROXIES=127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 SD_IMAGE=${IMAGE}
 SD_LIBRARY_HOST=${CFG_LIBHOST}
 SD_PORT=8080
@@ -469,11 +410,6 @@ EOF
     chmod 0600 "${PREFIX}/.env"
   fi
 
-  if [[ -n "${CFG_BOTTOK}" ]]; then
-    grep -q '^SD_DISCORD_BOT_TOKEN=' "${PREFIX}/.env" && \
-      sed -i.bak -e "s|^SD_DISCORD_BOT_TOKEN=.*|SD_DISCORD_BOT_TOKEN=${CFG_BOTTOK}|" "${PREFIX}/.env" || \
-      echo "SD_DISCORD_BOT_TOKEN=${CFG_BOTTOK}" >> "${PREFIX}/.env"
-  fi
   if [[ -n "${CFG_CFTOK}" ]]; then
     grep -q '^CLOUDFLARE_TUNNEL_TOKEN=' "${PREFIX}/.env" && \
       sed -i.bak -e "s|^CLOUDFLARE_TUNNEL_TOKEN=.*|CLOUDFLARE_TUNNEL_TOKEN=${CFG_CFTOK}|" "${PREFIX}/.env" || \
@@ -481,9 +417,6 @@ EOF
   fi
 
   local profiles=()
-  if [[ -n "${CFG_BOTTOK}" ]] || grep -q '^SD_DISCORD_BOT_TOKEN=.\+' "${PREFIX}/.env" 2>/dev/null; then
-    profiles+=(discord)
-  fi
   if [[ -n "${CFG_CFTOK}" ]] || grep -q '^CLOUDFLARE_TUNNEL_TOKEN=.\+' "${PREFIX}/.env" 2>/dev/null; then
     profiles+=(cloudflare)
   fi
@@ -504,18 +437,14 @@ EOF
   msg_ok "SoundDock is starting"
 
   local done
-  done="Compose project: ${PREFIX}\nURL: ${CFG_PUBLIC}\n\ncd ${PREFIX}\ndocker compose ps\ndocker compose logs -f\ndocker compose down\ndocker compose up -d\n"
-  if [[ "${CFG_DC}" == "true" ]]; then
-    done+="\nDiscord sign-in is on."
-  else
-    done+="\nDiscord is off. Create the first administrator in the browser."
-  fi
+  done="Compose project: ${PREFIX}\nHost port: 8080\n\nOpen http://<this-host>:8080 and create the first administrator.\nConfigure Discord later under Admin.\n\ncd ${PREFIX}\ndocker compose ps\ndocker compose logs -f\ndocker compose down\ndocker compose up -d"
   if ui_ok; then
     ui_msg "Installed" "${done}" 18 || true
   fi
   echo
   echo -e " ${BOLD}${BL}SoundDock is a Docker Compose project in ${PREFIX}${CL}"
-  echo "  URL:  ${CFG_PUBLIC}"
+  echo "  Open http://<this-host>:8080 and create the first administrator."
+  echo "  Discord is configured in Admin after you log in."
   echo
   echo "  cd ${PREFIX}"
   echo "  docker compose ps"

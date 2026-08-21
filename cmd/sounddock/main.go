@@ -61,21 +61,12 @@ func main() {
 	}
 	defer pool.Close()
 
-	if cfg.DiscordEnabled {
-		if err := auth.ApplyAdminDiscordIDs(ctx, pool, cfg.AdminDiscordIDs); err != nil {
-			log.Error("admin discord ids", "err", err)
-		}
-		if len(cfg.AdminDiscordIDs) == 0 {
-			log.Warn("SD_ADMIN_DISCORD_ID is empty; no Discord user will be administrator until it is set")
-		}
-	}
-
 	box, err := cryptox.New(cfg.MasterKey)
 	if err != nil {
 		log.Error("master key", "err", err)
 		os.Exit(1)
 	}
-	auth.SyncDiscordEnv(ctx, pool, box, cfg.DiscordClientID, cfg.DiscordClientSecret, cfg.DiscordBotToken)
+	auth.SyncDiscordEnv(ctx, pool, box, os.Getenv("SD_DISCORD_CLIENT_ID"), os.Getenv("SD_DISCORD_CLIENT_SECRET"), os.Getenv("SD_DISCORD_BOT_TOKEN"))
 
 	runner := jobs.New(pool, log)
 	art := artwork.New(pool, cfg.CacheDir)

@@ -104,7 +104,7 @@ func (s *Server) connectProvider(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "not_configured", "administrator has not configured this provider")
 		return
 	}
-	redir := external.CallbackURL(s.Cfg.PublicURL, prov)
+	redir := external.CallbackURL(s.absURL(r), prov)
 	state := external.NewState()
 	ver, ch := external.PKCE()
 	var enc []byte
@@ -126,7 +126,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	code := r.URL.Query().Get("code")
 	errQ := r.URL.Query().Get("error")
 	fail := func(msg string) {
-		http.Redirect(w, r, s.Cfg.PublicURL+"/settings/connected?error="+url.QueryEscape(msg), http.StatusFound)
+		http.Redirect(w, r, s.absURL(r)+"/settings/connected?error="+url.QueryEscape(msg), http.StatusFound)
 	}
 	if errQ != "" || code == "" || state == "" {
 		fail("oauth_denied")
@@ -165,7 +165,7 @@ func (s *Server) oauthCallback(w http.ResponseWriter, r *http.Request) {
 	if s.Hooks != nil {
 		s.Hooks.Emit(r.Context(), "external.provider.connected", map[string]any{"provider": prov, "user_id": uid})
 	}
-	http.Redirect(w, r, s.Cfg.PublicURL+"/settings/connected?connected="+url.QueryEscape(prov), http.StatusFound)
+	http.Redirect(w, r, s.absURL(r)+"/settings/connected?connected="+url.QueryEscape(prov), http.StatusFound)
 }
 
 func (s *Server) disconnectProvider(w http.ResponseWriter, r *http.Request) {
@@ -398,7 +398,7 @@ func (s *Server) adminExternalProviders(w http.ResponseWriter, r *http.Request) 
 			"provider": p, "enabled": en, "users_may_connect": may, "public_import": pub,
 			"client_id": cid, "has_client_secret": hasSec, "has_extra": hasExtra,
 			"default_sync_interval": defI, "min_sync_interval": minI,
-			"callback_url": external.CallbackURL(s.Cfg.PublicURL, p),
+			"callback_url": external.CallbackURL(s.absURL(r), p),
 			"capabilities": external.Caps[p],
 		})
 	}

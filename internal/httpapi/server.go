@@ -70,7 +70,8 @@ func (s *Server) Router() http.Handler {
 	r.Use(s.proxyHeaders)
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{s.Cfg.PublicURL, "http://localhost:5173", "http://127.0.0.1:5173"},
+		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173"},
+		AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Requested-With", "Upload-Offset", "Upload-Length", "Tus-Resumable"},
 		ExposedHeaders:   []string{"Upload-Offset", "Location"},
@@ -300,6 +301,7 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
+	oauth := auth.LoadDiscordOAuth(r.Context(), s.Pool, s.Box)
 	writeJSON(w, 200, map[string]any{
 		"name":             s.Cfg.InstanceName,
 		"version":          version.Version,
@@ -307,11 +309,11 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"codecs":           []string{"mp3", "flac", "aac", "m4a", "alac", "ogg", "opus", "wav"},
 		"opensubsonic":     s.Cfg.OpenSubsonic,
 		"discord_optional": true,
-		"discord_auth":     s.Cfg.DiscordLoginEnabled(),
+		"discord_auth":     oauth.Ready(),
 		"features": map[string]bool{
 			"search": true, "playlists": true, "uploads": true, "remote_import": true,
 			"external_playlists": true, "webhooks": true, "pwa": true, "replaygain": true, "crossfade": true,
-			"discord_login": s.Cfg.DiscordLoginEnabled(),
+			"discord_login": oauth.Ready(),
 		},
 	})
 }
@@ -332,12 +334,10 @@ func (s *Server) spa() http.Handler {
 	})
 }
 
-func cookieSecure(s *Server) bool { return s.Cfg.CookieSecure() }
-
-func (s *Server) setSessionCookie(w http.ResponseWriter, token string, exp time.Time) {
+func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token string, exp time.Time) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "sd_session", Value: token, Path: "/", HttpOnly: true,
-		Secure: cookieSecure(s), SameSite: http.SameSiteLaxMode, Expires: exp,
+		Secure: s.cookieSecureFor(r), SameSite: http.SameSiteLaxMode, Expires: exp,
 	})
 }
 

@@ -66,7 +66,71 @@ func guildIDsContain(ids []string, want string) bool {
 	return false
 }
 
-func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile, adminIDs []string) (*User, error) {
+func (s *Service) AdministratorCount(ctx context.Context) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*) FROM user_roles ur JOIN roles r ON r.id=ur.role_id WHERE r.name='Administrator'`).Scan(&n)
+	return n, err
+}
+
+func LoadAdminDiscordIDs(ctx context.Context, pool *pgxpool.Pool) []string {
+	var raw string
+	_ = pool.QueryRow(ctx, `SELECT coalesce(admin_discord_ids,'') FROM discord_settings WHERE id=1`).Scan(&raw)
+	return splitIDs(raw)
+}
+
+func RecordAdminDiscordID(ctx context.Context, pool *pgxpool.Pool, id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	ids := LoadAdminDiscordIDs(ctx, pool)
+	if IsAdminDiscordID(id, ids) {
+		return
+	}
+	ids = append(ids, id)
+	_, _ = pool.Exec(ctx, `UPDATE discord_settings SET admin_discord_ids=$1, updated_at=now() WHERE id=1`, strings.Join(ids, ","))
+}
+
+func splitIDs(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+type DiscordOAuthConfig struct {
+	LoginEnabled bool
+	ClientID     string
+	Secret       string
+}
+
+func LoadDiscordOAuth(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box) DiscordOAuthConfig {
+	var login bool
+	var clientID *string
+	var enc []byte
+	_ = pool.QueryRow(ctx, `SELECT login_enabled, client_id, client_secret_enc FROM discord_settings WHERE id=1`).Scan(&login, &clientID, &enc)
+	out := DiscordOAuthConfig{LoginEnabled: login}
+	if clientID != nil {
+		out.ClientID = strings.TrimSpace(*clientID)
+	}
+	if box != nil && len(enc) > 0 {
+		if p, err := box.Decrypt(enc); err == nil {
+			out.Secret = string(p)
+		}
+	}
+	return out
+}
+
+func (c DiscordOAuthConfig) Ready() bool {
+	return c.LoginEnabled && c.ClientID != "" && c.Secret != ""
+}
+
+func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile) (*User, error) {
 	display := p.Global
 	if display == "" {
 		display = p.Username
@@ -94,8 +158,13 @@ func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile, admin
 		_, _ = s.pool.Exec(ctx, `UPDATE users SET display_name=$2, updated_at=now() WHERE id=$1 AND display_name=''`, uid, display)
 		_, _ = s.pool.Exec(ctx, `UPDATE user_identities SET provider_username=$2 WHERE provider='discord' AND provider_user_id=$1`, p.ID, p.Username)
 	}
-	if IsAdminDiscordID(p.ID, adminIDs) {
+	admins, _ := s.AdministratorCount(ctx)
+	stored := LoadAdminDiscordIDs(ctx, s.pool)
+	if admins == 0 || IsAdminDiscordID(p.ID, stored) {
 		_, _ = s.pool.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name='Administrator' ON CONFLICT DO NOTHING`, uid)
+		if admins == 0 {
+			RecordAdminDiscordID(ctx, s.pool, p.ID)
+		}
 	}
 	return s.GetUser(ctx, uid)
 }
@@ -111,17 +180,6 @@ func ApplyAdminDiscordIDs(ctx context.Context, pool *pgxpool.Pool, ids []string)
 		CROSS JOIN roles r
 		WHERE i.provider='discord' AND i.provider_user_id = ANY($1) AND r.name='Administrator'
 		ON CONFLICT DO NOTHING`, ids)
-	if err != nil {
-		return err
-	}
-	_, err = pool.Exec(ctx, `
-		DELETE FROM user_roles ur
-		USING roles r
-		WHERE ur.role_id = r.id AND r.name='Administrator'
-		  AND NOT EXISTS (
-		    SELECT 1 FROM user_identities i
-		    WHERE i.user_id = ur.user_id AND i.provider='discord' AND i.provider_user_id = ANY($1)
-		  )`, ids)
 	return err
 }
 

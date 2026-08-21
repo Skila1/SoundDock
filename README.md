@@ -8,7 +8,7 @@ SoundDock is an open-source, self-hosted music platform for organising, streamin
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
 ```
 
-A whiptail installer (same idea as Proxmox helper scripts) writes a Docker Compose project (default `/opt/sounddock`), installs Docker if missing, and starts it. Then you manage it like any Compose stack:
+A whiptail installer (same idea as Proxmox helper scripts) writes a Docker Compose project (default `/opt/sounddock`), installs Docker if missing, and starts it. Docker publishes port 8080. Cloudflare Tunnel is optional. Discord is configured in the web Admin after first launch. Then you manage it like any Compose stack:
 
 ```bash
 cd /opt/sounddock
@@ -46,7 +46,7 @@ SoundDock is built to be the system your library, players, and bots talk to. The
 ```bash
 cp .env.example .env
 # set POSTGRES_PASSWORD, SD_MASTER_KEY
-# optional Discord: SD_DISCORD_ENABLED=true, SD_DISCORD_CLIENT_ID, SD_DISCORD_CLIENT_SECRET, SD_ADMIN_DISCORD_ID
+# Discord is configured in Admin after first launch
 docker compose up -d --build
 ```
 

@@ -237,6 +237,9 @@ export function AdminDiscord() {
   const sessions = useQuery({ queryKey: ["discord-sessions"], queryFn: () => api.get<any[]>("/api/v1/admin/integrations/discord/sessions") });
   const [token, setToken] = useState("");
   const [app, setApp] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [loginOn, setLoginOn] = useState(false);
   const [guildOn, setGuildOn] = useState(false);
   const [guildId, setGuildId] = useState("");
   const [roleOn, setRoleOn] = useState(false);
@@ -247,31 +250,59 @@ export function AdminDiscord() {
     setGuildId(d.data.registration_guild_id || "");
     setRoleOn(!!d.data.registration_role_enabled);
     setRoleId(d.data.registration_role_id || "");
+    setLoginOn(!!d.data.login_enabled);
+    setClientId(d.data.client_id || "");
   }, [d.data]);
   return (
     <div>
-      <PageHeader title="Discord" description="Bot worker, invite, and who may register with Discord." />
+      <PageHeader title="Discord" description="Optional. Sign-in, bot, and who may register. Nothing here lives in .env." />
       <div className="mb-4 flex flex-wrap gap-2">
+        <Badge tone={d.data?.login_ready ? "success" : "neutral"}>{d.data?.login_ready ? "Sign-in ready" : "Sign-in off"}</Badge>
         <Badge tone={d.data?.token_configured ? "success" : "neutral"}>{d.data?.token_configured ? "Token configured" : "No token"}</Badge>
-        <Badge tone={d.data?.login_enabled ? "success" : "neutral"}>{d.data?.login_enabled ? "Discord sign-in on" : "Discord sign-in off"}</Badge>
         <Badge>{d.data?.gateway_status || st.data?.gateway || "idle"}</Badge>
         <Badge>{st.data?.commands || "commands unknown"}</Badge>
       </div>
+      <form className="mb-6 max-w-lg space-y-4 rounded-xl border border-border bg-surface-1 p-4" onSubmit={async (e) => {
+        e.preventDefault();
+        await api.put("/api/v1/admin/integrations/discord", {
+          login_enabled: loginOn,
+          client_id: clientId || undefined,
+          client_secret: clientSecret || undefined,
+          application_id: app || clientId || undefined
+        });
+        toast.success("Discord sign-in saved");
+        setClientSecret("");
+        qc.invalidateQueries({ queryKey: ["discord"] });
+      }}>
+        <h3 className="font-semibold">Sign-in</h3>
+        <p className="text-sm text-muted">Paste this redirect URL in the Discord application OAuth2 settings:</p>
+        <code className="block break-all rounded-lg bg-surface-2 px-3 py-2 text-xs">{d.data?.oauth_redirect || "…"}</code>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-sm font-medium">Allow Discord sign-in</div>
+            <p className="text-xs text-subtle">Off by default. Local username and password always work.</p>
+          </div>
+          <Switch checked={loginOn} onCheckedChange={setLoginOn} />
+        </div>
+        <Field label="Client ID"><Input value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="OAuth2 client ID" /></Field>
+        <Field label="Client secret" hint={d.data?.secret_configured ? "Leave blank to keep the saved secret." : "Required to turn sign-in on."}>
+          <Input type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="••••••••" />
+        </Field>
+        <Button type="submit">Save sign-in</Button>
+      </form>
       <form className="mb-6 max-w-lg space-y-3 rounded-xl border border-border bg-surface-1 p-4" onSubmit={async (e) => {
         e.preventDefault();
         await api.put("/api/v1/admin/integrations/discord", {
           enabled: true,
           token: token || undefined,
           application_id: app || undefined,
-          registration_guild_enabled: guildOn,
-          registration_guild_id: guildId,
-          registration_role_enabled: roleOn,
-          registration_role_id: roleId
+          client_id: clientId || undefined
         });
-        toast.success("Discord settings saved");
+        toast.success("Discord bot settings saved");
         setToken("");
         qc.invalidateQueries({ queryKey: ["discord"] });
       }}>
+        <h3 className="font-semibold">Bot</h3>
         <Field label="Application ID"><Input value={app || d.data?.application_id || ""} onChange={(e) => setApp(e.target.value)} /></Field>
         <Field label="Bot token" hint="Leave blank to keep the existing token."><Input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="••••••••" /></Field>
         <div className="flex flex-wrap gap-2">
@@ -294,7 +325,7 @@ export function AdminDiscord() {
         qc.invalidateQueries({ queryKey: ["discord"] });
       }}>
         <h3 className="font-semibold">Registration whitelist</h3>
-        <p className="text-sm text-muted">Applies to new Discord accounts only. Existing users and IDs in SD_ADMIN_DISCORD_ID can always sign in. Role checks need the bot invited, and Discord OAuth will request guild membership.</p>
+        <p className="text-sm text-muted">Applies to new Discord accounts only. Existing users and the first Discord administrator can always sign in. Role checks need the bot invited.</p>
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-medium">Require Discord server</div>

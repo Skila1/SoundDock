@@ -65,7 +65,7 @@ export function AppRouter() {
   });
 
   if (setup.isLoading || (me.isLoading && !me.isError)) return <BootScreen />;
-  if (setup.data?.needed) return <SetupPage onDone={() => { setup.refetch(); me.refetch(); }} />;
+  if (setup.data?.needed) return <SetupPage discordConfigured={!!setup.data?.discord_configured} onDone={() => { setup.refetch(); me.refetch(); }} />;
   if (me.isError || !me.data) {
     return <LoginPage discordConfigured={!!setup.data?.discord_configured} onDone={() => me.refetch()} />;
   }

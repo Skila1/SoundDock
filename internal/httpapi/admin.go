@@ -325,16 +325,22 @@ func (s *Server) adminLogs(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) discordGet(w http.ResponseWriter, r *http.Request) {
 	var enabled bool
-	var appID, status *string
-	var tok []byte
-	_ = s.Pool.QueryRow(r.Context(), `SELECT enabled, application_id, last_gateway_status, bot_token_enc FROM discord_settings WHERE id=1`).Scan(&enabled, &appID, &status, &tok)
+	var appID, status, clientID *string
+	var tok, sec []byte
+	_ = s.Pool.QueryRow(r.Context(), `SELECT enabled, application_id, last_gateway_status, bot_token_enc, client_id, client_secret_enc FROM discord_settings WHERE id=1`).Scan(&enabled, &appID, &status, &tok, &clientID, &sec)
 	reg, _ := auth.LoadDiscordRegistration(r.Context(), s.Pool)
+	oauth := auth.LoadDiscordOAuth(r.Context(), s.Pool, s.Box)
 	writeJSON(w, 200, map[string]any{
 		"enabled":                     enabled,
 		"application_id":              appID,
+		"client_id":                   clientID,
 		"gateway_status":              status,
 		"token_configured":            len(tok) > 0,
-		"login_enabled":               s.Cfg.DiscordLoginEnabled(),
+		"secret_configured":           len(sec) > 0,
+		"login_enabled":               oauth.LoginEnabled,
+		"login_ready":                 oauth.Ready(),
+		"oauth_redirect":              auth.DiscordCallbackURL(s.absURL(r)),
+		"admin_discord_ids":           auth.LoadAdminDiscordIDs(r.Context(), s.Pool),
 		"registration_guild_enabled":  reg.GuildEnabled,
 		"registration_guild_id":       reg.GuildID,
 		"registration_role_enabled":   reg.RoleEnabled,
@@ -345,9 +351,11 @@ func (s *Server) discordGet(w http.ResponseWriter, r *http.Request) {
 func (s *Server) discordPut(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Enabled                  bool    `json:"enabled"`
+		LoginEnabled             *bool   `json:"login_enabled"`
 		Token                    *string `json:"token"`
 		ApplicationID            *string `json:"application_id"`
 		ClientID                 *string `json:"client_id"`
+		ClientSecret             *string `json:"client_secret"`
 		RegistrationGuildEnabled *bool   `json:"registration_guild_enabled"`
 		RegistrationGuildID      *string `json:"registration_guild_id"`
 		RegistrationRoleEnabled  *bool   `json:"registration_role_enabled"`
@@ -358,7 +366,14 @@ func (s *Server) discordPut(w http.ResponseWriter, r *http.Request) {
 		enc, _ := s.Box.Encrypt([]byte(*body.Token))
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET enabled=$1, bot_token_enc=$2, application_id=coalesce($3, application_id), client_id=coalesce($4, client_id), updated_at=now() WHERE id=1`, body.Enabled, enc, body.ApplicationID, body.ClientID)
 	} else {
-		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET enabled=$1, application_id=coalesce($2, application_id), updated_at=now() WHERE id=1`, body.Enabled, body.ApplicationID)
+		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET enabled=$1, application_id=coalesce($2, application_id), client_id=coalesce($3, client_id), updated_at=now() WHERE id=1`, body.Enabled, body.ApplicationID, body.ClientID)
+	}
+	if body.ClientSecret != nil && *body.ClientSecret != "" && s.Box != nil {
+		enc, _ := s.Box.Encrypt([]byte(*body.ClientSecret))
+		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET client_secret_enc=$1, updated_at=now() WHERE id=1`, enc)
+	}
+	if body.LoginEnabled != nil {
+		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET login_enabled=$1, updated_at=now() WHERE id=1`, *body.LoginEnabled)
 	}
 	if body.RegistrationGuildEnabled != nil || body.RegistrationGuildID != nil || body.RegistrationRoleEnabled != nil || body.RegistrationRoleID != nil {
 		cur, _ := auth.LoadDiscordRegistration(r.Context(), s.Pool)
