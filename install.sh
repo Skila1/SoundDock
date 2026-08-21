@@ -111,6 +111,48 @@ ui_pass() {
   printf '%s' "${out}"
 }
 
+# Quoted ~ is a literal character. Docker Compose then treats it as a relative path.
+abs_path() {
+  local p="${1:-}"
+  p="${p#"${p%%[![:space:]]*}"}"
+  p="${p%"${p##*[![:space:]]}"}"
+  if [[ -z "${p}" ]]; then
+    echo "/opt/sounddock"
+    return
+  fi
+  local home="${HOME:-/root}"
+  case "${p}" in
+    "~") p="${home}" ;;
+    "~/"*) p="${home}/${p#~/}" ;;
+    "~"*)
+      local user rest homedir
+      user="${p%%/*}"
+      user="${user#\~}"
+      if [[ "${p}" == */* ]]; then
+        rest="${p#*/}"
+        homedir="$(getent passwd "${user}" | cut -d: -f6 || true)"
+        if [[ -n "${homedir}" ]]; then
+          p="${homedir}/${rest}"
+        fi
+      else
+        homedir="$(getent passwd "${user}" | cut -d: -f6 || true)"
+        if [[ -n "${homedir}" ]]; then
+          p="${homedir}"
+        fi
+      fi
+      ;;
+  esac
+  if [[ "${p}" != /* ]]; then
+    p="${PWD}/${p}"
+  fi
+  p="${p%/}"
+  if command -v realpath >/dev/null 2>&1; then
+    realpath -m "${p}"
+  else
+    printf '%s\n' "${p}"
+  fi
+}
+
 install_docker() {
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     systemctl enable --now docker 2>/dev/null || true
@@ -216,7 +258,8 @@ CFG_LIBHOST=""
 CFG_CFTOK=""
 
 collect_config() {
-  CFG_LIBHOST="${SD_LIBRARY_HOST:-${PREFIX}/libraries}"
+  PREFIX="$(abs_path "${PREFIX}")"
+  CFG_LIBHOST="$(abs_path "${SD_LIBRARY_HOST:-${PREFIX}/libraries}")"
   CFG_CFTOK="${CLOUDFLARE_TUNNEL_TOKEN:-}"
 
   if ! ui_ok; then
@@ -226,9 +269,8 @@ collect_config() {
 
   ui_msg "SoundDock" "Use Tab and Enter to move.\n\nThis writes a Docker Compose project. Docker publishes a port. Cloudflare Tunnel (optional) is the public URL. Discord is configured later in the web Admin page." 13 || true
 
-  PREFIX="$(ui_input "Install directory" "Docker Compose project directory." "${PREFIX}")" || exit 0
-  PREFIX="${PREFIX:-/opt/sounddock}"
-  PREFIX="${PREFIX%/}"
+  PREFIX="$(ui_input "Install directory" "Absolute path for docker-compose.yml and .env (example: /opt/sounddock)." "${PREFIX}")" || exit 0
+  PREFIX="$(abs_path "${PREFIX:-/opt/sounddock}")"
   CFG_LIBHOST="${SD_LIBRARY_HOST:-${PREFIX}/libraries}"
 
   if ! ui_yesno "Install SoundDock" "Create a Compose project at ${PREFIX}?\n\nImage: ${IMAGE}\nPort: 8080 on the host\nThen: cd ${PREFIX} && docker compose ps"; then
@@ -237,7 +279,7 @@ collect_config() {
   fi
 
   CFG_LIBHOST="$(ui_input "Library folder" "Host folder mounted read-only at /libraries inside the container." "${CFG_LIBHOST}")" || exit 0
-  CFG_LIBHOST="${CFG_LIBHOST:-${PREFIX}/libraries}"
+  CFG_LIBHOST="$(abs_path "${CFG_LIBHOST:-${PREFIX}/libraries}")"
 
   if ui_yesno "Cloudflare Tunnel" "Install cloudflared as a systemd service now?\n\nNot Docker. Point the tunnel at http://localhost:8080 (Docker publishes that port on the host)." 13; then
     CFG_CFTOK="$(ui_pass "Tunnel token" "Cloudflare Tunnel token from Zero Trust.")" || exit 0
@@ -415,6 +457,16 @@ cmd_install() {
   header_info
   ensure_whiptail
   collect_config
+  PREFIX="$(abs_path "${PREFIX}")"
+  CFG_LIBHOST="$(abs_path "${CFG_LIBHOST:-${PREFIX}/libraries}")"
+
+  # Rescue files from a previous run that stored '~' as a directory name.
+  local old_tilde="${PWD}/~/$(basename "${PREFIX}")"
+  if [[ -f "${old_tilde}/.env" && ! -f "${PREFIX}/.env" ]]; then
+    mkdir -p "${PREFIX}"
+    cp -a "${old_tilde}/." "${PREFIX}/"
+    msg_ok "Moved files from ${old_tilde} to ${PREFIX}"
+  fi
 
   install_docker
   mkdir -p "${PREFIX}/data/cache" "${PREFIX}/data/backups" "${PREFIX}/data/managed" "${PREFIX}/libraries"
