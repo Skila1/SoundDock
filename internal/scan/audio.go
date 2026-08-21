@@ -19,6 +19,14 @@ func IsAudioName(name string) bool {
 	return IsAudioExt(path.Ext(strings.TrimSpace(name)))
 }
 
+func IsZipName(name string) bool {
+	return strings.ToLower(path.Ext(strings.TrimSpace(name))) == ".zip"
+}
+
+func IsUploadName(name string) bool {
+	return IsAudioName(name) || IsZipName(name)
+}
+
 func ExtFromURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {

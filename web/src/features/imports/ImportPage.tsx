@@ -3,12 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import { Globe } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Badge } from "@/components/ui/misc";
 import { PageHeader } from "@/components/ui/empty";
 import { EmptyState } from "@/components/ui/empty";
 import { toast } from "sonner";
+
+function splitURLs(raw: string) {
+  return raw.split(/[\n,]+/).map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
+}
 
 export function ImportPage() {
   const jobs = useQuery({
@@ -17,33 +21,46 @@ export function ImportPage() {
     refetchInterval: 3000
   });
   const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
   const imports = jobs.data || [];
+  const count = splitURLs(url).length;
 
   return (
     <div>
-      <PageHeader title="Remote Import" description="Paste a direct link to an audio file you already have the right to download. Streaming-service pages are not fetched." />
+      <PageHeader title="Remote Import" description="Paste one or many direct audio URLs, one per line. Streaming-service pages are not fetched." />
       <form
         className="max-w-xl space-y-4 rounded-xl border border-border bg-surface-1 p-5"
         onSubmit={async (e) => {
           e.preventDefault();
-          if (/open\.spotify\.com\/playlist|youtube\.com\/playlist|soundcloud\.com\/.+\/sets\/|music\.apple\.com\/.+\/playlist/.test(url)) {
+          const urls = splitURLs(url);
+          if (!urls.length) return toast.error("Paste at least one audio URL");
+          if (urls.some((u) => /open\.spotify\.com\/playlist|youtube\.com\/playlist|soundcloud\.com\/.+\/sets\/|music\.apple\.com\/.+\/playlist/.test(u))) {
             toast.error("Playlist URLs go to Playlists → Import from URL. Remote Import is for direct audio files only.");
             return;
           }
+          setBusy(true);
           try {
-            await api.post("/api/v1/imports/url", { url });
-            toast.success("Import started");
+            const res = await api.post<{ count: number }>("/api/v1/imports/url", { urls });
+            toast.success(res.count > 1 ? `Importing ${res.count} files` : "Import started");
             setUrl("");
             jobs.refetch();
           } catch (err: any) {
             toast.error(err?.message || "Import failed");
+          } finally {
+            setBusy(false);
           }
         }}
       >
-        <Field label="Direct file URL" hint="HTTP(S) URL to an audio file (FLAC, MP3, M4A, Ogg, Opus, WAV).">
-          <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/album/track.flac" required />
+        <Field label="Direct file URLs" hint="One HTTP(S) audio URL per line. Commas work too. Up to 200.">
+          <Textarea
+            className="min-h-36 font-mono text-xs"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder={"https://example.com/album/01-track.flac\nhttps://example.com/album/02-track.flac"}
+            required
+          />
         </Field>
-        <Button type="submit">Start import</Button>
+        <Button type="submit" disabled={busy}>{busy ? "Starting…" : count > 1 ? `Import ${count} files` : "Start import"}</Button>
       </form>
       <h2 className="mt-8 mb-3 font-semibold">Import jobs</h2>
       {!imports.length && <EmptyState icon={Globe} title="No import jobs yet." />}
@@ -51,8 +68,8 @@ export function ImportPage() {
         {imports.map((j) => (
           <li key={j.id} className="flex items-center justify-between rounded-lg border border-border bg-surface-1 px-4 py-3">
             <div>
-              <div className="text-sm font-medium">{j.type}</div>
-              <div className="text-xs text-subtle">{j.last_error || (j.status === "completed" ? "Imported" : j.status || "Running")}</div>
+              <div className="text-sm font-medium">{j.count > 1 ? `${j.count} URLs` : j.type}</div>
+              <div className="text-xs text-subtle">{j.last_error || (j.status === "completed" ? "Imported" : j.status === "running" && j.progress ? `${j.progress}%` : j.status || "Running")}</div>
             </div>
             <Badge tone={j.status === "failed" ? "danger" : j.status === "completed" ? "success" : "accent"}>{j.status}</Badge>
           </li>

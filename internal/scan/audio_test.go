@@ -19,7 +19,10 @@ func TestExtFromURLIgnoresQuery(t *testing.T) {
 	if ResolveAudioExt("", "https://cdn.example/file", "audio/flac") != ".flac" {
 		t.Fatal("content-type fallback")
 	}
-	if ResolveAudioExt("song.WAV", "", "") != ".wav" {
-		t.Fatal("name wins")
+	if !IsAudioName("song.WAV") || !IsZipName("album.ZIP") || !IsUploadName("a.zip") {
+		t.Fatal("upload names")
+	}
+	if IsUploadName("cover.jpg") {
+		t.Fatal("jpg is not an upload")
 	}
 }

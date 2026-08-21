@@ -168,6 +168,7 @@ func (s *Server) Router() http.Handler {
 			r.Post("/imports/url", s.importURL)
 			r.Get("/imports/jobs", s.importJobs)
 			r.Post("/uploads", s.createUpload)
+			r.Post("/uploads/finalize", s.finalizeUploads)
 			r.Patch("/uploads/{id}", s.patchUpload)
 			r.Post("/uploads/{id}/complete", s.completeUpload)
 

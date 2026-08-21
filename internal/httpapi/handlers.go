@@ -14,7 +14,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/auth"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
-	"github.com/sounddock/sounddock/internal/external"
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/opensubsonic"
 	"github.com/sounddock/sounddock/internal/scan"
@@ -589,16 +588,13 @@ func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
-	if strings.TrimSpace(body.URL) == "" {
+	list := body.URLs()
+	if len(list) == 0 {
 		writeErr(w, 400, "invalid", "url is required")
 		return
 	}
-	if external.IsPlaylistURL(body.URL) {
-		writeErr(w, 400, "playlist_url", "Playlist URLs belong in Playlists → Import from URL, not Remote Import. SoundDock will not download streaming-service audio.")
-		return
-	}
-	if ext := scan.ExtFromURL(body.URL); ext != "" && !scan.IsAudioExt(ext) {
-		writeErr(w, 400, "invalid", "URL must point to an audio file (flac, mp3, m4a, ogg, opus, wav)")
+	if len(list) > 200 {
+		writeErr(w, 400, "invalid", "at most 200 URLs per import")
 		return
 	}
 	libID, err := s.resolveLibraryID(r.Context(), body.LibraryID)
@@ -607,24 +603,27 @@ func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.LibraryID = libID
+	body.URL = ""
+	body.Extra = list
 	id, err := s.Jobs.Enqueue(r.Context(), "ingest.url", body)
 	if err != nil {
 		writeErr(w, 500, "job", err.Error())
 		return
 	}
-	writeJSON(w, 202, map[string]any{"job_id": id})
+	writeJSON(w, 202, map[string]any{"job_id": id, "count": len(list)})
 }
 
 func (s *Server) importJobs(w http.ResponseWriter, r *http.Request) {
 	rows, err := s.Pool.Query(r.Context(), `
-		SELECT id, type, status, progress, last_error, created_at
+		SELECT id, type, status, progress, last_error, created_at,
+			COALESCE(jsonb_array_length(payload->'urls'), 0)
 		FROM jobs WHERE type='ingest.url' ORDER BY created_at DESC LIMIT 50`)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return
 	}
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "type", "status", "progress", "last_error", "created_at"))
+	writeJSON(w, 200, scanMaps(rows, "id", "type", "status", "progress", "last_error", "created_at", "count"))
 }
 
 func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
@@ -639,7 +638,7 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		Size      int64     `json:"size"`
 	}
 	_ = decodeJSON(r, &body)
-	if !scan.IsAudioName(body.Filename) {
+	if !scan.IsUploadName(body.Filename) {
 		writeErr(w, 400, "invalid", "unsupported audio type")
 		return
 	}
@@ -661,7 +660,7 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 func (s *Server) patchUpload(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
 	off, _ := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
-	n, err := s.Ingest.PatchUpload(r.Context(), id, off, io.LimitReader(r.Body, 32<<20))
+	n, err := s.Ingest.PatchUpload(r.Context(), id, off, io.LimitReader(r.Body, 200<<20))
 	if err != nil {
 		writeErr(w, 400, "upload", err.Error())
 		return
@@ -672,8 +671,34 @@ func (s *Server) patchUpload(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) completeUpload(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
-	if err := s.Ingest.FinishUpload(r.Context(), id, s.ProviderFor); err != nil {
+	var body struct {
+		Scan *bool `json:"scan"`
+	}
+	_ = decodeJSON(r, &body)
+	doScan := true
+	if body.Scan != nil {
+		doScan = *body.Scan
+	}
+	if err := s.Ingest.FinishUpload(r.Context(), id, s.ProviderFor, doScan); err != nil {
 		writeErr(w, 500, "upload", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) finalizeUploads(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	if !auth.HasPerm(u, "library.upload") {
+		writeErr(w, 403, "forbidden", "upload not permitted")
+		return
+	}
+	libID, err := s.resolveLibraryID(r.Context(), uuid.Nil)
+	if err != nil {
+		writeErr(w, 500, "library", "could not create a default library")
+		return
+	}
+	if err := s.Ingest.ScanUploads(r.Context(), libID, s.ProviderFor); err != nil {
+		writeErr(w, 500, "scan", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})

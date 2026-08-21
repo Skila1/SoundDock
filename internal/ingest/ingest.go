@@ -13,10 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/sounddock/sounddock/internal/external"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/scan"
-	"github.com/sounddock/sounddock/internal/ssrf"
 	"github.com/sounddock/sounddock/internal/storage"
 )
 
@@ -38,65 +36,8 @@ func New(pool *pgxpool.Pool, managed *storage.Local, scanner *scan.Scanner, stag
 
 type URLPayload struct {
 	URL       string    `json:"url"`
+	Extra     []string  `json:"urls"`
 	LibraryID uuid.UUID `json:"library_id"`
-}
-
-func (s *Service) URLHandler(getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) jobs.Handler {
-	return func(ctx context.Context, job jobs.Job) error {
-		var p URLPayload
-		if err := json.Unmarshal(job.Payload, &p); err != nil {
-			return err
-		}
-		if external.IsPlaylistURL(p.URL) {
-			return fmt.Errorf("playlist URLs belong in External Playlist Import, not Remote Import")
-		}
-		opt := ssrf.DefaultOptions()
-		opt.MaxBytes = s.maxBytes
-		rc, ctype, _, err := ssrf.Fetch(ctx, p.URL, opt)
-		if err != nil {
-			return err
-		}
-		defer rc.Close()
-		ext := scan.ResolveAudioExt("", p.URL, ctype)
-		if ext == "" {
-			return fmt.Errorf("URL is not a supported audio file")
-		}
-		tmp, err := os.CreateTemp(s.staging, "url-*")
-		if err != nil {
-			return err
-		}
-		hw := sha256.New()
-		n, err := io.Copy(tmp, io.TeeReader(rc, hw))
-		name := tmp.Name()
-		tmp.Close()
-		if err != nil {
-			os.Remove(name)
-			return err
-		}
-		hash := hex.EncodeToString(hw.Sum(nil))
-		var existing string
-		if err := s.pool.QueryRow(ctx, `SELECT storage_key FROM track_files WHERE content_hash=$1 LIMIT 1`, hash).Scan(&existing); err == nil && existing != "" {
-			os.Remove(name)
-			return nil
-		}
-		prov, libID, prefix, err := getProv(ctx, p.LibraryID)
-		if err != nil {
-			os.Remove(name)
-			return err
-		}
-		key := path.Join(prefix, "imports", hash[:2], hash+ext)
-		f, err := os.Open(name)
-		if err != nil {
-			return err
-		}
-		err = prov.Write(ctx, key, f, storage.WriteInfo{Size: n})
-		f.Close()
-		os.Remove(name)
-		if err != nil {
-			return err
-		}
-		return s.scanner.ScanLibrary(ctx, libID, prov, path.Join(prefix, "imports", hash[:2]), "import", job.ID)
-	}
 }
 
 type UploadComplete struct {
@@ -104,7 +45,7 @@ type UploadComplete struct {
 }
 
 func (s *Service) CreateUpload(ctx context.Context, user, lib uuid.UUID, filename string, size int64) (uuid.UUID, string, error) {
-	if !scan.IsAudioName(filename) {
+	if !scan.IsUploadName(filename) {
 		return uuid.Nil, "", fmt.Errorf("unsupported audio type")
 	}
 	if lib == uuid.Nil {
@@ -142,11 +83,14 @@ func (s *Service) PatchUpload(ctx context.Context, id uuid.UUID, offset int64, r
 	return newOff, err
 }
 
-func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) error {
+func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error), doScan bool) error {
 	var staging, filename string
 	var lib uuid.UUID
 	if err := s.pool.QueryRow(ctx, `SELECT staging_key, filename, library_id FROM upload_sessions WHERE id=$1`, id).Scan(&staging, &filename, &lib); err != nil {
 		return err
+	}
+	if scan.IsZipName(filename) {
+		return s.finishZip(ctx, id, staging, lib, getProv)
 	}
 	f, err := os.Open(staging)
 	if err != nil {
@@ -180,7 +124,18 @@ func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(c
 	}
 	os.Remove(staging)
 	_, _ = s.pool.Exec(ctx, `UPDATE upload_sessions SET state='complete', content_hash=$2 WHERE id=$1`, id, hash)
+	if !doScan {
+		return nil
+	}
 	return s.scanner.ScanLibrary(ctx, libID, prov, path.Join(prefix, "uploads", hash[:2]), "upload", uuid.Nil)
+}
+
+func (s *Service) ScanUploads(ctx context.Context, lib uuid.UUID, getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) error {
+	prov, libID, prefix, err := getProv(ctx, lib)
+	if err != nil {
+		return err
+	}
+	return s.scanner.ScanLibrary(ctx, libID, prov, path.Join(prefix, "uploads"), "upload", uuid.Nil)
 }
 
 type MigratePayload struct {
