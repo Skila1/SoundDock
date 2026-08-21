@@ -253,6 +253,7 @@ func (s *Server) Router() http.Handler {
 					r.Get("/database", s.adminDatabase)
 					r.Get("/jobs", s.adminJobs)
 					r.Post("/jobs/{id}/cancel", s.cancelJob)
+					r.Get("/scans", s.adminScans)
 					r.Get("/users", s.adminUsers)
 					r.Post("/users", s.adminCreateUser)
 					r.Get("/users/{id}", s.adminGetUser)

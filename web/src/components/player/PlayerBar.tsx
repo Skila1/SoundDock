@@ -92,7 +92,7 @@ export function PlayerBar() {
   }, [p.sleepUntil]);
 
   return (
-    <footer className="grid h-[72px] shrink-0 grid-cols-[1fr_auto] items-center gap-3 overflow-hidden border-t border-border bg-surface-1/90 px-3 backdrop-blur md:grid-cols-[minmax(160px,1fr)_minmax(240px,2fr)_minmax(200px,1fr)] md:px-4">
+    <footer className="grid h-[72px] shrink-0 grid-cols-[1fr_auto] items-center gap-3 overflow-x-hidden border-t border-border bg-surface-1/90 px-3 backdrop-blur md:grid-cols-[minmax(160px,1fr)_minmax(240px,2fr)_minmax(200px,1fr)] md:px-4">
       <button className="flex min-w-0 items-center gap-3 text-left" onClick={() => ui.set({ nowPlayingOpen: true })}>
         <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md bg-surface-2">
           {t && <Artwork src={artworkUrl("track", t.id, "thumb")} id={t.id} name={t.title} kind="track" />}

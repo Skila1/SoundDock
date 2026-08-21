@@ -44,9 +44,11 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ steps.ver.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=sounddock-image
+          cache-to: type=gha,mode=max,scope=sounddock-image

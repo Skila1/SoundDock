@@ -166,7 +166,7 @@ func TestMigrateUpEmpty(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	if v != 8 {
+	if v != 9 {
 		t.Fatalf("version %d", v)
 	}
 }

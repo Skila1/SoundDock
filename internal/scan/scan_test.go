@@ -14,6 +14,24 @@ func TestSkipScanKey(t *testing.T) {
 	}
 }
 
+func TestProgressPct(t *testing.T) {
+	if ProgressPct(0, 0) != 100 {
+		t.Fatal("empty")
+	}
+	if ProgressPct(0, 10) != 1 {
+		t.Fatal("listed")
+	}
+	if ProgressPct(5, 10) != 50 {
+		t.Fatal("half")
+	}
+	if ProgressPct(10, 10) != 100 {
+		t.Fatal("done")
+	}
+	if ProgressPct(99, 100) != 99 {
+		t.Fatal("hold 100 until finished")
+	}
+}
+
 func TestHashStorageKey(t *testing.T) {
 	hash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	got := HashStorageKey("", hash, ".flac")

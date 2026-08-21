@@ -7,6 +7,15 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { usePlayer } from "@/stores/player";
 import { listAudioOutputs } from "@/components/player/audioEngine";
 
+function bumpVolume(deltaY: number) {
+  const delta = deltaY || 0;
+  if (delta === 0) return;
+  const s = usePlayer.getState();
+  const current = s.muted ? 0 : s.volume;
+  const step = 0.05;
+  s.setVolume(current + (delta < 0 ? step : -step));
+}
+
 export function VolumeControl() {
   const volume = usePlayer((s) => s.volume);
   const muted = usePlayer((s) => s.muted);
@@ -25,14 +34,11 @@ export function VolumeControl() {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      e.stopPropagation();
-      if (e.deltaY === 0) return;
-      const step = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 0.05 : Math.min(0.08, Math.max(0.02, Math.abs(e.deltaY) * 0.0008));
-      const { volume, setVolume } = usePlayer.getState();
-      setVolume(volume + (e.deltaY < 0 ? step : -step));
+      e.stopImmediatePropagation();
+      bumpVolume(e.deltaY !== 0 ? e.deltaY : e.deltaX);
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
-    return () => el.removeEventListener("wheel", onWheel);
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
+    return () => el.removeEventListener("wheel", onWheel, { capture: true });
   }, []);
 
   useEffect(() => {
@@ -40,7 +46,11 @@ export function VolumeControl() {
   }, []);
 
   return (
-    <div ref={wrap} className="hidden items-center gap-1 md:flex">
+    <div
+      ref={wrap}
+      className="hidden items-center gap-1 rounded-xl px-2.5 py-1.5 transition-colors hover:bg-white/15 md:flex"
+      style={{ overscrollBehavior: "contain" }}
+    >
       <Tooltip label={muted ? "Unmute" : `Volume ${pct}%`}>
         <Button size="icon" variant="ghost" onClick={toggleMute} aria-label={muted ? "Unmute" : "Mute"}>
           <Icon />

@@ -16,11 +16,16 @@ bin
 web/node_modules
 web/dist
 
-# Docs / IDE
+# Docs / IDE / agent
 .idea
 .vscode
+.cursor
+.cursorignore
 *.md
 docs
 installer
 tests
+testdata
+contracts
 agent-transcripts
+AGENTS.md

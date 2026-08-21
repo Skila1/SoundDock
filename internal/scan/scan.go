@@ -62,7 +62,10 @@ func (s *Scanner) ScanLibrary(ctx context.Context, libID uuid.UUID, prov storage
 	if jobID == uuid.Nil {
 		err = s.pool.QueryRow(ctx, `INSERT INTO scan_runs (library_id, kind) VALUES ($1,$2) RETURNING id`, libID, kind).Scan(&runID)
 	} else {
-		err = s.pool.QueryRow(ctx, `INSERT INTO scan_runs (library_id, job_id, kind) VALUES ($1,$2,$3) RETURNING id`, libID, jobID, kind).Scan(&runID)
+		err = s.pool.QueryRow(ctx, `SELECT id FROM scan_runs WHERE job_id=$1`, jobID).Scan(&runID)
+		if err != nil {
+			err = s.pool.QueryRow(ctx, `INSERT INTO scan_runs (library_id, job_id, kind) VALUES ($1,$2,$3) RETURNING id`, libID, jobID, kind).Scan(&runID)
+		}
 	}
 	if err != nil {
 		return err
@@ -71,32 +74,83 @@ func (s *Scanner) ScanLibrary(ctx context.Context, libID uuid.UUID, prov storage
 	if err != nil {
 		return err
 	}
-	defer it.Close()
-	var added, failed, seenN int
-	known := s.knownArtistFn(ctx)
+	var files []storage.Entry
 	for it.Next() {
 		e := it.Entry()
 		if e.IsDir || SkipScanKey(e.Key) || !IsAudioExt(strings.ToLower(path.Ext(e.Key))) {
 			continue
+		}
+		files = append(files, storage.Entry{Key: e.Key, Size: e.Size, ModTime: e.ModTime, ETag: e.ETag})
+	}
+	listErr := it.Err()
+	_ = it.Close()
+	if listErr != nil {
+		return listErr
+	}
+	total := len(files)
+	s.reportScan(ctx, jobID, runID, 0, total, 0, 0)
+	var added, failed, seenN int
+	known := s.knownArtistFn(ctx)
+	for _, e := range files {
+		if ctx.Err() != nil {
+			break
+		}
+		if jobID != uuid.Nil && seenN%25 == 24 {
+			var cancel bool
+			_ = s.pool.QueryRow(ctx, `SELECT cancel_requested FROM jobs WHERE id=$1`, jobID).Scan(&cancel)
+			if cancel {
+				break
+			}
 		}
 		seenN++
 		if err := s.ingestFile(ctx, libID, prov, e, e.Key, known); err != nil {
 			failed++
 			_, _ = s.pool.Exec(ctx, `INSERT INTO scan_file_errors (scan_run_id, storage_key, error) VALUES ($1,$2,$3)`, runID, e.Key, err.Error())
 			s.log.Warn("scan file failed", "key", e.Key, "err", err)
-			continue
+		} else {
+			added++
 		}
-		added++
+		if seenN == total || seenN%5 == 0 {
+			s.reportScan(ctx, jobID, runID, seenN, total, added, failed)
+		}
 	}
-	if err := it.Err(); err != nil {
-		return err
-	}
-	_, _ = s.pool.Exec(ctx, `UPDATE scan_runs SET files_seen=$2, files_added=$3, files_failed=$4, finished_at=now() WHERE id=$1`,
-		runID, seenN, added, failed)
+	s.reportScan(ctx, jobID, runID, seenN, total, added, failed)
+	_, _ = s.pool.Exec(ctx, `UPDATE scan_runs SET files_seen=$2, files_added=$3, files_failed=$4, files_total=$5, finished_at=now() WHERE id=$1`,
+		runID, seenN, added, failed, total)
 	if s.hook != nil {
 		s.hook.Emit(ctx, "library.scan.completed", map[string]any{"library_id": libID, "seen": seenN, "failed": failed})
 	}
 	return nil
+}
+
+func (s *Scanner) reportScan(ctx context.Context, jobID, runID uuid.UUID, done, total, added, failed int) {
+	pct := ProgressPct(done, total)
+	if jobID != uuid.Nil {
+		_, _ = s.pool.Exec(ctx, `UPDATE jobs SET progress=$2, updated_at=now() WHERE id=$1`, jobID, pct)
+	}
+	_, _ = s.pool.Exec(ctx, `UPDATE scan_runs SET files_seen=$2, files_added=$3, files_failed=$4, files_total=$5 WHERE id=$1`,
+		runID, done, added, failed, total)
+}
+
+// ProgressPct is 1–99 while work remains so the bar moves as soon as listing finishes.
+func ProgressPct(done, total int) int {
+	if total <= 0 {
+		return 100
+	}
+	if done <= 0 {
+		return 1
+	}
+	if done >= total {
+		return 100
+	}
+	pct := done * 100 / total
+	if pct < 1 {
+		return 1
+	}
+	if pct > 99 {
+		return 99
+	}
+	return pct
 }
 
 func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, e storage.Entry, originalName string, known func(string) bool) error {

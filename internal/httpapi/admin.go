@@ -64,6 +64,28 @@ func (s *Server) adminJobs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, scanMaps(rows, "id", "type", "status", "progress", "last_error", "created_at"))
 }
 
+func (s *Server) adminScans(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.Pool.Query(r.Context(), `
+		SELECT sr.id, sr.library_id, sr.job_id, sr.kind,
+			sr.files_seen, sr.files_added, sr.files_failed, sr.files_total,
+			sr.started_at, sr.finished_at,
+			coalesce(j.status, CASE WHEN sr.finished_at IS NULL THEN 'running' ELSE 'completed' END),
+			coalesce(j.progress, CASE WHEN sr.finished_at IS NULL THEN 0 ELSE 100 END),
+			j.last_error
+		FROM scan_runs sr
+		LEFT JOIN jobs j ON j.id = sr.job_id
+		WHERE sr.kind IN ('full', 'upload')
+		  AND (sr.finished_at IS NULL OR sr.started_at > now() - interval '6 hours')
+		ORDER BY sr.started_at DESC
+		LIMIT 80`)
+	if err != nil {
+		writeErr(w, 500, "scan", err.Error())
+		return
+	}
+	defer rows.Close()
+	writeJSON(w, 200, scanMaps(rows, "id", "library_id", "job_id", "kind", "files_seen", "files_added", "files_failed", "files_total", "started_at", "finished_at", "status", "progress", "last_error"))
+}
+
 func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
 	_ = s.Jobs.RequestCancel(r.Context(), id)
@@ -338,6 +360,7 @@ func (s *Server) adminScan(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "job", err.Error())
 		return
 	}
+	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO scan_runs (library_id, job_id, kind) VALUES ($1,$2,'full')`, id, jid)
 	writeJSON(w, 202, map[string]any{"job_id": jid})
 }
 

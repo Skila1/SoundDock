@@ -44,6 +44,7 @@ func TestWave1RoutesRegistered(t *testing.T) {
 		"GET /api/v1/admin/maintenance",
 		"GET /api/v1/admin/stream-policy",
 		"GET /api/v1/admin/library/health",
+		"GET /api/v1/admin/scans",
 		"GET /healthz",
 		"GET /api/v1/tracks/{id}/stream",
 	}

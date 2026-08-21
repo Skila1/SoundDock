@@ -7,10 +7,12 @@ import { EmptyState, PageHeader } from "@/components/ui/empty";
 import type { Library } from "@/types/api";
 import { toast } from "sonner";
 import type { User } from "@/types/api";
+import { ScanProgressBar, latestScan, scanActive, useScanRuns } from "@/features/library/ScanProgress";
 
 export function LibrariesPage({ user }: { user: User }) {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["libraries"], queryFn: () => api.get<Library[]>("/api/v1/libraries") });
+  const scans = useScanRuns(!!user.is_admin);
   return (
     <div>
       <PageHeader title="Libraries" description="Local folders, object storage, and managed collections." />
@@ -29,9 +31,23 @@ export function LibrariesPage({ user }: { user: User }) {
             </div>
             <p className="mt-4 text-2xl font-semibold">{l.track_count ?? "-"} <span className="text-sm font-normal text-muted">tracks</span></p>
             {user.is_admin && (
-              <div className="mt-4 flex gap-2">
-                <Button size="sm" variant="secondary" onClick={() => api.post(`/api/v1/admin/libraries/${l.id}/scan`).then(() => toast.success("Scan started"))}>Scan</Button>
-                <Button size="sm" variant="ghost" onClick={() => api.post(`/api/v1/admin/libraries/${l.id}/migrate`).then(() => { toast.success("Migration started"); qc.invalidateQueries({ queryKey: ["libraries"] }); })}>Migrate</Button>
+              <div className="mt-4">
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={scanActive(latestScan(scans.data, l.id))}
+                    onClick={async () => {
+                      await api.post(`/api/v1/admin/libraries/${l.id}/scan`);
+                      toast.success("Scan started");
+                      scans.refetch();
+                    }}
+                  >
+                    {scanActive(latestScan(scans.data, l.id)) ? "Scanning…" : "Scan"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => api.post(`/api/v1/admin/libraries/${l.id}/migrate`).then(() => { toast.success("Migration started"); qc.invalidateQueries({ queryKey: ["libraries"] }); })}>Migrate</Button>
+                </div>
+                <ScanProgressBar scan={latestScan(scans.data, l.id)} />
               </div>
             )}
           </article>

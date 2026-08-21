@@ -3,27 +3,44 @@
 FROM node:24-alpine AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund
 COPY web/ ./
-RUN npm run build
+RUN --mount=type=cache,target=/root/.npm \
+    npm run build
 
 FROM golang:1.24-bookworm AS build
 WORKDIR /src
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
+    && apt-get update && apt-get install -y --no-install-recommends git ca-certificates
 COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+COPY migrations ./migrations
+COPY openapi ./openapi
+COPY web/embed.go ./web/embed.go
+COPY VERSION ./
 COPY --from=web /src/web/dist ./web/dist
 ARG VERSION
-RUN ver="${VERSION}"; \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    ver="${VERSION}"; \
     if [ -z "${ver}" ] && [ -f VERSION ]; then ver="$(tr -d '[:space:]' < VERSION)"; fi; \
     if [ -z "${ver}" ]; then ver=0.0.1; fi; \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/sounddock/sounddock/internal/version.Version=${ver}" -o /out/sounddock ./cmd/sounddock
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates ffmpeg wget libopus0 \
-    && rm -rf /var/lib/apt/lists/* \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean \
+    && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates ffmpeg wget libopus0 \
     && useradd --system --home /data --uid 1000 sounddock \
     && mkdir -p /data/cache /data/backups /data/managed /libraries \
     && chown -R sounddock:sounddock /data /libraries

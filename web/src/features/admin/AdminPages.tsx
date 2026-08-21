@@ -12,6 +12,7 @@ import { relativeTime } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { User } from "@/types/api";
+import { ScanProgressBar, latestScan, scanActive, useScanRuns } from "@/features/library/ScanProgress";
 
 type AdminUserRow = {
   id: string;
@@ -271,21 +272,39 @@ export function AdminLibraries() {
   const qc = useQueryClient();
   const libs = useQuery({ queryKey: ["libraries"], queryFn: () => api.get<any[]>("/api/v1/libraries") });
   const storage = useQuery({ queryKey: ["admin-storage"], queryFn: () => api.get<any[]>("/api/v1/admin/storage") });
+  const scans = useScanRuns();
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ name: "", storage_id: "", kind: "music", organisation_mode: "virtual" });
   return (
     <div>
       <PageHeader title="Libraries" actions={<Button onClick={() => setOpen(true)}>Create library</Button>} />
       <div className="space-y-3">
-        {(libs.data || []).map((l) => (
-          <div key={l.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface-1 p-4">
-            <div>
-              <div className="font-semibold">{l.name}</div>
-              <div className="text-xs text-muted">{l.kind} · {l.organisation_mode} · {l.track_count ?? 0} tracks</div>
+        {(libs.data || []).map((l) => {
+          const scan = latestScan(scans.data, l.id);
+          const busy = scanActive(scan);
+          return (
+            <div key={l.id} className="rounded-xl border border-border bg-surface-1 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="font-semibold">{l.name}</div>
+                  <div className="text-xs text-muted">{l.kind} · {l.organisation_mode} · {l.track_count ?? 0} tracks</div>
+                </div>
+                <Button
+                  size="sm"
+                  disabled={busy}
+                  onClick={async () => {
+                    await api.post(`/api/v1/admin/libraries/${l.id}/scan`);
+                    toast.success("Scan started");
+                    scans.refetch();
+                  }}
+                >
+                  {busy ? "Scanning…" : "Scan"}
+                </Button>
+              </div>
+              <ScanProgressBar scan={scan} />
             </div>
-            <Button size="sm" onClick={() => api.post(`/api/v1/admin/libraries/${l.id}/scan`).then(() => toast.success("Scan started"))}>Scan</Button>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent title="Create library">
