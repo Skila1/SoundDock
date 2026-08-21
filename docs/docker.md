@@ -17,9 +17,10 @@ or copy `docker-compose.yml` + `.env` and run `docker compose pull && docker com
 Profiles:
 
 - `discord`: `sounddock discord` worker
-- `cloudflare`: official `cloudflare/cloudflared` image
 - `redis`
 - `search` (Meilisearch)
+
+Cloudflare Tunnel is installed by the installer as a **systemd** service (`cloudflared`), not a Compose profile. Origin: `http://localhost:8080`.
 
 Health: `/healthz`, `/readyz`. Stop grace period is 45s for FFmpeg and Discord drain.
 

@@ -78,17 +78,6 @@ services:
     networks:
       - sounddock
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    profiles: ["cloudflare"]
-    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:-}
-    depends_on:
-      sounddock:
-        condition: service_healthy
-    networks:
-      - sounddock
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped

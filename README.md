@@ -52,8 +52,9 @@ docker compose up -d --build
 
 Production hosts should `docker compose pull && docker compose up -d` so they use `ghcr.io/skila1/sounddock:latest` instead of cloning.
 
-Discord bot worker: `docker compose --profile discord up -d`  
-Cloudflare Tunnel: `docker compose --profile cloudflare up -d`
+Discord bot worker: `docker compose --profile discord up -d`
+
+Cloudflare Tunnel is a **systemd** service (`cloudflared`), not Compose. Point the tunnel at `http://localhost:8080`.
 
 ```bash
 # PostgreSQL 16, then:

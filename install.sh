@@ -149,6 +149,60 @@ install_docker() {
   msg_ok "Docker installed"
 }
 
+install_cloudflared_pkg() {
+  if command -v cloudflared >/dev/null 2>&1; then
+    return
+  fi
+  msg_info "Installing cloudflared"
+  local os arch deb rpm bin
+  os="$(detect_os)"
+  arch="$(uname -m)"
+  case "$arch" in
+    aarch64|arm64) deb="cloudflared-linux-arm64.deb"; rpm="cloudflared-linux-aarch64.rpm"; bin="cloudflared-linux-arm64" ;;
+    *) deb="cloudflared-linux-amd64.deb"; rpm="cloudflared-linux-x86_64.rpm"; bin="cloudflared-linux-amd64" ;;
+  esac
+  case "$os" in
+    ubuntu|debian)
+      curl -fsSL -o /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/${deb}"
+      dpkg -i /tmp/cloudflared.deb || apt-get install -y -f
+      rm -f /tmp/cloudflared.deb
+      ;;
+    fedora|rhel|centos)
+      curl -fsSL -o /tmp/cloudflared.rpm "https://github.com/cloudflare/cloudflared/releases/latest/download/${rpm}"
+      rpm -i /tmp/cloudflared.rpm || dnf install -y /tmp/cloudflared.rpm || yum install -y /tmp/cloudflared.rpm
+      rm -f /tmp/cloudflared.rpm
+      ;;
+    *)
+      curl -fsSL -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/${bin}"
+      chmod 0755 /usr/local/bin/cloudflared
+      ;;
+  esac
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    msg_err "cloudflared is not on PATH after install."
+    exit 1
+  fi
+  msg_ok "cloudflared installed"
+}
+
+install_cloudflared_service() {
+  local token="${1:-}"
+  if [[ -z "${token}" ]]; then
+    return
+  fi
+  install_cloudflared_pkg
+  if [[ -f "${PREFIX}/docker-compose.yml" ]]; then
+    (cd "${PREFIX}" && ${COMPOSE} stop cloudflared >/dev/null 2>&1 || true)
+    (cd "${PREFIX}" && ${COMPOSE} rm -f cloudflared >/dev/null 2>&1 || true)
+  fi
+  if systemctl list-unit-files --type=service 2>/dev/null | grep -q '^cloudflared\.service'; then
+    cloudflared service uninstall >/dev/null 2>&1 || true
+  fi
+  msg_info "Installing cloudflared systemd service"
+  cloudflared service install "${token}"
+  systemctl enable --now cloudflared
+  msg_ok "cloudflared is running as a systemd service (origin: http://localhost:8080)"
+}
+
 rand() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -base64 36 | tr -d '\n/=+' | head -c 48
@@ -185,12 +239,12 @@ collect_config() {
   CFG_LIBHOST="$(ui_input "Library folder" "Host folder mounted read-only at /libraries inside the container." "${CFG_LIBHOST}")" || exit 0
   CFG_LIBHOST="${CFG_LIBHOST:-${PREFIX}/libraries}"
 
-  if ui_yesno "Cloudflare Tunnel" "Add a Cloudflare Tunnel token now?\n\nThis is how you get a public URL. Select No to use the host port only." 12; then
-    CFG_CFTOK="$(ui_pass "Tunnel token" "Cloudflare Tunnel token.")" || exit 0
+  if ui_yesno "Cloudflare Tunnel" "Install cloudflared as a systemd service now?\n\nNot Docker. Point the tunnel at http://localhost:8080 (Docker publishes that port on the host)." 13; then
+    CFG_CFTOK="$(ui_pass "Tunnel token" "Cloudflare Tunnel token from Zero Trust.")" || exit 0
   fi
 
   local summary
-  summary="Compose project: ${PREFIX}\nHost port: 8080\nLibraries: ${CFG_LIBHOST}\nCloudflare Tunnel: $([[ -n "${CFG_CFTOK}" ]] && echo yes || echo no)\n\nFirst visit: create a local administrator in the browser.\nDiscord is set up later under Admin."
+  summary="Compose project: ${PREFIX}\nFiles: docker-compose.yml and .env\nHost port: 8080\nLibraries: ${CFG_LIBHOST}\ncloudflared systemd: $([[ -n "${CFG_CFTOK}" ]] && echo yes || echo no)\n\nFirst visit: create a local administrator in the browser.\nDiscord is set up later under Admin."
   if ! ui_yesno "Ready" "${summary}\n\nStart install?" 16; then
     echo "Cancelled."
     exit 0
@@ -245,6 +299,11 @@ case "\$cmd" in
     echo
     if [[ -f "\${PREFIX}/docker-compose.yml" ]]; then
       cd "\${PREFIX}" && \${COMPOSE} ps
+    else
+      echo "Missing \${PREFIX}/docker-compose.yml"
+    fi
+    if command -v cloudflared >/dev/null 2>&1; then
+      systemctl is-active cloudflared || true
     fi
     ;;
   install)
@@ -262,6 +321,7 @@ EOF
 }
 
 write_compose() {
+  mkdir -p "${PREFIX}"
   cat > "${PREFIX}/docker-compose.yml" <<EOF
 name: sounddock
 
@@ -327,16 +387,6 @@ services:
       - \${SD_LIBRARY_HOST:-./libraries}:/libraries:ro
     networks: [sounddock]
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    restart: unless-stopped
-    profiles: ["cloudflare"]
-    command: tunnel --no-autoupdate run --token \${CLOUDFLARE_TUNNEL_TOKEN:-}
-    depends_on:
-      sounddock:
-        condition: service_healthy
-    networks: [sounddock]
-
 volumes:
   postgres_data:
   sounddock_data:
@@ -345,6 +395,7 @@ networks:
   sounddock:
     driver: bridge
 EOF
+  chmod 0644 "${PREFIX}/docker-compose.yml"
 }
 
 save_installer() {
@@ -410,41 +461,49 @@ EOF
     chmod 0600 "${PREFIX}/.env"
   fi
 
-  if [[ -n "${CFG_CFTOK}" ]]; then
-    grep -q '^CLOUDFLARE_TUNNEL_TOKEN=' "${PREFIX}/.env" && \
-      sed -i.bak -e "s|^CLOUDFLARE_TUNNEL_TOKEN=.*|CLOUDFLARE_TUNNEL_TOKEN=${CFG_CFTOK}|" "${PREFIX}/.env" || \
-      echo "CLOUDFLARE_TUNNEL_TOKEN=${CFG_CFTOK}" >> "${PREFIX}/.env"
+  if [[ ! -f "${PREFIX}/docker-compose.yml" || ! -f "${PREFIX}/.env" ]]; then
+    msg_err "Failed to write ${PREFIX}/docker-compose.yml and ${PREFIX}/.env"
+    exit 1
   fi
+  msg_ok "Wrote ${PREFIX}/docker-compose.yml and ${PREFIX}/.env"
 
-  local profiles=()
-  if [[ -n "${CFG_CFTOK}" ]] || grep -q '^CLOUDFLARE_TUNNEL_TOKEN=.\+' "${PREFIX}/.env" 2>/dev/null; then
-    profiles+=(cloudflare)
-  fi
-  local profile_csv=""
-  if [[ ${#profiles[@]} -gt 0 ]]; then
-    profile_csv="$(IFS=,; echo "${profiles[*]}")"
-    if grep -q '^COMPOSE_PROFILES=' "${PREFIX}/.env"; then
-      sed -i.bak -e "s|^COMPOSE_PROFILES=.*|COMPOSE_PROFILES=${profile_csv}|" "${PREFIX}/.env"
-    else
-      echo "COMPOSE_PROFILES=${profile_csv}" >> "${PREFIX}/.env"
-    fi
+  if grep -q '^COMPOSE_PROFILES=.*cloudflare' "${PREFIX}/.env" 2>/dev/null; then
+    sed -i.bak -e '/^COMPOSE_PROFILES=/d' "${PREFIX}/.env" || true
   fi
 
   cd "${PREFIX}"
   msg_info "Pulling ${IMAGE} in ${PREFIX}"
-  ${COMPOSE} pull
-  ${COMPOSE} up -d
+  ${COMPOSE} -f "${PREFIX}/docker-compose.yml" --env-file "${PREFIX}/.env" pull
+  ${COMPOSE} -f "${PREFIX}/docker-compose.yml" --env-file "${PREFIX}/.env" up -d
   msg_ok "SoundDock is starting"
 
-  local done
-  done="Compose project: ${PREFIX}\nHost port: 8080\n\nOpen http://<this-host>:8080 and create the first administrator.\nConfigure Discord later under Admin.\n\ncd ${PREFIX}\ndocker compose ps\ndocker compose logs -f\ndocker compose down\ndocker compose up -d"
+  local i
+  for i in $(seq 1 30); do
+    if curl -fsS http://127.0.0.1:8080/healthz >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
+
+  install_cloudflared_service "${CFG_CFTOK}"
+
+  local extra=""
+  if [[ -n "${CFG_CFTOK}" ]]; then
+    extra="\ncloudflared: systemd (sudo systemctl status cloudflared)\nTunnel origin: http://localhost:8080"
+  fi
+  local done="Compose project: ${PREFIX}\n  docker-compose.yml\n  .env\nHost port: 8080${extra}\n\nOpen http://<this-host>:8080 and create the first administrator.\n\ncd ${PREFIX}\ndocker compose ps"
   if ui_ok; then
     ui_msg "Installed" "${done}" 18 || true
   fi
   echo
-  echo -e " ${BOLD}${BL}SoundDock is a Docker Compose project in ${PREFIX}${CL}"
+  echo -e " ${BOLD}${BL}SoundDock files are in ${PREFIX}${CL}"
+  echo "  ${PREFIX}/docker-compose.yml"
+  echo "  ${PREFIX}/.env"
   echo "  Open http://<this-host>:8080 and create the first administrator."
   echo "  Discord is configured in Admin after you log in."
+  if [[ -n "${CFG_CFTOK}" ]]; then
+    echo "  cloudflared: systemctl status cloudflared"
+  fi
   echo
   echo "  cd ${PREFIX}"
   echo "  docker compose ps"
@@ -470,6 +529,9 @@ cmd_uninstall() {
     ${COMPOSE} down -v
     rm -rf "${PREFIX}"
     rm -f /usr/local/bin/sounddock
+    if command -v cloudflared >/dev/null 2>&1; then
+      cloudflared service uninstall >/dev/null 2>&1 || true
+    fi
   else
     echo "Data kept in ${PREFIX}/data (pass --purge to delete)."
   fi
@@ -481,6 +543,11 @@ cmd_doctor() {
   echo
   if [[ -f "${PREFIX}/docker-compose.yml" ]]; then
     cd "${PREFIX}" && ${COMPOSE} ps
+  else
+    echo "Missing ${PREFIX}/docker-compose.yml"
+  fi
+  if command -v cloudflared >/dev/null 2>&1; then
+    systemctl is-active cloudflared || true
   fi
 }
 

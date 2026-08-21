@@ -609,7 +609,7 @@ export function AdminCloudflare() {
       <PageHeader title="Cloudflare" description="Trusted proxy headers are applied when SoundDock sits behind Cloudflare Tunnel or another reverse proxy." />
       <div className="rounded-xl border border-border bg-surface-1 p-5 text-sm text-muted">
         <p>If you terminate TLS at Cloudflare, set the instance public URL and cookie security in server configuration. Client IP and proto are read from <code>CF-Connecting-IP</code> and <code>X-Forwarded-Proto</code> when present.</p>
-        <p className="mt-3">There is nothing to store in the database for Cloudflare itself. Tunnel tokens stay with your host or Compose environment.</p>
+        <p className="mt-3">There is nothing to store in the database for Cloudflare itself. Install cloudflared as a systemd service on the host. Point the tunnel at http://localhost:8080.</p>
       </div>
     </div>
   );
