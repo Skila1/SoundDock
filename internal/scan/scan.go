@@ -22,11 +22,6 @@ import (
 	"github.com/sounddock/sounddock/internal/webhooks"
 )
 
-var audioExt = map[string]bool{
-	".mp3": true, ".flac": true, ".aac": true, ".m4a": true, ".alac": true,
-	".ogg": true, ".opus": true, ".wav": true, ".oga": true,
-}
-
 type Scanner struct {
 	pool *pgxpool.Pool
 	art  *artwork.Store
@@ -70,7 +65,7 @@ func (s *Scanner) ScanLibrary(ctx context.Context, libID uuid.UUID, prov storage
 	var added, failed, seenN int
 	for it.Next() {
 		e := it.Entry()
-		if e.IsDir || !audioExt[strings.ToLower(path.Ext(e.Key))] {
+		if e.IsDir || !IsAudioExt(strings.ToLower(path.Ext(e.Key))) {
 			continue
 		}
 		seenN++

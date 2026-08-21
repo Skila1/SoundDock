@@ -1,38 +1,38 @@
 import { useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleAlert, FileAudio, Upload as Up } from "lucide-react";
 import { api } from "@/lib/api";
+import { AUDIO_ACCEPT, isAudioFile } from "@/lib/audio";
 import { Button } from "@/components/ui/button";
-import { Select } from "@/components/ui/select";
 import { Progress } from "@/components/ui/misc";
 import { PageHeader } from "@/components/ui/empty";
-import type { Library } from "@/types/api";
 import { toast } from "sonner";
 
 type Item = { file: File; status: "queued" | "uploading" | "done" | "error"; progress: number; error?: string };
 
 export function UploadPage() {
-  const libs = useQuery({ queryKey: ["libraries"], queryFn: () => api.get<Library[]>("/api/v1/libraries") });
-  const writable = (libs.data || []).filter((l) => !l.read_only);
-  const [lib, setLib] = useState("");
+  const qc = useQueryClient();
   const [items, setItems] = useState<Item[]>([]);
   const input = useRef<HTMLInputElement>(null);
   const folder = useRef<HTMLInputElement>(null);
-  const dest = lib || writable[0]?.id || "";
 
   const addFiles = (files: FileList | File[]) => {
-    const next = [...files].filter((f) => /\.(flac|mp3|m4a|ogg|opus|wav|aiff?)$/i.test(f.name));
+    const all = [...files];
+    const next = all.filter(isAudioFile);
+    const skipped = all.length - next.length;
+    if (skipped) toast.error(`Skipped ${skipped} file${skipped === 1 ? "" : "s"} that are not audio`);
+    if (!next.length) return;
     setItems((s) => [...s, ...next.map((file) => ({ file, status: "queued" as const, progress: 0 }))]);
   };
 
   const run = async () => {
-    if (!dest) return toast.error("Choose a destination library");
+    if (!items.some((it) => it.status !== "done")) return toast.error("Add audio files first");
     for (let i = 0; i < items.length; i++) {
       const it = items[i];
       if (it.status === "done") continue;
       setItems((s) => s.map((x, n) => (n === i ? { ...x, status: "uploading" } : x)));
       try {
-        const created = await api.post<{ id: string }>(`/api/v1/uploads`, { filename: it.file.name, size: it.file.size, library_id: dest });
+        const created = await api.post<{ id: string }>(`/api/v1/uploads`, { filename: it.file.name, size: it.file.size });
         const buf = await it.file.arrayBuffer();
         await fetch(`/api/v1/uploads/${created.id}`, {
           method: "PATCH",
@@ -46,6 +46,8 @@ export function UploadPage() {
         setItems((s) => s.map((x, n) => (n === i ? { ...x, status: "error", error: e.message } : x)));
       }
     }
+    qc.invalidateQueries({ queryKey: ["home"] });
+    qc.invalidateQueries({ queryKey: ["libraries"] });
     toast.success("Upload completed");
   };
 
@@ -53,10 +55,7 @@ export function UploadPage() {
 
   return (
     <div>
-      <PageHeader title="Upload" description="Drop files into a writable library. SoundDock will scan tags and artwork after complete." />
-      <div className="mb-4 max-w-sm">
-        <Select value={dest} onValueChange={setLib} options={writable.map((l) => ({ value: l.id, label: l.name }))} placeholder="Destination library" />
-      </div>
+      <PageHeader title="Upload" description="Drop audio files. SoundDock reads tags and artwork after they land." />
       <div
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files); }}
@@ -65,13 +64,13 @@ export function UploadPage() {
       >
         <Up className="mb-2 h-8 w-8 text-accent" />
         <p className="font-medium">Drop audio files here</p>
-        <p className="text-sm text-muted">FLAC, MP3, M4A, Ogg, Opus, WAV</p>
+        <p className="text-sm text-muted">FLAC, MP3, M4A, Ogg, Opus, WAV, AIFF</p>
         <div className="mt-3 flex gap-2">
           <Button type="button" size="sm" onClick={(e) => { e.stopPropagation(); input.current?.click(); }}>Choose files</Button>
           <Button type="button" size="sm" variant="secondary" onClick={(e) => { e.stopPropagation(); folder.current?.click(); }}>Choose folder</Button>
         </div>
-        <input ref={input} type="file" multiple hidden onChange={(e) => e.target.files && addFiles(e.target.files)} />
-        <input ref={folder} type="file" multiple hidden {...({ webkitdirectory: "" } as any)} onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        <input ref={input} type="file" multiple hidden accept={AUDIO_ACCEPT} onChange={(e) => e.target.files && addFiles(e.target.files)} />
+        <input ref={folder} type="file" multiple hidden accept={AUDIO_ACCEPT} {...({ webkitdirectory: "" } as any)} onChange={(e) => e.target.files && addFiles(e.target.files)} />
       </div>
       {items.length > 0 && (
         <div className="mt-6 rounded-xl border border-border bg-surface-1 p-4">

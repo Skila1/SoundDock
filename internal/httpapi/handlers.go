@@ -17,6 +17,7 @@ import (
 	"github.com/sounddock/sounddock/internal/external"
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/opensubsonic"
+	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/stream"
 )
 
@@ -424,7 +425,7 @@ func (s *Server) getArtist(w http.ResponseWriter, r *http.Request) {
 	defer trows.Close()
 	writeJSON(w, 200, map[string]any{
 		"id": id, "name": name, "albums": albums,
-		"tracks": scanMaps(trows, "id", "title", "duration_ms", "album"),
+		"tracks":      scanMaps(trows, "id", "title", "duration_ms", "album"),
 		"artwork_url": "/api/v1/artists/" + id.String() + "/artwork?size=page",
 	})
 }
@@ -579,7 +580,7 @@ func mimeFor(codec, key string) string {
 
 func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
-	if !auth.HasPerm(u, "library.import_url") && !u.IsAdmin {
+	if !auth.HasPerm(u, "library.import_url") && !auth.HasPerm(u, "library.upload") {
 		writeErr(w, 403, "forbidden", "url import not permitted")
 		return
 	}
@@ -588,10 +589,24 @@ func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
+	if strings.TrimSpace(body.URL) == "" {
+		writeErr(w, 400, "invalid", "url is required")
+		return
+	}
 	if external.IsPlaylistURL(body.URL) {
 		writeErr(w, 400, "playlist_url", "Playlist URLs belong in Playlists → Import from URL, not Remote Import. SoundDock will not download streaming-service audio.")
 		return
 	}
+	if ext := scan.ExtFromURL(body.URL); ext != "" && !scan.IsAudioExt(ext) {
+		writeErr(w, 400, "invalid", "URL must point to an audio file (flac, mp3, m4a, ogg, opus, wav)")
+		return
+	}
+	libID, err := s.resolveLibraryID(r.Context(), body.LibraryID)
+	if err != nil {
+		writeErr(w, 500, "library", "could not create a default library")
+		return
+	}
+	body.LibraryID = libID
 	id, err := s.Jobs.Enqueue(r.Context(), "ingest.url", body)
 	if err != nil {
 		writeErr(w, 500, "job", err.Error())
@@ -600,15 +615,40 @@ func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, map[string]any{"job_id": id})
 }
 
+func (s *Server) importJobs(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.Pool.Query(r.Context(), `
+		SELECT id, type, status, progress, last_error, created_at
+		FROM jobs WHERE type='ingest.url' ORDER BY created_at DESC LIMIT 50`)
+	if err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	defer rows.Close()
+	writeJSON(w, 200, scanMaps(rows, "id", "type", "status", "progress", "last_error", "created_at"))
+}
+
 func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
+	if !auth.HasPerm(u, "library.upload") {
+		writeErr(w, 403, "forbidden", "upload not permitted")
+		return
+	}
 	var body struct {
 		LibraryID uuid.UUID `json:"library_id"`
 		Filename  string    `json:"filename"`
 		Size      int64     `json:"size"`
 	}
 	_ = decodeJSON(r, &body)
-	id, _, err := s.Ingest.CreateUpload(r.Context(), u.ID, body.LibraryID, body.Filename, body.Size)
+	if !scan.IsAudioName(body.Filename) {
+		writeErr(w, 400, "invalid", "unsupported audio type")
+		return
+	}
+	libID, err := s.resolveLibraryID(r.Context(), body.LibraryID)
+	if err != nil {
+		writeErr(w, 500, "library", "could not create a default library")
+		return
+	}
+	id, _, err := s.Ingest.CreateUpload(r.Context(), u.ID, libID, body.Filename, body.Size)
 	if err != nil {
 		writeErr(w, 500, "upload", err.Error())
 		return

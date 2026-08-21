@@ -52,11 +52,15 @@ func (s *Service) URLHandler(getProv func(context.Context, uuid.UUID) (storage.S
 		}
 		opt := ssrf.DefaultOptions()
 		opt.MaxBytes = s.maxBytes
-		rc, _, _, err := ssrf.Fetch(ctx, p.URL, opt)
+		rc, ctype, _, err := ssrf.Fetch(ctx, p.URL, opt)
 		if err != nil {
 			return err
 		}
 		defer rc.Close()
+		ext := scan.ResolveAudioExt("", p.URL, ctype)
+		if ext == "" {
+			return fmt.Errorf("URL is not a supported audio file")
+		}
 		tmp, err := os.CreateTemp(s.staging, "url-*")
 		if err != nil {
 			return err
@@ -75,26 +79,23 @@ func (s *Service) URLHandler(getProv func(context.Context, uuid.UUID) (storage.S
 			os.Remove(name)
 			return nil
 		}
-		ext := path.Ext(p.URL)
-		if ext == "" {
-			ext = ".bin"
+		prov, libID, prefix, err := getProv(ctx, p.LibraryID)
+		if err != nil {
+			os.Remove(name)
+			return err
 		}
-		key := path.Join("imports", hash[:2], hash+ext)
+		key := path.Join(prefix, "imports", hash[:2], hash+ext)
 		f, err := os.Open(name)
 		if err != nil {
 			return err
 		}
-		err = s.managed.Write(ctx, key, f, storage.WriteInfo{Size: n})
+		err = prov.Write(ctx, key, f, storage.WriteInfo{Size: n})
 		f.Close()
 		os.Remove(name)
 		if err != nil {
 			return err
 		}
-		prov, libID, _, err := getProv(ctx, p.LibraryID)
-		if err != nil {
-			return err
-		}
-		return s.scanner.ScanLibrary(ctx, libID, prov, "imports/"+hash[:2], "import", job.ID)
+		return s.scanner.ScanLibrary(ctx, libID, prov, path.Join(prefix, "imports", hash[:2]), "import", job.ID)
 	}
 }
 
@@ -103,6 +104,12 @@ type UploadComplete struct {
 }
 
 func (s *Service) CreateUpload(ctx context.Context, user, lib uuid.UUID, filename string, size int64) (uuid.UUID, string, error) {
+	if !scan.IsAudioName(filename) {
+		return uuid.Nil, "", fmt.Errorf("unsupported audio type")
+	}
+	if lib == uuid.Nil {
+		return uuid.Nil, "", fmt.Errorf("library is required")
+	}
 	id := uuid.New()
 	key := filepath.Join(s.staging, id.String())
 	f, err := os.Create(key)
@@ -159,20 +166,21 @@ func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(c
 		_, _ = s.pool.Exec(ctx, `UPDATE upload_sessions SET state='duplicate', content_hash=$2 WHERE id=$1`, id, hash)
 		return nil
 	}
-	key := path.Join("uploads", hash[:2], hash+path.Ext(filename))
+	prov, libID, prefix, err := getProv(ctx, lib)
+	if err != nil {
+		f.Close()
+		return err
+	}
+	key := path.Join(prefix, "uploads", hash[:2], hash+path.Ext(filename))
 	st, _ := f.Stat()
-	err = s.managed.Write(ctx, key, f, storage.WriteInfo{Size: st.Size()})
+	err = prov.Write(ctx, key, f, storage.WriteInfo{Size: st.Size()})
 	f.Close()
 	if err != nil {
 		return err
 	}
 	os.Remove(staging)
 	_, _ = s.pool.Exec(ctx, `UPDATE upload_sessions SET state='complete', content_hash=$2 WHERE id=$1`, id, hash)
-	prov, libID, _, err := getProv(ctx, lib)
-	if err != nil {
-		return err
-	}
-	return s.scanner.ScanLibrary(ctx, libID, prov, "uploads/"+hash[:2], "upload", uuid.Nil)
+	return s.scanner.ScanLibrary(ctx, libID, prov, path.Join(prefix, "uploads", hash[:2]), "upload", uuid.Nil)
 }
 
 type MigratePayload struct {

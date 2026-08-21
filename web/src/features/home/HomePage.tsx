@@ -51,7 +51,7 @@ export function HomePage() {
       <EmptyState
         icon={Disc3}
         title="Your library is empty."
-        description="Upload music or attach a library. Sign-in is Discord-only."
+        description="Upload music or import a file you host. Sign-in is Discord-only."
         action={{ label: "Upload music", onClick: () => nav("/upload") }}
       />
     );
