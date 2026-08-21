@@ -460,11 +460,18 @@ func decodeJSON(r *http.Request, v any) error {
 	return json.NewDecoder(io.LimitReader(r.Body, 8<<20)).Decode(v)
 }
 
+func idsOrEmpty(ids []uuid.UUID) []uuid.UUID {
+	if ids == nil {
+		return []uuid.UUID{}
+	}
+	return ids
+}
+
 func (s *Server) libraryIDs(ctx context.Context, u *auth.User) []uuid.UUID {
 	if u.IsAdmin {
 		rows, err := s.Pool.Query(ctx, `SELECT id FROM libraries`)
 		if err != nil {
-			return nil
+			return []uuid.UUID{}
 		}
 		defer rows.Close()
 		var ids []uuid.UUID
@@ -473,14 +480,14 @@ func (s *Server) libraryIDs(ctx context.Context, u *auth.User) []uuid.UUID {
 			_ = rows.Scan(&id)
 			ids = append(ids, id)
 		}
-		return ids
+		return idsOrEmpty(ids)
 	}
 	rows, err := s.Pool.Query(ctx, `
 		SELECT library_id FROM library_grants WHERE user_id=$1
 		UNION
 		SELECT lg.library_id FROM library_grants lg JOIN user_roles ur ON ur.role_id=lg.role_id WHERE ur.user_id=$1`, u.ID)
 	if err != nil {
-		return nil
+		return []uuid.UUID{}
 	}
 	defer rows.Close()
 	var ids []uuid.UUID
@@ -489,7 +496,7 @@ func (s *Server) libraryIDs(ctx context.Context, u *auth.User) []uuid.UUID {
 		_ = rows.Scan(&id)
 		ids = append(ids, id)
 	}
-	return ids
+	return idsOrEmpty(ids)
 }
 
 func (s *Server) ProviderFor(ctx context.Context, lib uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error) {

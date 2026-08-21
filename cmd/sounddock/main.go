@@ -117,6 +117,7 @@ func main() {
 
 	runner.Register("library.scan", sc.Handler(srv.ProviderFor))
 	runner.Register("ingest.url", ing.URLHandler(srv.ProviderFor))
+	runner.Register("ingest.zip", ing.ZipHandler(srv.ProviderFor))
 	runner.Register("library.migrate", ing.MigrateHandler(srv.ProviderFor))
 	runner.Register("maintenance.retention", retention.Handler(pool))
 	runner.Register("external.playlist.import", external.Handler(pool, box, hooks))

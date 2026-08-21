@@ -54,7 +54,13 @@ func (s *Scanner) Handler(providers func(context.Context, uuid.UUID) (storage.St
 
 func (s *Scanner) ScanLibrary(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, prefix, kind string, jobID uuid.UUID) error {
 	var runID uuid.UUID
-	if err := s.pool.QueryRow(ctx, `INSERT INTO scan_runs (library_id, job_id, kind) VALUES ($1,$2,$3) RETURNING id`, libID, jobID, kind).Scan(&runID); err != nil {
+	var err error
+	if jobID == uuid.Nil {
+		err = s.pool.QueryRow(ctx, `INSERT INTO scan_runs (library_id, kind) VALUES ($1,$2) RETURNING id`, libID, kind).Scan(&runID)
+	} else {
+		err = s.pool.QueryRow(ctx, `INSERT INTO scan_runs (library_id, job_id, kind) VALUES ($1,$2,$3) RETURNING id`, libID, jobID, kind).Scan(&runID)
+	}
+	if err != nil {
 		return err
 	}
 	it, err := prov.List(ctx, prefix)
@@ -215,6 +221,14 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		s.hook.Emit(ctx, "track.added", map[string]any{"track_id": trackID, "library_id": libID})
 	}
 	return nil
+}
+
+func (s *Scanner) IngestKey(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, key string) error {
+	info, err := prov.Stat(ctx, key)
+	if err != nil {
+		return err
+	}
+	return s.ingestFile(ctx, libID, prov, storage.Entry{Key: key, Size: info.Size, ModTime: info.ModTime})
 }
 
 func (s *Scanner) upsertArtist(ctx context.Context, name string) (uuid.UUID, error) {

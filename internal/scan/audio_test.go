@@ -25,4 +25,7 @@ func TestExtFromURLIgnoresQuery(t *testing.T) {
 	if IsUploadName("cover.jpg") {
 		t.Fatal("jpg is not an upload")
 	}
+	if !IsZipContentType("application/zip") || IsZipContentType("application/gzip") {
+		t.Fatal("zip content types")
+	}
 }

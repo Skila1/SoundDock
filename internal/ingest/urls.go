@@ -109,13 +109,17 @@ func (s *Service) importURL(ctx context.Context, raw string, libID uuid.UUID, ge
 	}
 	opt := ssrf.DefaultOptions()
 	opt.MaxBytes = s.maxBytes
+	if strings.EqualFold(scan.ExtFromURL(raw), ".zip") {
+		opt.MaxBytes = 2 << 30
+	}
 	rc, ctype, _, err := ssrf.Fetch(ctx, raw, opt)
 	if err != nil {
 		return err
 	}
 	defer rc.Close()
+	isZip := strings.EqualFold(scan.ExtFromURL(raw), ".zip") || scan.IsZipContentType(ctype)
 	ext := scan.ResolveAudioExt("", raw, ctype)
-	if ext == "" {
+	if !isZip && ext == "" {
 		return fmt.Errorf("not a supported audio file")
 	}
 	tmp, err := os.CreateTemp(s.staging, "url-*")
@@ -129,6 +133,21 @@ func (s *Service) importURL(ctx context.Context, raw string, libID uuid.UUID, ge
 	if err != nil {
 		os.Remove(name)
 		return err
+	}
+	if isZip {
+		id := uuid.New()
+		count, root, resolved, prov, err := s.extractZip(ctx, name, id, libID, getProv)
+		if err != nil {
+			os.Remove(name)
+			return err
+		}
+		if count == 0 {
+			return fmt.Errorf("zip contained no audio files")
+		}
+		if s.scanner == nil {
+			return nil
+		}
+		return s.scanner.ScanLibrary(ctx, resolved, prov, root, "import", uuid.Nil)
 	}
 	hash := hex.EncodeToString(hw.Sum(nil))
 	var existing string

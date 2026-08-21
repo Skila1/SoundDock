@@ -90,7 +90,10 @@ func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(c
 		return err
 	}
 	if scan.IsZipName(filename) {
-		return s.finishZip(ctx, id, staging, lib, getProv)
+		if s.pool != nil {
+			_, _ = s.pool.Exec(ctx, `UPDATE upload_sessions SET state='queued' WHERE id=$1`, id)
+		}
+		return ErrZipQueued
 	}
 	f, err := os.Open(staging)
 	if err != nil {
@@ -124,10 +127,11 @@ func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(c
 	}
 	os.Remove(staging)
 	_, _ = s.pool.Exec(ctx, `UPDATE upload_sessions SET state='complete', content_hash=$2 WHERE id=$1`, id, hash)
-	if !doScan {
+	_ = doScan
+	if s.scanner == nil {
 		return nil
 	}
-	return s.scanner.ScanLibrary(ctx, libID, prov, path.Join(prefix, "uploads", hash[:2]), "upload", uuid.Nil)
+	return s.scanner.IngestKey(ctx, libID, prov, key)
 }
 
 func (s *Service) ScanUploads(ctx context.Context, lib uuid.UUID, getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) error {

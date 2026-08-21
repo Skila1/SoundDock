@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -178,7 +179,7 @@ func (s *Server) listTracks(w http.ResponseWriter, r *http.Request) {
 		         FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
 		         WHERE ta.track_id=t.id AND ta.role='primary'),'')
 		FROM tracks t LEFT JOIN albums al ON al.id=t.album_id
-		WHERE t.library_id = ANY($1) ORDER BY t.created_at DESC LIMIT 400`, libs)
+		WHERE t.library_id = ANY($1) ORDER BY t.created_at DESC LIMIT 10000`, libs)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return
@@ -680,6 +681,15 @@ func (s *Server) completeUpload(w http.ResponseWriter, r *http.Request) {
 		doScan = *body.Scan
 	}
 	if err := s.Ingest.FinishUpload(r.Context(), id, s.ProviderFor, doScan); err != nil {
+		if errors.Is(err, ingest.ErrZipQueued) {
+			jid, qerr := s.Jobs.Enqueue(r.Context(), "ingest.zip", ingest.ZipPayload{SessionID: id})
+			if qerr != nil {
+				writeErr(w, 500, "upload", qerr.Error())
+				return
+			}
+			writeJSON(w, 202, map[string]any{"ok": true, "zip": true, "job_id": jid})
+			return
+		}
 		writeErr(w, 500, "upload", err.Error())
 		return
 	}
@@ -697,11 +707,12 @@ func (s *Server) finalizeUploads(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "library", "could not create a default library")
 		return
 	}
-	if err := s.Ingest.ScanUploads(r.Context(), libID, s.ProviderFor); err != nil {
+	id, err := s.Jobs.Enqueue(r.Context(), "library.scan", scan.Payload{LibraryID: libID, Kind: "upload"})
+	if err != nil {
 		writeErr(w, 500, "scan", err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	writeJSON(w, 202, map[string]any{"ok": true, "job_id": id})
 }
 
 func (s *Server) duplicates(w http.ResponseWriter, r *http.Request) {

@@ -92,7 +92,10 @@ export function UploadPage() {
       await api.post("/api/v1/uploads/finalize");
       qc.invalidateQueries({ queryKey: ["home"] });
       qc.invalidateQueries({ queryKey: ["libraries"] });
-      toast.success("Upload completed");
+      qc.invalidateQueries({ queryKey: ["tracks"] });
+      qc.invalidateQueries({ queryKey: ["albums"] });
+      qc.invalidateQueries({ queryKey: ["artists"] });
+      toast.success("Uploaded. SoundDock is adding tracks to your library.");
     } catch (e: any) {
       toast.error(e?.message || "Upload failed");
     } finally {

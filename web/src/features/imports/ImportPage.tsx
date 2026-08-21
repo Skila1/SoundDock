@@ -27,7 +27,7 @@ export function ImportPage() {
 
   return (
     <div>
-      <PageHeader title="Remote Import" description="Paste one or many direct audio URLs, one per line. Streaming-service pages are not fetched." />
+      <PageHeader title="Remote Import" description="Paste one or many direct audio or zip URLs, one per line. Streaming-service pages are not fetched." />
       <form
         className="max-w-xl space-y-4 rounded-xl border border-border bg-surface-1 p-5"
         onSubmit={async (e) => {
@@ -51,7 +51,7 @@ export function ImportPage() {
           }
         }}
       >
-        <Field label="Direct file URLs" hint="One HTTP(S) audio URL per line. Commas work too. Up to 200.">
+        <Field label="Direct file URLs" hint="One HTTP(S) audio or zip URL per line. Commas work too. Up to 200.">
           <Textarea
             className="min-h-36 font-mono text-xs"
             value={url}

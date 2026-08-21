@@ -3,20 +3,29 @@ package ingest
 import (
 	"archive/zip"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/storage"
 )
 
 const (
-	maxZipFiles = 500
-	maxZipBytes = 2 << 30
+	maxZipFiles = 10000
+	maxZipBytes = 32 << 30
 )
+
+var ErrZipQueued = errors.New("zip extract queued")
+
+type ZipPayload struct {
+	SessionID uuid.UUID `json:"session_id"`
+}
 
 func zipSafeName(name string) (string, error) {
 	name = strings.ReplaceAll(name, "\\", "/")
@@ -27,15 +36,58 @@ func zipSafeName(name string) (string, error) {
 	return name, nil
 }
 
-func (s *Service) finishZip(ctx context.Context, sessionID uuid.UUID, staging string, lib uuid.UUID, getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) error {
+func skipZipEntry(rel string) bool {
+	base := path.Base(rel)
+	if base == ".DS_Store" || base == "Thumbs.db" {
+		return true
+	}
+	if strings.HasPrefix(rel, "__MACOSX/") || strings.Contains(rel, "/__MACOSX/") {
+		return true
+	}
+	return false
+}
+
+func (s *Service) ZipHandler(getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) jobs.Handler {
+	return func(ctx context.Context, job jobs.Job) error {
+		var p ZipPayload
+		if err := json.Unmarshal(job.Payload, &p); err != nil {
+			return err
+		}
+		var staging, filename string
+		var lib uuid.UUID
+		if err := s.pool.QueryRow(ctx, `SELECT staging_key, filename, library_id FROM upload_sessions WHERE id=$1`, p.SessionID).Scan(&staging, &filename, &lib); err != nil {
+			return err
+		}
+		return s.finishZip(ctx, p.SessionID, staging, lib, getProv, job.ID)
+	}
+}
+
+func (s *Service) finishZip(ctx context.Context, sessionID uuid.UUID, staging string, lib uuid.UUID, getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error), jobID uuid.UUID) error {
+	n, root, libID, prov, err := s.extractZip(ctx, staging, sessionID, lib, getProv)
+	if err != nil {
+		return err
+	}
+	if s.pool != nil {
+		_, _ = s.pool.Exec(ctx, `UPDATE upload_sessions SET state='complete' WHERE id=$1`, sessionID)
+	}
+	if n == 0 {
+		return fmt.Errorf("zip contained no audio files")
+	}
+	if s.scanner == nil {
+		return nil
+	}
+	return s.scanner.ScanLibrary(ctx, libID, prov, root, "upload", jobID)
+}
+
+func (s *Service) extractZip(ctx context.Context, staging string, sessionID uuid.UUID, lib uuid.UUID, getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) (int, string, uuid.UUID, storage.StorageProvider, error) {
 	zr, err := zip.OpenReader(staging)
 	if err != nil {
-		return fmt.Errorf("not a valid zip")
+		return 0, "", uuid.Nil, nil, fmt.Errorf("not a valid zip")
 	}
 	prov, libID, prefix, err := getProv(ctx, lib)
 	if err != nil {
 		zr.Close()
-		return err
+		return 0, "", uuid.Nil, nil, err
 	}
 	var files int
 	var bytes int64
@@ -45,7 +97,7 @@ func (s *Service) finishZip(ctx context.Context, sessionID uuid.UUID, staging st
 			continue
 		}
 		rel, err := zipSafeName(f.Name)
-		if err != nil {
+		if err != nil || skipZipEntry(rel) {
 			continue
 		}
 		base := path.Base(rel)
@@ -54,31 +106,32 @@ func (s *Service) finishZip(ctx context.Context, sessionID uuid.UUID, staging st
 		}
 		files++
 		if files > maxZipFiles {
-			return fmt.Errorf("zip has more than %d audio files", maxZipFiles)
+			zr.Close()
+			return 0, "", uuid.Nil, nil, fmt.Errorf("zip has more than %d audio files", maxZipFiles)
 		}
-		if int64(f.UncompressedSize64) > s.maxBytes {
-			return fmt.Errorf("%s is larger than the import limit", base)
+		if int64(f.UncompressedSize64) > 1<<30 {
+			zr.Close()
+			return 0, "", uuid.Nil, nil, fmt.Errorf("%s is larger than 1 GiB", base)
 		}
 		bytes += int64(f.UncompressedSize64)
 		if bytes > maxZipBytes {
-			return fmt.Errorf("zip is larger than 2 GiB uncompressed")
+			zr.Close()
+			return 0, "", uuid.Nil, nil, fmt.Errorf("zip is larger than 32 GiB uncompressed")
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return err
+			zr.Close()
+			return 0, "", uuid.Nil, nil, err
 		}
 		key := path.Join(root, rel)
 		err = prov.Write(ctx, key, rc, storage.WriteInfo{Size: int64(f.UncompressedSize64)})
 		rc.Close()
 		if err != nil {
-			return err
+			zr.Close()
+			return 0, "", uuid.Nil, nil, err
 		}
 	}
 	zr.Close()
 	os.Remove(staging)
-	_, _ = s.pool.Exec(ctx, `UPDATE upload_sessions SET state='complete' WHERE id=$1`, sessionID)
-	if files == 0 {
-		return fmt.Errorf("zip contained no audio files")
-	}
-	return s.scanner.ScanLibrary(ctx, libID, prov, root, "upload", uuid.Nil)
+	return files, root, libID, prov, nil
 }

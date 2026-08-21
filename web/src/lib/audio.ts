@@ -28,5 +28,5 @@ export function isBulkUploadFile(file: File) {
   return isAudioFile(file) || isZipFile(file);
 }
 
-export const UPLOAD_ACCEPT = `${AUDIO_ACCEPT},.zip,application/zip`;
+export const UPLOAD_ACCEPT = `${AUDIO_ACCEPT},.zip,application/zip,application/x-zip-compressed`;
 

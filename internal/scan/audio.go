@@ -23,6 +23,16 @@ func IsZipName(name string) bool {
 	return strings.ToLower(path.Ext(strings.TrimSpace(name))) == ".zip"
 }
 
+func IsZipContentType(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(strings.Split(ct, ";")[0]))
+	switch ct {
+	case "application/zip", "application/x-zip", "application/x-zip-compressed", "multipart/x-zip":
+		return true
+	default:
+		return false
+	}
+}
+
 func IsUploadName(name string) bool {
 	return IsAudioName(name) || IsZipName(name)
 }
