@@ -13,6 +13,7 @@ import (
 	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/storage"
 	"github.com/sounddock/sounddock/internal/transcode"
+	"github.com/sounddock/sounddock/internal/update"
 	"github.com/sounddock/sounddock/internal/version"
 )
 
@@ -478,6 +479,57 @@ func (s *Server) discordLogs(w http.ResponseWriter, r *http.Request) {
 	rows, _ := s.Pool.Query(r.Context(), `SELECT guild_id, error_class, message, created_at FROM discord_playback_errors ORDER BY created_at DESC LIMIT 100`)
 	defer rows.Close()
 	writeJSON(w, 200, scanMaps(rows, "guild_id", "error_class", "message", "created_at"))
+}
+
+func (s *Server) adminUpdatesGet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, update.Load(r.Context(), s.Pool))
+}
+
+func (s *Server) adminUpdatesPut(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AutoEnabled *bool `json:"auto_enabled"`
+	}
+	_ = decodeJSON(r, &body)
+	if body.AutoEnabled != nil {
+		if err := update.SetAuto(r.Context(), s.Pool, *body.AutoEnabled); err != nil {
+			writeErr(w, 500, "db", "could not save update settings")
+			return
+		}
+	}
+	s.Audit.Event(r.Context(), &currentUser(r).ID, "updates.settings", "", r.RemoteAddr, nil)
+	writeJSON(w, 200, update.Load(r.Context(), s.Pool))
+}
+
+func (s *Server) adminUpdatesCheck(w http.ResponseWriter, r *http.Request) {
+	st, err := update.Check(r.Context(), s.Pool)
+	if err != nil {
+		writeJSON(w, 200, st)
+		return
+	}
+	writeJSON(w, 200, st)
+}
+
+func (s *Server) adminUpdatesApply(w http.ResponseWriter, r *http.Request) {
+	if !update.SocketOK() {
+		writeErr(w, 503, "no_socket", "Docker socket is not available. Re-run the installer so SoundDock can pull images.")
+		return
+	}
+	u := currentUser(r)
+	who := "admin"
+	if u != nil && u.Username != "" {
+		who = u.Username
+	}
+	id, err := s.Jobs.Enqueue(r.Context(), "app.update.apply", map[string]any{"by": who})
+	if err != nil {
+		writeErr(w, 500, "job", "could not start update")
+		return
+	}
+	var uid *uuid.UUID
+	if u != nil {
+		uid = &u.ID
+	}
+	s.Audit.Event(r.Context(), uid, "updates.apply", id.String(), r.RemoteAddr, nil)
+	writeJSON(w, 202, map[string]any{"ok": true, "job_id": id, "message": "Update started. The app will restart when the new image is ready."})
 }
 
 var _ = storage.ErrNotFound

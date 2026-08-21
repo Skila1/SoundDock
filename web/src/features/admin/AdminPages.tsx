@@ -608,14 +608,71 @@ export function AdminLogs() {
 }
 
 export function AdminUpdates() {
-  const q = useQuery({ queryKey: ["info"], queryFn: () => api.get<any>("/api/v1/system/info") });
+  const qc = useQueryClient();
+  const q = useQuery({ queryKey: ["admin-updates"], queryFn: () => api.get<any>("/api/v1/admin/updates"), refetchInterval: 8000 });
+  const d = q.data || {};
+  const [busy, setBusy] = useState(false);
   return (
     <div>
-      <PageHeader title="Updates" />
-      <div className="rounded-xl border border-border bg-surface-1 p-5">
+      <PageHeader title="Updates" description="Pull the latest SoundDock image and restart the stack from here." />
+      <div className="mb-4 flex flex-wrap gap-2">
+        <Badge tone={d.available ? "warning" : "success"}>{d.available ? "Update available" : "Up to date"}</Badge>
+        <Badge tone={d.socket_ok ? "success" : "warning"}>{d.socket_ok ? "Docker ready" : "Docker socket missing"}</Badge>
+        <Badge>{d.last_status || "idle"}</Badge>
+      </div>
+      <div className="mb-4 rounded-xl border border-border bg-surface-1 p-5">
         <div className="text-sm text-muted">Installed version</div>
-        <div className="text-2xl font-semibold">{q.data?.version || "dev"}</div>
-        <p className="mt-2 text-sm text-muted">API {q.data?.api_version || "1"} · Check your deployment channel for newer SoundDock builds.</p>
+        <div className="text-2xl font-semibold">{d.version || "dev"}</div>
+        <p className="mt-1 break-all text-xs text-subtle">{d.image}</p>
+        <p className="mt-3 text-sm text-muted">Last check: {d.last_check_at ? relativeTime(d.last_check_at) : "never"}</p>
+        <p className="text-sm text-muted">Last update: {d.last_applied_at ? relativeTime(d.last_applied_at) : "never"}{d.last_applied_by ? ` (${d.last_applied_by})` : ""}</p>
+        {d.last_error && <p className="mt-2 text-sm text-destructive">{d.last_error}</p>}
+        {!d.socket_ok && <p className="mt-2 text-sm text-muted">Re-run the installer so the Docker socket is mounted. Checking for a newer image still works.</p>}
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="secondary" disabled={busy || d.checking} onClick={async () => {
+            setBusy(true);
+            try {
+              await api.post("/api/v1/admin/updates/check");
+              qc.invalidateQueries({ queryKey: ["admin-updates"] });
+              toast.success("Checked for updates");
+            } catch {
+              toast.error("Could not check for updates");
+            } finally {
+              setBusy(false);
+            }
+          }}>Check now</Button>
+          <Button disabled={busy || d.updating || !d.can_apply} onClick={async () => {
+            setBusy(true);
+            try {
+              await api.post("/api/v1/admin/updates/apply");
+              toast.success("Update started. This page will reconnect after restart.");
+              const started = Date.now();
+              const tick = setInterval(async () => {
+                try {
+                  await fetch("/healthz", { cache: "no-store" });
+                  if (Date.now() - started > 8000) {
+                    clearInterval(tick);
+                    location.reload();
+                  }
+                } catch {
+                  /* down during restart */
+                }
+              }, 2000);
+              setTimeout(() => { clearInterval(tick); location.reload(); }, 120000);
+            } catch (e: any) {
+              toast.error(e?.message || "Could not start update");
+            } finally {
+              setBusy(false);
+            }
+          }}>{d.updating ? "Updating…" : "Update now"}</Button>
+        </div>
+      </div>
+      <div className="flex max-w-lg items-center justify-between rounded-xl border border-border bg-surface-1 p-4">
+        <div>
+          <div className="text-sm font-medium">Automatic updates</div>
+          <p className="text-xs text-subtle">When on, SoundDock checks about once an hour and applies a newer image when Docker is available.</p>
+        </div>
+        <Switch checked={!!d.auto_enabled} onCheckedChange={(v) => api.put("/api/v1/admin/updates", { auto_enabled: v }).then(() => { toast.success(v ? "Automatic updates on" : "Automatic updates off"); qc.invalidateQueries({ queryKey: ["admin-updates"] }); })} />
       </div>
     </div>
   );

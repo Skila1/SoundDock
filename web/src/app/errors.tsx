@@ -37,7 +37,9 @@ export function RouteError() {
 export function BootScreen() {
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center bg-background">
-      <Logo className="mb-4 h-24 w-auto" />
+      <div className="mb-4 rounded-xl bg-black p-3">
+        <Logo className="h-24 w-auto" />
+      </div>
       <div className="h-1 w-40 overflow-hidden rounded-full bg-surface-2">
         <div className="h-full w-1/2 animate-pulse bg-accent" />
       </div>

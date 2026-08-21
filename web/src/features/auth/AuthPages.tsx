@@ -32,7 +32,9 @@ export function LoginPage({
     <div className="flex min-h-dvh items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-surface-1 p-8 shadow-card">
         <div className="mb-2 text-center">
-          <Logo className="mx-auto mb-4 h-28 w-auto" />
+          <div className="mx-auto mb-4 flex w-max items-center justify-center rounded-xl bg-black p-3">
+            <Logo className="h-28 w-auto" />
+          </div>
           <h1 className="text-xl font-semibold">Sign in</h1>
           <p className="text-sm text-muted">
             {discordConfigured ? "Use Discord or your local username and password." : "Sign in with your local account. Discord is optional and configured in Admin."}
@@ -85,7 +87,9 @@ export function SetupPage({ onDone, discordConfigured }: { onDone: () => void; d
     <div className="flex min-h-dvh items-center justify-center bg-background p-4">
       <div className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-surface-1 p-8 shadow-card">
         <div className="mb-2 text-center">
-          <Logo className="mx-auto mb-4 h-28 w-auto" />
+          <div className="mx-auto mb-4 flex w-max items-center justify-center rounded-xl bg-black p-3">
+            <Logo className="h-28 w-auto" />
+          </div>
           <h1 className="text-xl font-semibold">First setup</h1>
           <p className="text-sm text-muted">Create a local administrator. You can enable Discord later under Admin. If Discord is already on, the first Discord sign-in is also an administrator.</p>
         </div>

@@ -356,10 +356,14 @@ services:
     env_file: [.env]
     environment:
       SD_ROLE: all
+      SD_COMPOSE_PROJECT: sounddock
       SD_DATABASE_URL: postgres://\${POSTGRES_USER:-sounddock}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-sounddock}?sslmode=disable
     volumes:
       - sounddock_data:/data
       - \${SD_LIBRARY_HOST:-./libraries}:/libraries:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "\${SD_DOCKER_GID:-0}"
     ports:
       - "\${SD_PORT:-8080}:8080"
     healthcheck:
@@ -435,10 +439,16 @@ cmd_install() {
   if [[ -n "${CFG_CFTOK}" ]]; then
     cookie="true"
   fi
+  local dockergid="0"
+  if [[ -S /var/run/docker.sock ]]; then
+    dockergid="$(stat -c %g /var/run/docker.sock 2>/dev/null || echo 0)"
+  fi
   if [[ -f "${PREFIX}/.env" ]] && grep -q SD_MASTER_KEY "${PREFIX}/.env"; then
     msg_info "Keeping existing ${PREFIX}/.env"
     grep -q '^SD_IMAGE=' "${PREFIX}/.env" || echo "SD_IMAGE=${IMAGE}" >> "${PREFIX}/.env"
     grep -q '^SD_LIBRARY_HOST=' "${PREFIX}/.env" || echo "SD_LIBRARY_HOST=${CFG_LIBHOST}" >> "${PREFIX}/.env"
+    grep -q '^SD_DOCKER_GID=' "${PREFIX}/.env" || echo "SD_DOCKER_GID=${dockergid}" >> "${PREFIX}/.env"
+    grep -q '^SD_COMPOSE_PROJECT=' "${PREFIX}/.env" || echo "SD_COMPOSE_PROJECT=sounddock" >> "${PREFIX}/.env"
   else
     cat > "${PREFIX}/.env" <<EOF
 SD_ROLE=all
@@ -455,6 +465,8 @@ SD_TRUSTED_PROXIES=127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 SD_IMAGE=${IMAGE}
 SD_LIBRARY_HOST=${CFG_LIBHOST}
 SD_PORT=8080
+SD_DOCKER_GID=${dockergid}
+SD_COMPOSE_PROJECT=sounddock
 POSTGRES_USER=sounddock
 POSTGRES_PASSWORD=${pw}
 POSTGRES_DB=sounddock

@@ -7,6 +7,8 @@ type UiState = {
   nowPlayingOpen: boolean;
   commandOpen: boolean;
   mobileNav: boolean;
+  navCollapsed: boolean;
+  queueCollapsed: boolean;
   libraryLayout: "grid" | "list";
   set: (p: Partial<Omit<UiState, "set">>) => void;
 };
@@ -19,12 +21,18 @@ export const useUi = create<UiState>()(
       nowPlayingOpen: false,
       commandOpen: false,
       mobileNav: false,
+      navCollapsed: false,
+      queueCollapsed: false,
       libraryLayout: "grid",
       set: (p) => set(p)
     }),
     {
       name: "sd-ui",
-      partialize: (s) => ({ libraryLayout: s.libraryLayout })
+      partialize: (s) => ({
+        libraryLayout: s.libraryLayout,
+        navCollapsed: s.navCollapsed,
+        queueCollapsed: s.queueCollapsed
+      })
     }
   )
 );

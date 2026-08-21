@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Outlet, useLocation } from "react-router-dom";
+import { PanelRightOpen } from "lucide-react";
 import { Sidebar } from "@/components/navigation/Sidebar";
 import { TopBar } from "@/components/navigation/TopBar";
 import { MobileNav } from "@/components/navigation/MobileNav";
@@ -10,6 +11,8 @@ import { QueueSheet } from "@/components/player/QueueSheet";
 import { NowPlaying } from "@/components/player/NowPlaying";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Sidebar as Side } from "@/components/navigation/Sidebar";
+import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { attachAudioListeners, usePlayer } from "@/stores/player";
 import { useUi } from "@/stores/ui";
 import type { User } from "@/types/api";
@@ -41,16 +44,26 @@ export function AppShell({ user }: { user: User }) {
   return (
     <div className="flex h-dvh flex-col bg-background">
       <div className="flex min-h-0 flex-1">
-        <Sidebar user={user} />
+        <Sidebar user={user} collapsible />
         <div className="flex min-w-0 flex-1 flex-col">
           <TopBar user={user} title={title} />
           <main className="min-h-0 flex-1 overflow-auto px-4 py-5 md:px-8">
             <Outlet />
           </main>
         </div>
-        <aside className="hidden h-full w-[300px] shrink-0 flex-col border-l border-border bg-surface-1/80 xl:flex">
-          <QueuePanel />
-        </aside>
+        {ui.queueCollapsed ? (
+          <aside className="hidden h-full w-12 shrink-0 flex-col items-center border-l border-border bg-surface-1/80 pt-3 xl:flex">
+            <Tooltip label="Show queue">
+              <Button size="icon" variant="ghost" onClick={() => ui.set({ queueCollapsed: false })} aria-label="Show queue">
+                <PanelRightOpen className="h-4 w-4" />
+              </Button>
+            </Tooltip>
+          </aside>
+        ) : (
+          <aside className="hidden h-full w-[300px] shrink-0 flex-col border-l border-border bg-surface-1/80 xl:flex">
+            <QueuePanel onCollapse={() => ui.set({ queueCollapsed: true })} />
+          </aside>
+        )}
       </div>
       <PlayerBar />
       <MobileNav />
@@ -60,7 +73,7 @@ export function AppShell({ user }: { user: User }) {
       <Sheet open={ui.mobileNav} onOpenChange={(v) => ui.set({ mobileNav: v })}>
         <SheetContent side="left" title="Menu">
           <div className="mt-8" onClick={() => ui.set({ mobileNav: false })}>
-            <Side user={user} className="flex w-full border-0 bg-transparent" />
+            <Side user={user} collapsed={false} className="flex w-full border-0 bg-transparent" />
           </div>
         </SheetContent>
       </Sheet>

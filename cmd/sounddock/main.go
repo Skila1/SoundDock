@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"github.com/sounddock/sounddock/internal/search"
 	"github.com/sounddock/sounddock/internal/storage"
 	"github.com/sounddock/sounddock/internal/transcode"
+	"github.com/sounddock/sounddock/internal/update"
 	"github.com/sounddock/sounddock/internal/webhooks"
 	"github.com/sounddock/sounddock/openapi"
 	"github.com/sounddock/sounddock/web"
@@ -117,6 +119,20 @@ func main() {
 	runner.Register("maintenance.gc-cache", func(ctx context.Context, job jobs.Job) error {
 		return tx.Evict(ctx)
 	})
+	runner.Register("app.update.apply", func(ctx context.Context, job jobs.Job) error {
+		by := "admin"
+		var p struct {
+			By string `json:"by"`
+		}
+		if json.Unmarshal(job.Payload, &p) == nil && p.By != "" {
+			by = p.By
+		}
+		return update.Apply(ctx, pool, by)
+	})
+	runner.Register("app.update.check", func(ctx context.Context, job jobs.Job) error {
+		_, err := update.Check(ctx, pool)
+		return err
+	})
 
 	role := resolveRole(cfg.Role)
 	log.Info("starting", "role", role, "addr", cfg.HTTPAddr)
@@ -134,6 +150,7 @@ func main() {
 					return
 				case <-t.C:
 					_, _ = runner.Enqueue(ctx, "external.playlist.tick", map[string]any{})
+					update.Tick(ctx, pool)
 				}
 			}
 		}()

@@ -1,4 +1,4 @@
-import { History, Play, Trash2, X } from "lucide-react";
+import { History, PanelRightClose, Play, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Artwork } from "@/components/media/Artwork";
 import { artworkUrl } from "@/lib/utils";
@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { Switch } from "@/components/ui/switch";
 import { useState } from "react";
 
-export function QueuePanel({ onClose }: { onClose?: () => void }) {
+export function QueuePanel({ onClose, onCollapse }: { onClose?: () => void; onCollapse?: () => void }) {
   const p = usePlayer();
   const [autoplay, setAutoplay] = useState(true);
   const ids = p.queue?.items?.map((i) => i.track_id) || [];
@@ -39,11 +39,18 @@ export function QueuePanel({ onClose }: { onClose?: () => void }) {
           <h2 className="font-semibold">Queue</h2>
           <History className="h-4 w-4 text-muted" />
         </div>
-        {onClose && (
-          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onClose} aria-label="Close queue">
-            <X className="h-4 w-4" />
-          </Button>
-        )}
+        <div className="flex items-center gap-1">
+          {onCollapse && (
+            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onCollapse} aria-label="Collapse queue">
+              <PanelRightClose className="h-4 w-4" />
+            </Button>
+          )}
+          {onClose && (
+            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onClose} aria-label="Close queue">
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </div>
       <div className="flex justify-between px-4">
         <span className="text-sm text-muted">{ids.length} tracks</span>

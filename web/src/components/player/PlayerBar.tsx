@@ -82,7 +82,18 @@ export function PlayerBar() {
           {p.playing ? <Pause /> : <Play />}
         </Button>
         <Tooltip label="Queue">
-          <Button size="icon" variant="ghost" onClick={() => ui.set({ queueOpen: true })} aria-label="Queue">
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={() => {
+              if (typeof window !== "undefined" && window.matchMedia("(min-width: 1280px)").matches) {
+                ui.set({ queueCollapsed: !ui.queueCollapsed });
+              } else {
+                ui.set({ queueOpen: true });
+              }
+            }}
+            aria-label="Queue"
+          >
             <ListMusic />
           </Button>
         </Tooltip>
