@@ -157,18 +157,20 @@ func DiscordDisplayName(p DiscordProfile) string {
 	if u := strings.TrimSpace(p.Username); u != "" {
 		return u
 	}
-	return "discord_" + p.ID
+	return strings.TrimSpace(p.ID)
 }
 
 func DiscordAccountUsername(p DiscordProfile) string {
 	if u := strings.TrimSpace(p.Username); u != "" {
 		return u
 	}
-	return "discord_" + p.ID
+	return strings.TrimSpace(p.ID)
 }
 
 func isDiscordStubUsername(username, discordID string) bool {
-	return username == "discord_"+discordID
+	username = strings.TrimSpace(username)
+	discordID = strings.TrimSpace(discordID)
+	return username == "discord_"+discordID || username == discordID
 }
 
 func uniqueViolation(err error) bool {
@@ -232,7 +234,7 @@ func (s *Service) createDiscordLocalUser(ctx context.Context, p DiscordProfile) 
 		INSERT INTO users (username, password_hash, display_name)
 		VALUES ($1,$2,$3) RETURNING id`, uname, hash, display).Scan(&uid)
 	if uniqueViolation(err) {
-		uname = uname + "_" + p.ID
+		uname = strings.TrimSpace(p.ID)
 		err = s.pool.QueryRow(ctx, `
 			INSERT INTO users (username, password_hash, display_name)
 			VALUES ($1,$2,$3) RETURNING id`, uname, hash, display).Scan(&uid)
@@ -271,7 +273,7 @@ func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile) (*Use
 			if isDiscordStubUsername(existingName, p.ID) {
 				newName := DiscordAccountUsername(p)
 				if _, uerr := s.pool.Exec(ctx, `UPDATE users SET username=$2, display_name=$3, updated_at=now() WHERE id=$1`, uid, newName, display); uniqueViolation(uerr) {
-					_, _ = s.pool.Exec(ctx, `UPDATE users SET display_name=$2, updated_at=now() WHERE id=$1`, uid, display)
+					_, _ = s.pool.Exec(ctx, `UPDATE users SET username=$2, display_name=$3, updated_at=now() WHERE id=$1`, uid, p.ID, display)
 				}
 			} else if existingName == DiscordAccountUsername(p) || strings.HasSuffix(existingName, "_"+p.ID) {
 				_, _ = s.pool.Exec(ctx, `UPDATE users SET display_name=$2, updated_at=now() WHERE id=$1`, uid, display)

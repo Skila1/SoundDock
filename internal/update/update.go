@@ -3,6 +3,7 @@ package update
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -77,12 +78,13 @@ func Load(ctx context.Context, pool *pgxpool.Pool) Status {
 	ch, ap := checking, applying
 	mu.Unlock()
 	helper := HelperOK()
+	sock := SocketOK()
 	updating := ap || st.LastStatus == "updating" || RequestPending()
 	return Status{
 		AutoEnabled:   st.AutoEnabled,
 		HelperOK:      helper,
-		SocketOK:      helper,
-		CanApply:      helper,
+		SocketOK:      sock,
+		CanApply:      helper || sock,
 		Available:     st.Available,
 		Version:       version.Version,
 		Image:         ImageRef(),
@@ -145,6 +147,11 @@ func Check(ctx context.Context, pool *pgxpool.Pool) (Status, error) {
 
 	img := ImageRef()
 	current := AppliedDigest()
+	if current == "" && SocketOK() {
+		if d, err := RunningDigest(ctx, img, ProjectName()); err == nil {
+			current = d
+		}
+	}
 	if current == "" {
 		current = st.CurrentDigest
 	}
@@ -184,7 +191,16 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, by string) error {
 	st.LastAppliedBy = by
 	_ = save(ctx, pool, st)
 
-	if err := RequestUpdate(by); err != nil {
+	var err error
+	switch {
+	case HelperOK():
+		err = RequestUpdate(by)
+	case SocketOK():
+		err = PullAndSwap(ctx, ImageRef(), ProjectName())
+	default:
+		err = fmt.Errorf("no update helper")
+	}
+	if err != nil {
 		st.LastStatus = "error"
 		st.LastError = err.Error()
 		_ = save(ctx, pool, st)
@@ -231,7 +247,7 @@ func Tick(ctx context.Context, pool *pgxpool.Pool) {
 		return
 	}
 	if st.LastCheckAt != nil && time.Since(*st.LastCheckAt) < time.Hour {
-		if st.Available && HelperOK() {
+		if st.Available && (HelperOK() || SocketOK()) {
 			_ = Apply(ctx, pool, "auto")
 		}
 		return

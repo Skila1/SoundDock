@@ -354,6 +354,7 @@ install_update_helper() {
   need_root
   mkdir -p "${PREFIX}/update" /usr/local/lib/sounddock
   chmod 0777 "${PREFIX}/update" || true
+  printf '1\n' > "${PREFIX}/update/helper"
   cat > /usr/local/lib/sounddock/update.sh <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -462,10 +463,13 @@ services:
       SD_COMPOSE_PROJECT: sounddock
       SD_UPDATE_DIR: /update
       SD_DATABASE_URL: postgres://\${POSTGRES_USER:-sounddock}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-sounddock}?sslmode=disable
+    group_add:
+      - "\${SD_DOCKER_GID:-0}"
     volumes:
       - sounddock_data:/data
       - \${SD_LIBRARY_HOST:-./libraries}:/libraries:ro
       - ./update:/update
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
       - "\${SD_PORT:-8080}:8080"
     healthcheck:
@@ -651,9 +655,6 @@ cmd_uninstall() {
     rm -rf "${PREFIX}"
     rm -f /usr/local/bin/sounddock
     remove_update_helper
-    if command -v cloudflared >/dev/null 2>&1; then
-      cloudflared service uninstall >/dev/null 2>&1 || true
-    fi
   else
     echo "Data kept in ${PREFIX}/data (pass --purge to delete)."
   fi

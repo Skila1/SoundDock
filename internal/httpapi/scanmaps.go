@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -17,7 +18,7 @@ func scanMaps(rows pgx.Rows, cols ...string) []map[string]any {
 		}
 		m := map[string]any{}
 		for i, c := range cols {
-			m[c] = vals[i]
+			m[c] = jsonCell(vals[i])
 		}
 		out = append(out, m)
 	}
@@ -25,4 +26,24 @@ func scanMaps(rows pgx.Rows, cols ...string) []map[string]any {
 		out = []map[string]any{}
 	}
 	return out
+}
+
+func jsonCell(v any) any {
+	switch t := v.(type) {
+	case nil:
+		return nil
+	case uuid.UUID:
+		return t.String()
+	case [16]byte:
+		return uuid.UUID(t).String()
+	case []byte:
+		if len(t) == 16 {
+			var u uuid.UUID
+			copy(u[:], t)
+			return u.String()
+		}
+		return string(t)
+	default:
+		return v
+	}
 }

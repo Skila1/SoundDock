@@ -16,11 +16,14 @@ func TestDiscordProfileNames(t *testing.T) {
 	if !isDiscordStubUsername("discord_288559247741157386", p.ID) {
 		t.Fatal("expected stub")
 	}
+	if !isDiscordStubUsername(p.ID, p.ID) {
+		t.Fatal("raw discord id is a stub")
+	}
 	if isDiscordStubUsername("Skila", p.ID) {
 		t.Fatal("local admin is not a stub")
 	}
-	empty := DiscordProfile{ID: "1"}
-	if DiscordAccountUsername(empty) != "discord_1" || DiscordDisplayName(empty) != "discord_1" {
+	empty := DiscordProfile{ID: "288559247741157386"}
+	if DiscordAccountUsername(empty) != "288559247741157386" || DiscordDisplayName(empty) != "288559247741157386" {
 		t.Fatal("empty profile fallback")
 	}
 }

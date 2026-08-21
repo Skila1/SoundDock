@@ -18,8 +18,7 @@ func RequestDir() string {
 
 func HelperOK() bool {
 	dir := RequestDir()
-	st, err := os.Stat(dir)
-	if err != nil || !st.IsDir() {
+	if _, err := os.Stat(filepath.Join(dir, "helper")); err != nil {
 		return false
 	}
 	probe := filepath.Join(dir, ".writable")

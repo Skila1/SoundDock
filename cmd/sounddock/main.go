@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -37,6 +38,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "update-swap" {
+		if err := update.RunSwap(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	cfg := config.Load()
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
 	slog.SetDefault(log)

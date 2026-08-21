@@ -68,14 +68,7 @@ export function AdminUsers() {
                   <div className="text-xs text-subtle">{u.username}{u.email ? ` · ${u.email}` : ""}</div>
                 </td>
                 <td className="p-3">
-                  {u.discord_id ? (
-                    <>
-                      <div className="font-medium">{u.discord_username || "—"}</div>
-                      <div className="text-xs text-subtle">{u.discord_id}</div>
-                    </>
-                  ) : (
-                    <span className="text-subtle">—</span>
-                  )}
+                  {u.discord_id ? u.discord_id : <span className="text-subtle">—</span>}
                 </td>
                 <td className="p-3"><Badge tone={u.role === "Administrator" ? "success" : "neutral"}>{u.role || "User"}</Badge></td>
                 <td className="p-3"><Badge tone={u.disabled ? "danger" : "success"}>{u.disabled ? "Disabled" : "Active"}</Badge></td>
@@ -196,7 +189,7 @@ function ManageUserDialog({
               <dt className="text-muted">Display name</dt><dd>{user.display_name || "—"}</dd>
               <dt className="text-muted">Email</dt><dd>{user.email || "—"}</dd>
               <dt className="text-muted">Discord</dt>
-              <dd>{user.discord_id ? `${user.discord_username || "linked"} · ${user.discord_id}` : "Not linked"}</dd>
+              <dd>{user.discord_id || "Not linked"}</dd>
               <dt className="text-muted">Created</dt><dd>{relativeTime(user.created_at)}</dd>
             </dl>
             <Field label="Role">
@@ -770,10 +763,10 @@ export function AdminUpdates() {
   const [busy, setBusy] = useState(false);
   return (
     <div>
-      <PageHeader title="Updates" description="The host systemd helper pulls the new image and restarts SoundDock. The app container does not update itself." />
+      <PageHeader title="Updates" description="Update now pulls the latest image and restarts SoundDock. Postgres is left running." />
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge tone={d.available ? "warning" : "success"}>{d.available ? "Update available" : "Up to date"}</Badge>
-        <Badge tone={d.helper_ok || d.can_apply ? "success" : "warning"}>{d.helper_ok || d.can_apply ? "Host helper ready" : "Host helper missing"}</Badge>
+        <Badge tone={d.can_apply ? "success" : "warning"}>{d.can_apply ? "Ready to apply" : "Apply unavailable"}</Badge>
         <Badge>{d.last_status || "idle"}</Badge>
       </div>
       <div className="mb-4 rounded-xl border border-border bg-surface-1 p-5">
@@ -783,7 +776,7 @@ export function AdminUpdates() {
         <p className="mt-3 text-sm text-muted">Last check: {d.last_check_at ? relativeTime(d.last_check_at) : "never"}</p>
         <p className="text-sm text-muted">Last update: {d.last_applied_at ? relativeTime(d.last_applied_at) : "never"}{d.last_applied_by ? ` (${d.last_applied_by})` : ""}</p>
         {d.last_error && <p className="mt-2 text-sm text-destructive">{d.last_error}</p>}
-        {!(d.helper_ok || d.can_apply) && <p className="mt-2 text-sm text-muted">Re-run the installer so a systemd path unit can apply updates on the host. Update now stays off until that helper is installed.</p>}
+        {!d.can_apply && <p className="mt-2 text-sm text-muted">The Docker socket is not available in this container, so Update now stays off.</p>}
         <div className="mt-4 flex flex-wrap gap-2">
           <Button variant="secondary" disabled={busy || d.checking} onClick={async () => {
             setBusy(true);
@@ -801,7 +794,7 @@ export function AdminUpdates() {
             setBusy(true);
             try {
               await api.post("/api/v1/admin/updates/apply");
-              toast.success("Update requested. The host helper will restart SoundDock.");
+              toast.success("Update started. SoundDock will restart.");
               const started = Date.now();
               const tick = setInterval(async () => {
                 try {

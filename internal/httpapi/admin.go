@@ -77,7 +77,7 @@ func (s *Server) adminUsers(w http.ResponseWriter, r *http.Request) {
 }
 
 const adminUserSQL = `
-		SELECT u.id, u.username, u.display_name, u.email, u.disabled, u.created_at,
+		SELECT u.id::text, u.username, u.display_name, u.email, u.disabled, u.created_at,
 			i.provider_user_id, i.provider_username,
 			COALESCE((
 				SELECT r.name FROM user_roles ur JOIN roles r ON r.id = ur.role_id
@@ -668,8 +668,8 @@ func (s *Server) adminUpdatesCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminUpdatesApply(w http.ResponseWriter, r *http.Request) {
-	if !update.HelperOK() {
-		writeErr(w, 503, "no_helper", "Host update helper is not available. Re-run the installer so systemd can apply updates outside the app container.")
+	if !update.HelperOK() && !update.SocketOK() {
+		writeErr(w, 503, "no_helper", "Docker is not available to apply updates.")
 		return
 	}
 	u := currentUser(r)

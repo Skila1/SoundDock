@@ -30,8 +30,14 @@ func TestDigestEqual(t *testing.T) {
 func TestRequestUpdate(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("SD_UPDATE_DIR", dir)
+	if HelperOK() {
+		t.Fatal("writable dir without helper marker is not a host helper")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "helper"), []byte("1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if !HelperOK() {
-		t.Fatal("expected helper dir to be writable")
+		t.Fatal("expected helper marker to be enough")
 	}
 	if err := RequestUpdate("skila"); err != nil {
 		t.Fatal(err)
