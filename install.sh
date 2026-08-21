@@ -8,7 +8,17 @@
 #
 set -euo pipefail
 
-PREFIX="${SD_PREFIX:-/opt/sounddock}"
+# Install into ./sounddock under the current directory (or here, if this folder is already named sounddock).
+prefix_from_here() {
+  local cwd
+  cwd="$(pwd -L)"
+  if [[ "$(basename "${cwd}")" == "sounddock" ]]; then
+    printf '%s\n' "${cwd}"
+  else
+    printf '%s\n' "${cwd%/}/sounddock"
+  fi
+}
+PREFIX="$(prefix_from_here)"
 IMAGE="${SD_IMAGE:-ghcr.io/skila1/sounddock:latest}"
 SCRIPT_SRC="${SD_INSTALL_URL:-https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh}"
 COMPOSE="docker compose"
@@ -109,48 +119,6 @@ ui_pass() {
   local out
   out=$(whiptail --backtitle "${BACKTITLE}" --title "$1" --passwordbox "$2" 12 72 3>&1 1>&2 2>&3 </dev/tty) || return 1
   printf '%s' "${out}"
-}
-
-# Quoted ~ is a literal character. Docker Compose then treats it as a relative path.
-abs_path() {
-  local p="${1:-}"
-  p="${p#"${p%%[![:space:]]*}"}"
-  p="${p%"${p##*[![:space:]]}"}"
-  if [[ -z "${p}" ]]; then
-    echo "/opt/sounddock"
-    return
-  fi
-  local home="${HOME:-/root}"
-  case "${p}" in
-    "~") p="${home}" ;;
-    "~/"*) p="${home}/${p#~/}" ;;
-    "~"*)
-      local user rest homedir
-      user="${p%%/*}"
-      user="${user#\~}"
-      if [[ "${p}" == */* ]]; then
-        rest="${p#*/}"
-        homedir="$(getent passwd "${user}" | cut -d: -f6 || true)"
-        if [[ -n "${homedir}" ]]; then
-          p="${homedir}/${rest}"
-        fi
-      else
-        homedir="$(getent passwd "${user}" | cut -d: -f6 || true)"
-        if [[ -n "${homedir}" ]]; then
-          p="${homedir}"
-        fi
-      fi
-      ;;
-  esac
-  if [[ "${p}" != /* ]]; then
-    p="${PWD}/${p}"
-  fi
-  p="${p%/}"
-  if command -v realpath >/dev/null 2>&1; then
-    realpath -m "${p}"
-  else
-    printf '%s\n' "${p}"
-  fi
 }
 
 install_docker() {
@@ -258,28 +226,21 @@ CFG_LIBHOST=""
 CFG_CFTOK=""
 
 collect_config() {
-  PREFIX="$(abs_path "${PREFIX}")"
-  CFG_LIBHOST="$(abs_path "${SD_LIBRARY_HOST:-${PREFIX}/libraries}")"
+  PREFIX="$(prefix_from_here)"
+  CFG_LIBHOST="${PREFIX}/libraries"
   CFG_CFTOK="${CLOUDFLARE_TUNNEL_TOKEN:-}"
 
   if ! ui_ok; then
-    msg_info "No TUI (set SD_UNATTENDED=1 or no /dev/tty). Using defaults / env."
+    msg_info "No TUI (set SD_UNATTENDED=1 or no /dev/tty). Installing in ${PREFIX}"
     return
   fi
 
-  ui_msg "SoundDock" "Use Tab and Enter to move.\n\nThis writes a Docker Compose project. Docker publishes a port. Cloudflare Tunnel (optional) is the public URL. Discord is configured later in the web Admin page." 13 || true
+  ui_msg "SoundDock" "Use Tab and Enter to move.\n\nInstalls into a sounddock folder in this directory.\nIf you are already in a folder named sounddock, it installs here.\nDocker publishes port 8080. Cloudflare Tunnel (optional) is a systemd service. Discord is configured later in Admin." 14 || true
 
-  PREFIX="$(ui_input "Install directory" "Absolute path for docker-compose.yml and .env (example: /opt/sounddock)." "${PREFIX}")" || exit 0
-  PREFIX="$(abs_path "${PREFIX:-/opt/sounddock}")"
-  CFG_LIBHOST="${SD_LIBRARY_HOST:-${PREFIX}/libraries}"
-
-  if ! ui_yesno "Install SoundDock" "Create a Compose project at ${PREFIX}?\n\nImage: ${IMAGE}\nPort: 8080 on the host\nThen: cd ${PREFIX} && docker compose ps"; then
+  if ! ui_yesno "Install SoundDock" "Install here:\n${PREFIX}\n\nWrites docker-compose.yml and .env.\nPort 8080 on the host.\nThen: cd ${PREFIX} && docker compose ps"; then
     echo "Cancelled."
     exit 0
   fi
-
-  CFG_LIBHOST="$(ui_input "Library folder" "Host folder mounted read-only at /libraries inside the container." "${CFG_LIBHOST}")" || exit 0
-  CFG_LIBHOST="$(abs_path "${CFG_LIBHOST:-${PREFIX}/libraries}")"
 
   if ui_yesno "Cloudflare Tunnel" "Install cloudflared as a systemd service now?\n\nNot Docker. Point the tunnel at http://localhost:8080 (Docker publishes that port on the host)." 13; then
     CFG_CFTOK="$(ui_pass "Tunnel token" "Cloudflare Tunnel token from Zero Trust.")" || exit 0
@@ -457,16 +418,8 @@ cmd_install() {
   header_info
   ensure_whiptail
   collect_config
-  PREFIX="$(abs_path "${PREFIX}")"
-  CFG_LIBHOST="$(abs_path "${CFG_LIBHOST:-${PREFIX}/libraries}")"
-
-  # Rescue files from a previous run that stored '~' as a directory name.
-  local old_tilde="${PWD}/~/$(basename "${PREFIX}")"
-  if [[ -f "${old_tilde}/.env" && ! -f "${PREFIX}/.env" ]]; then
-    mkdir -p "${PREFIX}"
-    cp -a "${old_tilde}/." "${PREFIX}/"
-    msg_ok "Moved files from ${old_tilde} to ${PREFIX}"
-  fi
+  PREFIX="$(prefix_from_here)"
+  CFG_LIBHOST="${PREFIX}/libraries"
 
   install_docker
   mkdir -p "${PREFIX}/data/cache" "${PREFIX}/data/backups" "${PREFIX}/data/managed" "${PREFIX}/libraries"
@@ -483,13 +436,9 @@ cmd_install() {
     cookie="true"
   fi
   if [[ -f "${PREFIX}/.env" ]] && grep -q SD_MASTER_KEY "${PREFIX}/.env"; then
-    msg_info "Keeping existing ${PREFIX}/.env secrets"
+    msg_info "Keeping existing ${PREFIX}/.env"
     grep -q '^SD_IMAGE=' "${PREFIX}/.env" || echo "SD_IMAGE=${IMAGE}" >> "${PREFIX}/.env"
     grep -q '^SD_LIBRARY_HOST=' "${PREFIX}/.env" || echo "SD_LIBRARY_HOST=${CFG_LIBHOST}" >> "${PREFIX}/.env"
-    sed -i.bak \
-      -e "s|^SD_IMAGE=.*|SD_IMAGE=${IMAGE}|" \
-      -e "s|^SD_LIBRARY_HOST=.*|SD_LIBRARY_HOST=${CFG_LIBHOST}|" \
-      "${PREFIX}/.env" || true
   else
     cat > "${PREFIX}/.env" <<EOF
 SD_ROLE=all
@@ -525,8 +474,8 @@ EOF
 
   cd "${PREFIX}"
   msg_info "Pulling ${IMAGE} in ${PREFIX}"
-  ${COMPOSE} -f "${PREFIX}/docker-compose.yml" --env-file "${PREFIX}/.env" pull
-  ${COMPOSE} -f "${PREFIX}/docker-compose.yml" --env-file "${PREFIX}/.env" up -d
+  ${COMPOSE} pull
+  ${COMPOSE} up -d
   msg_ok "SoundDock is starting"
 
   local i
