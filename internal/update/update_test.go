@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseImage(t *testing.T) {
@@ -54,5 +55,16 @@ func TestRequestUpdate(t *testing.T) {
 	}
 	if AppliedDigest() != "sha256:abc" {
 		t.Fatalf("digest %s", AppliedDigest())
+	}
+	old := filepath.Join(dir, "request")
+	past := time.Now().Add(-20 * time.Minute)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+	if RequestPending() {
+		t.Fatal("stale request should not count as in progress")
+	}
+	if _, err := os.Stat(old); err == nil {
+		t.Fatal("stale request should be removed")
 	}
 }

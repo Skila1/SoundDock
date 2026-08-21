@@ -766,7 +766,7 @@ export function AdminUpdates() {
       <PageHeader title="Updates" description="Update now pulls the latest image and restarts SoundDock. Postgres is left running." />
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge tone={d.available ? "warning" : "success"}>{d.available ? "Update available" : "Up to date"}</Badge>
-        <Badge tone={d.can_apply ? "success" : "warning"}>{d.can_apply ? "Ready to apply" : "Apply unavailable"}</Badge>
+        {d.updating && d.last_status === "updating" ? <Badge tone="accent">Updating</Badge> : d.can_apply ? <Badge tone="success">Can install</Badge> : <Badge tone="warning">Cannot install</Badge>}
         <Badge>{d.last_status || "idle"}</Badge>
       </div>
       <div className="mb-4 rounded-xl border border-border bg-surface-1 p-5">
@@ -790,7 +790,7 @@ export function AdminUpdates() {
               setBusy(false);
             }
           }}>Check now</Button>
-          <Button disabled={busy || d.updating || !d.can_apply} onClick={async () => {
+          <Button disabled={busy || (d.updating && d.last_status === "updating") || !d.can_apply} onClick={async () => {
             setBusy(true);
             try {
               await api.post("/api/v1/admin/updates/apply");
@@ -813,7 +813,7 @@ export function AdminUpdates() {
             } finally {
               setBusy(false);
             }
-          }}>{d.updating ? "Updating…" : "Update now"}</Button>
+          }}>{d.updating && d.last_status === "updating" ? "Updating…" : "Update now"}</Button>
         </div>
       </div>
       <div className="flex max-w-lg items-center justify-between rounded-xl border border-border bg-surface-1 p-4">

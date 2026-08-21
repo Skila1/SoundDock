@@ -193,10 +193,10 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, by string) error {
 
 	var err error
 	switch {
-	case HelperOK():
-		err = RequestUpdate(by)
 	case SocketOK():
 		err = PullAndSwap(ctx, ImageRef(), ProjectName())
+	case HelperOK():
+		err = RequestUpdate(by)
 	default:
 		err = fmt.Errorf("no update helper")
 	}
@@ -216,14 +216,24 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, by string) error {
 
 func reconcile(ctx context.Context, pool *pgxpool.Pool) {
 	st := loadStored(ctx, pool)
-	if st.LastStatus != "updating" {
-		return
-	}
 	if RequestPending() {
 		return
 	}
+	if st.LastStatus != "updating" {
+		return
+	}
 	d := AppliedDigest()
+	if d == "" && SocketOK() {
+		if got, err := RunningDigest(ctx, ImageRef(), ProjectName()); err == nil {
+			d = got
+		}
+	}
 	if d == "" {
+		if st.LastCheckAt != nil && time.Since(*st.LastCheckAt) > 10*time.Minute {
+			st.LastStatus = "error"
+			st.LastError = "update did not finish. Use docker compose pull && docker compose up -d on the host."
+			_ = save(ctx, pool, st)
+		}
 		return
 	}
 	if st.CurrentDigest != "" && digestEqual(st.CurrentDigest, d) && st.LastAppliedAt != nil {

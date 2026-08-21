@@ -42,8 +42,15 @@ func AppliedDigest() string {
 }
 
 func RequestPending() bool {
-	_, err := os.Stat(filepath.Join(RequestDir(), "request"))
-	return err == nil
+	st, err := os.Stat(filepath.Join(RequestDir(), "request"))
+	if err != nil {
+		return false
+	}
+	if time.Since(st.ModTime()) > 10*time.Minute {
+		_ = os.Remove(filepath.Join(RequestDir(), "request"))
+		return false
+	}
+	return true
 }
 
 func RequestUpdate(by string) error {
