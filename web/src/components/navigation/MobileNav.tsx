@@ -12,7 +12,7 @@ const tabs = [
 
 export function MobileNav() {
   return (
-    <nav className="grid h-14 grid-cols-5 border-t border-border bg-surface-1 md:hidden">
+    <nav className="grid h-14 shrink-0 grid-cols-5 border-t border-border bg-surface-1 md:hidden">
       {tabs.map((t) => (
         <NavLink
           key={t.to}

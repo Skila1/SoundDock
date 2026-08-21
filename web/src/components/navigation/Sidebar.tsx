@@ -40,7 +40,7 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
   const ui = useUi();
   const compact = collapsed ?? ui.navCollapsed;
   return (
-    <aside className={cn("h-full flex-col border-r border-border bg-surface-1/80", className || "hidden md:flex", compact ? "w-[72px]" : "w-[232px]")}>
+    <aside className={cn("h-full min-h-0 flex-col overflow-hidden border-r border-border bg-surface-1/80", className || "hidden md:flex", compact ? "w-[72px]" : "w-[232px]")}>
       <div className="flex items-center bg-black">
         <NavLink to="/" end className={cn("flex min-w-0 flex-1 items-center px-3 py-4", compact && "justify-center px-2")}>
           <Logo className={compact ? "h-9 w-9" : "h-12 w-auto max-w-[168px]"} />

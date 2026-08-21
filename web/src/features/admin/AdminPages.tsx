@@ -277,7 +277,7 @@ export function AdminDiscord() {
         qc.invalidateQueries({ queryKey: ["discord"] });
       }}>
         <h3 className="font-semibold">Sign-in</h3>
-        <p className="text-sm text-muted">Paste this redirect URL in the Discord application OAuth2 settings:</p>
+        <p className="text-sm text-muted">Paste this redirect URL in the Discord application OAuth2 settings. It must end with <code>/callback</code>.</p>
         <code className="block break-all rounded-lg bg-surface-2 px-3 py-2 text-xs">{d.data?.oauth_redirect || "…"}</code>
         <div className="flex items-center justify-between gap-3">
           <div>

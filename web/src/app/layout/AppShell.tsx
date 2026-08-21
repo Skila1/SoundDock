@@ -42,17 +42,17 @@ export function AppShell({ user }: { user: User }) {
   const title = Object.entries(titles).find(([k]) => (k === "/" ? loc.pathname === "/" : loc.pathname.startsWith(k)))?.[1];
 
   return (
-    <div className="flex h-dvh flex-col bg-background">
-      <div className="flex min-h-0 flex-1">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar user={user} collapsible />
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <TopBar user={user} title={title} />
           <main className="min-h-0 flex-1 overflow-auto px-4 py-5 md:px-8">
             <Outlet />
           </main>
         </div>
         {ui.queueCollapsed ? (
-          <aside className="hidden h-full w-12 shrink-0 flex-col items-center border-l border-border bg-surface-1/80 pt-3 xl:flex">
+          <aside className="hidden h-full min-h-0 w-12 shrink-0 flex-col items-center border-l border-border bg-surface-1/80 pt-3 xl:flex">
             <Tooltip label="Show queue">
               <Button size="icon" variant="ghost" onClick={() => ui.set({ queueCollapsed: false })} aria-label="Show queue">
                 <PanelRightOpen className="h-4 w-4" />
@@ -60,7 +60,7 @@ export function AppShell({ user }: { user: User }) {
             </Tooltip>
           </aside>
         ) : (
-          <aside className="hidden h-full w-[300px] shrink-0 flex-col border-l border-border bg-surface-1/80 xl:flex">
+          <aside className="hidden h-full min-h-0 w-[300px] shrink-0 flex-col overflow-hidden border-l border-border bg-surface-1/80 xl:flex">
             <QueuePanel onCollapse={() => ui.set({ queueCollapsed: true })} />
           </aside>
         )}

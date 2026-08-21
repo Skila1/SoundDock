@@ -73,6 +73,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) discordLogin(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("code") != "" || r.URL.Query().Get("error") != "" {
+		s.discordLoginCallback(w, r)
+		return
+	}
 	oauth := auth.LoadDiscordOAuth(r.Context(), s.Pool, s.Box)
 	if !oauth.Ready() {
 		writeErr(w, 503, "disabled", "Discord sign-in is off")
@@ -90,9 +94,8 @@ func (s *Server) discordLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
-	base := s.absURL(r)
 	fail := func(msg string) {
-		http.Redirect(w, r, base+"/?error="+url.QueryEscape(msg), http.StatusFound)
+		http.Redirect(w, r, "/?error="+url.QueryEscape(msg), http.StatusFound)
 	}
 	oauth := auth.LoadDiscordOAuth(r.Context(), s.Pool, s.Box)
 	if !oauth.Ready() {
@@ -109,7 +112,8 @@ func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
 		fail("invalid_state")
 		return
 	}
-	ex, err := auth.ExchangeDiscordCode(r.Context(), oauth.ClientID, oauth.Secret, auth.DiscordCallbackURL(base), r.URL.Query().Get("code"), ver)
+	redir := s.absURL(r) + r.URL.Path
+	ex, err := auth.ExchangeDiscordCode(r.Context(), oauth.ClientID, oauth.Secret, redir, r.URL.Query().Get("code"), ver)
 	if err != nil {
 		fail("token_exchange")
 		return
@@ -137,5 +141,5 @@ func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	s.setSessionCookie(w, r, tok, sess.ExpiresAt)
 	s.Audit.Event(r.Context(), &u.ID, "login.discord", prof.ID, r.RemoteAddr, nil)
-	http.Redirect(w, r, base+"/", http.StatusFound)
+	http.Redirect(w, r, "/", http.StatusFound)
 }

@@ -196,6 +196,10 @@ install_cloudflared_pkg() {
 
 install_cloudflared_service() {
   local token="${1:-}"
+  if cloudflared_service_present; then
+    msg_ok "cloudflared systemd service already exists, leaving it as-is"
+    return
+  fi
   if [[ -z "${token}" ]]; then
     return
   fi
@@ -204,13 +208,21 @@ install_cloudflared_service() {
     (cd "${PREFIX}" && ${COMPOSE} stop cloudflared >/dev/null 2>&1 || true)
     (cd "${PREFIX}" && ${COMPOSE} rm -f cloudflared >/dev/null 2>&1 || true)
   fi
-  if systemctl list-unit-files --type=service 2>/dev/null | grep -q '^cloudflared\.service'; then
-    cloudflared service uninstall >/dev/null 2>&1 || true
-  fi
   msg_info "Installing cloudflared systemd service"
   cloudflared service install "${token}"
   systemctl enable --now cloudflared
   msg_ok "cloudflared is running as a systemd service (origin: http://localhost:8080)"
+}
+
+cloudflared_service_present() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  if systemctl is-active --quiet cloudflared 2>/dev/null; then
+    return 0
+  fi
+  if systemctl is-enabled --quiet cloudflared 2>/dev/null; then
+    return 0
+  fi
+  systemctl list-unit-files --type=service --no-legend 2>/dev/null | grep -q '^cloudflared\.service'
 }
 
 rand() {
@@ -242,12 +254,20 @@ collect_config() {
     exit 0
   fi
 
-  if ui_yesno "Cloudflare Tunnel" "Install cloudflared as a systemd service now?\n\nNot Docker. Point the tunnel at http://localhost:8080 (Docker publishes that port on the host)." 13; then
+  if cloudflared_service_present; then
+    msg_ok "cloudflared is already installed as a systemd service"
+  elif ui_yesno "Cloudflare Tunnel" "Install cloudflared as a systemd service now?\n\nNot Docker. Point the tunnel at http://localhost:8080 (Docker publishes that port on the host)." 13; then
     CFG_CFTOK="$(ui_pass "Tunnel token" "Cloudflare Tunnel token from Zero Trust.")" || exit 0
   fi
 
+  local cfstatus="no"
+  if cloudflared_service_present; then
+    cfstatus="already installed"
+  elif [[ -n "${CFG_CFTOK}" ]]; then
+    cfstatus="yes"
+  fi
   local summary
-  summary="Compose project: ${PREFIX}\nFiles: docker-compose.yml and .env\nHost port: 8080\nLibraries: ${CFG_LIBHOST}\ncloudflared systemd: $([[ -n "${CFG_CFTOK}" ]] && echo yes || echo no)\n\nFirst visit: create a local administrator in the browser.\nDiscord is set up later under Admin."
+  summary="Compose project: ${PREFIX}\nFiles: docker-compose.yml and .env\nHost port: 8080\nLibraries: ${CFG_LIBHOST}\ncloudflared systemd: ${cfstatus}\n\nFirst visit: create a local administrator in the browser.\nDiscord is set up later under Admin."
   if ! ui_yesno "Ready" "${summary}\n\nStart install?" 16; then
     echo "Cancelled."
     exit 0
@@ -436,7 +456,7 @@ cmd_install() {
   mk="$(rand)"
   pw="$(rand)"
   local cookie="false"
-  if [[ -n "${CFG_CFTOK}" ]]; then
+  if [[ -n "${CFG_CFTOK}" ]] || cloudflared_service_present; then
     cookie="true"
   fi
   local dockergid="0"
