@@ -16,6 +16,7 @@ const AlbumsPage = lazy(() => import("@/features/albums/AlbumsPage").then((m) =>
 const AlbumPage = lazy(() => import("@/features/albums/AlbumPage").then((m) => ({ default: m.AlbumPage })));
 const TracksPage = lazy(() => import("@/features/tracks/TracksPage").then((m) => ({ default: m.TracksPage })));
 const PlaylistsPage = lazy(() => import("@/features/playlists/PlaylistsPage").then((m) => ({ default: m.PlaylistsPage })));
+const PlaylistPage = lazy(() => import("@/features/playlists/PlaylistPage").then((m) => ({ default: m.PlaylistPage })));
 const PlaylistInvitePage = lazy(() => import("@/features/playlists/PlaylistInvitePage").then((m) => ({ default: m.PlaylistInvitePage })));
 const RadioPage = lazy(() => import("@/features/playlists/RadioPage").then((m) => ({ default: m.RadioPage })));
 const RadioStationPage = lazy(() => import("@/features/playlists/RadioPage").then((m) => ({ default: m.RadioStationPage })));
