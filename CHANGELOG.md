@@ -11,6 +11,8 @@
 - In-app Update now writes the host request immediately, then pulls via the Docker socket if systemd inotify missed the bind-mount write.
 - API keys are created in Administration with explicit scopes. Profile no longer mints keys.
 - Discord voice join waits until the connection is ready and tears down failed sessions so the bot does not keep leaving and rejoining.
+- `docker compose up -d` now starts `discord-worker` by default. The old `discord` profile is no longer required.
+- Discord voice uses a DAVE/E2EE-capable discordgo fork. Discord now rejects clients that omit `max_dave_protocol_version` with close 4017, which looked like the bot joining and leaving.
 
 ## 0.0.9
 

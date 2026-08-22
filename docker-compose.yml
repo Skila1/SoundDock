@@ -56,7 +56,6 @@ services:
     command: ["discord"]
     restart: unless-stopped
     stop_grace_period: 30s
-    profiles: ["discord"]
     depends_on:
       postgres:
         condition: service_healthy

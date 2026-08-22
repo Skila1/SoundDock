@@ -585,7 +585,6 @@ services:
     image: \${SD_IMAGE:-ghcr.io/skila1/sounddock:latest}
     command: ["discord"]
     restart: unless-stopped
-    profiles: ["discord"]
     depends_on:
       postgres:
         condition: service_healthy
