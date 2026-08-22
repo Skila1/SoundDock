@@ -71,8 +71,65 @@ func waitDAVEReady(vc *discordgo.VoiceConnection, d time.Duration) error {
 	return nil
 }
 
+func (b *Bot) voiceConn(guildID string) *discordgo.VoiceConnection {
+	sess := b.session()
+	if sess == nil {
+		return nil
+	}
+	vc, ok := sess.VoiceConnections[guildID]
+	if !ok || vc == nil || vc.Status == discordgo.VoiceConnectionStatusDead {
+		return nil
+	}
+	return vc
+}
+
+// BotChannel is the voice channel the bot is actually in for this guild.
+func (b *Bot) BotChannel(guildID string) (string, bool) {
+	sess := b.session()
+	if sess == nil || sess.State == nil || sess.State.User == nil {
+		return "", false
+	}
+	st, err := sess.State.VoiceState(guildID, sess.State.User.ID)
+	if err != nil || st == nil || st.ChannelID == "" {
+		return "", false
+	}
+	return st.ChannelID, true
+}
+
+func (b *Bot) markVoiceConnected(ctx context.Context, guildID, channelID string, sid uuid.UUID) {
+	_, _ = b.pool.Exec(ctx, `
+		INSERT INTO discord_voice_runtime (guild_id, voice_channel_id, session_id, connected, last_disconnect_reason)
+		VALUES ($1,$2,$3,true,'')
+		ON CONFLICT (guild_id) DO UPDATE SET voice_channel_id=$2, session_id=$3, connected=true, last_disconnect_reason=''`,
+		guildID, channelID, sid)
+	b.ensureStreamer(guildID)
+}
+
+func (b *Bot) markJoining(ctx context.Context, guildID, channelID string, sid uuid.UUID) {
+	_, _ = b.pool.Exec(ctx, `
+		INSERT INTO discord_voice_runtime (guild_id, voice_channel_id, session_id, connected, last_disconnect_reason)
+		VALUES ($1,$2,$3,false,'joining')
+		ON CONFLICT (guild_id) DO UPDATE SET voice_channel_id=$2, session_id=$3, connected=false, last_disconnect_reason='joining'`,
+		guildID, channelID, sid)
+}
+
+func (b *Bot) finishVoiceJoin(ctx context.Context, vc *discordgo.VoiceConnection, guildID, channelID string, sid uuid.UUID) error {
+	if !waitVoiceReady(vc, 15*time.Second) {
+		b.dropVoice(guildID)
+		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, "timeout waiting for voice")
+		return fmt.Errorf("timeout waiting for voice")
+	}
+	if err := waitDAVEReady(vc, 15*time.Second); err != nil {
+		b.dropVoice(guildID)
+		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, "timeout waiting for DAVE")
+		return fmt.Errorf("timeout waiting for DAVE: %w", err)
+	}
+	b.markVoiceConnected(ctx, guildID, channelID, sid)
+	return nil
+}
+
 // JoinChannel connects the bot to a guild voice channel and starts PCM streaming
-// from the discord_guild playback session. Reuses discord_voice_runtime.
+// from the discord_guild playback session. Reuses an existing healthy connection.
 func (b *Bot) JoinChannel(ctx context.Context, guildID, channelID string) error {
 	if guildID == "" || channelID == "" {
 		return fmt.Errorf("not in a voice channel")
@@ -86,46 +143,38 @@ func (b *Bot) JoinChannel(ctx context.Context, guildID, channelID string) error 
 	if err != nil {
 		return err
 	}
-	_, _ = b.pool.Exec(ctx, `
-		INSERT INTO discord_voice_runtime (guild_id, voice_channel_id, session_id, connected, last_disconnect_reason)
-		VALUES ($1,$2,$3,false,'joining')
-		ON CONFLICT (guild_id) DO UPDATE SET voice_channel_id=$2, session_id=$3, connected=false, last_disconnect_reason='joining'`,
-		guildID, channelID, sid)
 
-	if v, ok := b.voices.LoadAndDelete(guildID); ok {
-		if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
-			gr.cancel()
+	if vc := b.voiceConn(guildID); vc != nil {
+		if cur, ok := b.BotChannel(guildID); ok && cur == channelID && waitVoiceReady(vc, 0) {
+			if err := waitDAVEReady(vc, 5*time.Second); err == nil {
+				b.markVoiceConnected(ctx, guildID, channelID, sid)
+				return nil
+			}
+		}
+		if cur, ok := b.BotChannel(guildID); ok && cur != channelID {
+			if err := sess.VoiceStateUpdate(guildID, channelID, false, true); err == nil {
+				if err := b.finishVoiceJoin(ctx, vc, guildID, channelID, sid); err == nil {
+					return nil
+				}
+			}
 		}
 	}
-	// A timed-out VoiceConnection keeps retrying and looks like join/leave.
+
+	b.markJoining(ctx, guildID, channelID, sid)
 	b.dropVoice(guildID)
 	jctx, jcancel := context.WithTimeout(ctx, 20*time.Second)
 	defer jcancel()
-	vc, err := sess.ChannelVoiceJoin(jctx, guildID, channelID, false, false)
+	// Deafened like a playback-only bot: we send audio, we do not need to receive it.
+	vc, err := sess.ChannelVoiceJoin(jctx, guildID, channelID, false, true)
 	if err != nil {
 		b.dropVoice(guildID)
 		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, redacted(err.Error()))
 		return err
 	}
-	if !waitVoiceReady(vc, 5*time.Second) {
-		b.dropVoice(guildID)
-		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, "timeout waiting for voice")
-		return fmt.Errorf("timeout waiting for voice")
-	}
-	// Discord rejects non-DAVE voice with close 4017. Do not mark connected until E2EE is up.
-	if err := waitDAVEReady(vc, 15*time.Second); err != nil {
-		b.dropVoice(guildID)
-		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, "timeout waiting for DAVE")
-		return fmt.Errorf("timeout waiting for DAVE: %w", err)
-	}
-	_, _ = b.pool.Exec(ctx, `
-		UPDATE discord_voice_runtime SET connected=true, last_disconnect_reason='', session_id=$2, voice_channel_id=$3 WHERE guild_id=$1`,
-		guildID, sid, channelID)
-	b.ensureStreamer(guildID)
-	return nil
+	return b.finishVoiceJoin(ctx, vc, guildID, channelID, sid)
 }
 
-// LeaveGuild disconnects voice and marks discord_voice_runtime disconnected.
+// LeaveGuild disconnects voice, stops the guild session, and marks runtime disconnected.
 func (b *Bot) LeaveGuild(ctx context.Context, guildID string) error {
 	if v, ok := b.voices.LoadAndDelete(guildID); ok {
 		if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
@@ -136,6 +185,10 @@ func (b *Bot) LeaveGuild(ctx context.Context, guildID string) error {
 		if vc, ok := sess.VoiceConnections[guildID]; ok && vc != nil {
 			disconnectVC(vc)
 		}
+	}
+	if sid, err := b.play.Session(ctx, "discord_guild", guildID, nil); err == nil {
+		_ = b.play.Control(ctx, sid, "stop", nil)
+		_ = b.play.Control(ctx, sid, "clear", nil)
 	}
 	_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='leave' WHERE guild_id=$1`, guildID)
 	return nil
@@ -451,6 +504,15 @@ func (b *Bot) reconcileVoice(ctx context.Context) {
 				_ = b.LeaveGuild(ctx, gid)
 			}
 		} else if ch != nil && *ch != "" {
+			if b.voiceConn(gid) == nil {
+				_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='voice_dead' WHERE guild_id=$1`, gid)
+				if v, ok := b.voices.LoadAndDelete(gid); ok {
+					if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
+						gr.cancel()
+					}
+				}
+				continue
+			}
 			b.ensureStreamer(gid)
 		}
 	}

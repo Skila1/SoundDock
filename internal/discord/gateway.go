@@ -136,6 +136,10 @@ func (b *Bot) onVoiceState(s *discordgo.Session, vs *discordgo.VoiceStateUpdate)
 	if vs == nil || vs.VoiceState == nil {
 		return
 	}
+	if s.State != nil && s.State.User != nil && vs.UserID == s.State.User.ID {
+		b.onBotVoiceState(vs)
+		return
+	}
 	ctx := context.Background()
 	uid := vs.UserID
 	gid := vs.GuildID
@@ -149,6 +153,20 @@ func (b *Bot) onVoiceState(s *discordgo.Session, vs *discordgo.VoiceStateUpdate)
 		VALUES ($1,$2,$3,now())
 		ON CONFLICT (discord_user_id, guild_id) DO UPDATE SET channel_id=EXCLUDED.channel_id, updated_at=now()`,
 		uid, gid, ch)
+}
+
+func (b *Bot) onBotVoiceState(vs *discordgo.VoiceStateUpdate) {
+	ctx := context.Background()
+	if vs.ChannelID == "" {
+		if v, ok := b.voices.LoadAndDelete(vs.GuildID); ok {
+			if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
+				gr.cancel()
+			}
+		}
+		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='kicked' WHERE guild_id=$1`, vs.GuildID)
+		return
+	}
+	_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET voice_channel_id=$2 WHERE guild_id=$1 AND connected=true`, vs.GuildID, vs.ChannelID)
 }
 
 // VoiceOfUser returns the guild and channel the Discord user is actually in.

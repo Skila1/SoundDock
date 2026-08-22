@@ -34,3 +34,6 @@ coverage.out
 
 # Host helper drop folder
 /update/
+
+# Local scratch (cloned references, etc.)
+/tmp/

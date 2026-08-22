@@ -13,6 +13,8 @@
 - Discord voice join waits until the connection is ready and tears down failed sessions so the bot does not keep leaving and rejoining.
 - `docker compose up -d` now starts `discord-worker` by default. The old `discord` profile is no longer required.
 - Discord voice uses a DAVE/E2EE-capable discordgo fork. Discord now rejects clients that omit `max_dave_protocol_version` with close 4017, which looked like the bot joining and leaving.
+- Discord join/play reuses a healthy voice session instead of disconnecting first. A kicked bot stays left until someone asks it to join again.
+- Discord voice no longer skips most Opus frames on each Ogg page, which made tracks sound several times too fast.
 
 ## 0.0.9
 

@@ -142,6 +142,10 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 			b.reply(s, i, "Join a voice channel in this server first.")
 			return
 		}
+		if botCh, ok := b.BotChannel(i.GuildID); ok && botCh != ch {
+			b.reply(s, i, "I am already in another voice channel. Join that one, or use /leave first.")
+			return
+		}
 		if err := b.JoinChannel(ctx, i.GuildID, ch); err != nil {
 			b.reply(s, i, "Could not join: "+err.Error())
 			return
@@ -163,6 +167,10 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		}
 		if g != i.GuildID {
 			b.reply(s, i, "Join a voice channel in this server first.")
+			return
+		}
+		if botCh, ok := b.BotChannel(i.GuildID); ok && botCh != ch {
+			b.reply(s, i, "Join the voice channel I am already in, or use /leave first.")
 			return
 		}
 		b.deferReply(s, i)

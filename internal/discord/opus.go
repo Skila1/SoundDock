@@ -10,11 +10,12 @@ import (
 )
 
 type opusEncoder struct {
-	cmd    *exec.Cmd
-	stdout io.ReadCloser
-	stdin  io.WriteCloser
-	r      *bufio.Reader
-	accum  []byte
+	cmd     *exec.Cmd
+	stdout  io.ReadCloser
+	stdin   io.WriteCloser
+	r       *bufio.Reader
+	accum   []byte
+	pending [][]byte
 }
 
 func startOpusEncoder(ctx context.Context, pcm io.Reader) (*opusEncoder, error) {
@@ -61,6 +62,11 @@ func (e *opusEncoder) Close() {
 
 func (e *opusEncoder) Next() ([]byte, error) {
 	for {
+		if len(e.pending) > 0 {
+			pkt := e.pending[0]
+			e.pending = e.pending[1:]
+			return pkt, nil
+		}
 		page, err := readOggPage(e.r)
 		if err != nil {
 			return nil, err
@@ -72,15 +78,12 @@ func (e *opusEncoder) Next() ([]byte, error) {
 			}
 			pkt := append(e.accum, seg...)
 			e.accum = nil
-			if len(pkt) == 0 {
-				continue
-			}
-			if isOpusHeader(pkt) {
+			if len(pkt) == 0 || isOpusHeader(pkt) {
 				continue
 			}
 			out := make([]byte, len(pkt))
 			copy(out, pkt)
-			return out, nil
+			e.pending = append(e.pending, out)
 		}
 	}
 }
