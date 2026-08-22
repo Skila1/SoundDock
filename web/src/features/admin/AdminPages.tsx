@@ -534,16 +534,34 @@ export function AdminDiscord() {
         </Field>
         <Button type="submit">Save whitelist</Button>
       </form>
-      <h3 className="mb-2 font-semibold">Guilds</h3>
+      <h3 className="mb-2 font-semibold">Servers</h3>
+      <p className="mb-3 text-sm text-muted">One bot token covers every invited server. Disable a server to ignore slash commands and web play there.</p>
       {!guilds.data?.length && <p className="mb-4 text-sm text-muted">Invite the SoundDock bot to get started.</p>}
       <ul className="space-y-2">
         {(guilds.data || []).map((g) => (
-          <li key={g.id} className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+          <li key={g.id} className="flex items-center justify-between gap-3 rounded-lg border border-border px-4 py-3">
             <div>
               <div className="font-medium">{g.name || g.id}</div>
               <div className="text-xs text-muted">volume {g.default_volume} · queue {g.queue_limit}</div>
             </div>
-            <Button size="sm" variant="ghost" onClick={() => api.post(`/api/v1/admin/integrations/discord/guilds/${g.id}/disconnect`).then(() => toast("Disconnected"))}>Disconnect voice</Button>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted">{g.enabled === false ? "Off" : "On"}</span>
+                <Switch
+                  checked={g.enabled !== false}
+                  onCheckedChange={async (on) => {
+                    try {
+                      await api.patch(`/api/v1/admin/integrations/discord/guilds/${g.id}`, { enabled: on });
+                      toast.success(on ? "Server enabled" : "Server disabled");
+                      qc.invalidateQueries({ queryKey: ["discord-guilds"] });
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Could not update server");
+                    }
+                  }}
+                />
+              </div>
+              <Button size="sm" variant="ghost" onClick={() => api.post(`/api/v1/admin/integrations/discord/guilds/${g.id}/disconnect`).then(() => toast("Disconnected"))}>Disconnect voice</Button>
+            </div>
           </li>
         ))}
       </ul>

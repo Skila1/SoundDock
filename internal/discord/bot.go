@@ -345,8 +345,15 @@ func (b *Bot) rejectExplicit(ctx context.Context, guildID string, ids []uuid.UUI
 	return nil
 }
 
-func FFmpegPCM(ctx context.Context, src string, replayGainDB float64) (*exec.Cmd, io.ReadCloser, error) {
-	args := []string{"-i", src, "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "2", "-ar", "48000"}
+func ffmpegSeekArgs(startMS int) []string {
+	if startMS <= 250 {
+		return nil
+	}
+	return []string{"-ss", fmt.Sprintf("%.3f", float64(startMS)/1000.0)}
+}
+
+func FFmpegPCM(ctx context.Context, src string, replayGainDB float64, startMS int) (*exec.Cmd, io.ReadCloser, error) {
+	args := append(ffmpegSeekArgs(startMS), "-i", src, "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "2", "-ar", "48000")
 	if replayGainDB != 0 {
 		args = append(args, "-af", fmt.Sprintf("volume=%.3fdB", replayGainDB))
 	}
@@ -362,8 +369,10 @@ func FFmpegPCM(ctx context.Context, src string, replayGainDB float64) (*exec.Cmd
 	return cmd, stdout, nil
 }
 
-func ffmpegPCMReader(ctx context.Context, r io.Reader, replayGainDB float64) (*exec.Cmd, io.ReadCloser, error) {
-	args := []string{"-i", "pipe:0", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "2", "-ar", "48000"}
+func ffmpegPCMReader(ctx context.Context, r io.Reader, replayGainDB float64, startMS int) (*exec.Cmd, io.ReadCloser, error) {
+	args := []string{"-i", "pipe:0"}
+	args = append(args, ffmpegSeekArgs(startMS)...)
+	args = append(args, "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "2", "-ar", "48000")
 	if replayGainDB != 0 {
 		args = append(args, "-af", fmt.Sprintf("volume=%.3fdB", replayGainDB))
 	}

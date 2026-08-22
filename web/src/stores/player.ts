@@ -58,6 +58,7 @@ let radioBusy = false;
 let xfTimer: number | undefined;
 let sleepHandle: number | undefined;
 let voiceTimer: number | undefined;
+let discordQueueTimer: number | undefined;
 let keysBound = false;
 let audioBound = false;
 let currentMeta: PlayerTrack | undefined;
@@ -204,6 +205,7 @@ type PlayerStore = {
   hydrateTrack: (id: string) => Promise<PlayerTrack | undefined>;
   setOutput: (o: OutputTarget) => Promise<void>;
   pollVoice: () => Promise<void>;
+  syncDiscordQueue: () => Promise<void>;
   setPlaybackRate: (r: number) => void;
   setAutoplay: (on: boolean) => void;
   setVisualizer: (on: boolean) => void;
@@ -235,6 +237,28 @@ function usingDiscord() {
 function discordBlocked() {
   const s = usePlayer.getState();
   return usingDiscord() && !discordReady(s.voice);
+}
+
+function queuePath(path: string) {
+  if (!usingDiscord()) return path;
+  return path.includes("?") ? `${path}&target=discord` : `${path}?target=discord`;
+}
+
+function queuePayload<T extends Record<string, unknown>>(body: T): T & { target?: string } {
+  if (usingDiscord()) return { ...body, target: "discord" };
+  return body;
+}
+
+function ensureDiscordPoll() {
+  if (usingDiscord() && !discordQueueTimer) {
+    discordQueueTimer = window.setInterval(() => {
+      usePlayer.getState().syncDiscordQueue();
+    }, 1000);
+  }
+  if (!usingDiscord() && discordQueueTimer) {
+    window.clearInterval(discordQueueTimer);
+    discordQueueTimer = undefined;
+  }
 }
 
 async function startLocal(id: string, positionMsValue: number, shouldPlay: boolean, meta?: PlayerTrack) {
@@ -412,22 +436,28 @@ export const usePlayer = create<PlayerStore>()(
       sinkId: prefs.sinkId,
       load: async () => {
         try {
-          const q = (await api.get<PlayerQueue>("/api/v1/me/queue")) || emptyQueue();
+          await get().pollVoice();
+          const q = (await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"))) || emptyQueue();
+          const discord = usingDiscord();
           set({
             ...applyQueueFields(q),
-            playing: false
+            playing: discord ? q.status === "playing" : false
           });
           applyVolume(get().volume, get().muted);
           if (q.current_track_id) {
             const t = await get().hydrateTrack(q.current_track_id);
-            const discord = usingDiscord();
-            const wantPlay = q.status === "playing" && !discord;
-            const played = await startLocal(q.current_track_id, q.position_ms || 0, wantPlay, t);
-            set({ playing: wantPlay && played, position: q.position_ms || 0, duration: t?.duration_ms || durationMs() });
-            if (played) beginListen(q.current_track_id);
+            if (discord) {
+              pauseAll();
+              set({ playing: q.status === "playing", position: q.position_ms || 0, duration: t?.duration_ms || 0 });
+            } else {
+              const wantPlay = q.status === "playing";
+              const played = await startLocal(q.current_track_id, q.position_ms || 0, wantPlay, t);
+              set({ playing: wantPlay && played, position: q.position_ms || 0, duration: t?.duration_ms || durationMs() });
+              if (played) beginListen(q.current_track_id);
+            }
           }
           const nextId = q.items?.[(q.current_index ?? 0) + 1]?.track_id;
-          if (nextId) {
+          if (nextId && !discord) {
             preloadTrack(nextId);
             get()
               .hydrateTrack(nextId)
@@ -436,8 +466,9 @@ export const usePlayer = create<PlayerStore>()(
               })
               .catch(() => undefined);
           }
+          ensureDiscordPoll();
         } catch {
-          /* unauthenticated */
+          /* unauthenticated or not in voice */
         }
       },
       hydrateTrack: async (id) => {
@@ -474,14 +505,23 @@ export const usePlayer = create<PlayerStore>()(
             toast.error(msg);
             return;
           }
-          const q = emptyQueue({
-            items: ids.map((track_id, position) => ({ id: track_id, position, track_id })),
-            current_index: idx,
-            current_track_id: ids[idx],
-            status: "playing"
-          });
-          set({ queue: q, playing: true, position: 0 });
+          try {
+            const q = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
+            set({ ...applyQueueFields(q || emptyQueue()), playing: true, position: 0 });
+          } catch {
+            set({
+              queue: emptyQueue({
+                items: ids.map((track_id, position) => ({ id: track_id, position, track_id })),
+                current_index: idx,
+                current_track_id: ids[idx],
+                status: "playing"
+              }),
+              playing: true,
+              position: 0
+            });
+          }
           await get().hydrateTrack(ids[idx]);
+          ensureDiscordPoll();
           return;
         }
         const q = await api.put<PlayerQueue>("/api/v1/me/queue", { track_ids: ids, start: idx });
@@ -509,17 +549,11 @@ export const usePlayer = create<PlayerStore>()(
           pauseAll();
           try {
             await joinDiscord();
-            await playDiscord(ids, index);
+            await get().control("index", { index });
           } catch (e) {
             toast.error(e instanceof Error ? e.message : "Discord play failed");
             return;
           }
-          set({
-            queue: { ...q, current_index: index, current_track_id: ids[index], status: "playing" },
-            playing: true,
-            position: 0
-          });
-          await get().hydrateTrack(ids[index]);
           return;
         }
         listen = null;
@@ -550,9 +584,17 @@ export const usePlayer = create<PlayerStore>()(
         const existing = new Set(idsOf(get().queue));
         const dups = ids.filter((id) => existing.has(id));
         if (dups.length) toast.warning(dups.length === 1 ? "That track is already in the queue" : `${dups.length} tracks are already in the queue`);
-        await api.post("/api/v1/me/queue/add", { track_ids: ids, next });
+        if (usingDiscord()) {
+          try {
+            await joinDiscord();
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Join a Discord voice channel to add tracks");
+            return;
+          }
+        }
+        await api.post(queuePath("/api/v1/me/queue/add"), queuePayload({ track_ids: ids, next }));
         try {
-          const q = await api.get<PlayerQueue>("/api/v1/me/queue");
+          const q = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
           set({
             queue: q,
             shuffle: !!q.shuffle,
@@ -571,7 +613,7 @@ export const usePlayer = create<PlayerStore>()(
         if (action === "pause") pauseAll();
         let q: PlayerQueue | null = null;
         try {
-          q = await api.post<PlayerQueue>("/api/v1/me/queue/control", { action, extra });
+          q = await api.post<PlayerQueue>(queuePath("/api/v1/me/queue/control"), queuePayload({ action, extra }));
         } catch (e) {
           if (action === "index") throw e;
           if (action === "stop_after_current" || action === "reorder" || action === "seek") return;
@@ -604,16 +646,8 @@ export const usePlayer = create<PlayerStore>()(
           }
         }
         if (action === "resume" && discord) {
-          const ids = idsOf(q);
-          if (ids.length && discordReady(get().voice)) {
-            try {
-              await joinDiscord();
-              await playDiscord(ids, q.current_index || 0);
-              set({ playing: true });
-            } catch (err) {
-              toast.error(err instanceof Error ? err.message : "Discord play failed");
-            }
-          }
+          pauseAll();
+          set({ playing: q.status === "playing" });
         }
         if (action === "stop" || action === "clear") {
           pauseAll();
@@ -650,7 +684,7 @@ export const usePlayer = create<PlayerStore>()(
       },
       seek: (ms) => {
         seeking = true;
-        seekActive(ms);
+        if (!usingDiscord()) seekActive(ms);
         set({ position: ms });
         seeking = false;
         const t = get().current;
@@ -674,23 +708,41 @@ export const usePlayer = create<PlayerStore>()(
         set({ output: o });
         if (o === "discord") {
           pauseAll();
-          if (get().playing || get().queue?.status === "playing") {
-            if (!discordReady(get().voice)) {
-              toast.error("Join a Discord voice channel to play");
-              set({ playing: false });
-              return;
-            }
-            const ids = idsOf(get().queue);
-            try {
-              await joinDiscord();
-              await playDiscord(ids, get().queue?.current_index || 0);
-              set({ playing: true });
-            } catch (e) {
-              toast.error(e instanceof Error ? e.message : "Discord play failed");
-            }
+          await get().pollVoice();
+          if (!discordReady(get().voice)) {
+            toast.error("Join a Discord voice channel to play");
+            set({ playing: false });
+            ensureDiscordPoll();
+            return;
           }
+          const ids = idsOf(get().queue);
+          const idx = get().queue?.current_index || 0;
+          const pos = get().position;
+          try {
+            await joinDiscord();
+            if (ids.length) {
+              await playDiscord(ids, idx);
+              if (pos > 500) {
+                await api.post(queuePath("/api/v1/me/queue/control"), queuePayload({
+                  action: "seek",
+                  extra: { position_ms: Math.round(pos) }
+                }));
+              }
+              set({ playing: true });
+            }
+            await get().syncDiscordQueue();
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Discord play failed");
+          }
+          ensureDiscordPoll();
           return;
         }
+        try {
+          await api.post("/api/v1/me/queue/control", { action: "pause", extra: {}, target: "discord" });
+        } catch {
+          /* no guild session */
+        }
+        ensureDiscordPoll();
         const id = get().current?.id;
         if (id && (get().playing || get().queue?.status === "playing")) {
           const played = await startLocal(id, get().position, true, get().current);
@@ -702,6 +754,31 @@ export const usePlayer = create<PlayerStore>()(
         const manual = loadDevicePrefs().outputManual;
         const output = resolveOutput(voice, manual);
         set({ voice, output });
+        ensureDiscordPoll();
+      },
+      syncDiscordQueue: async () => {
+        if (!usingDiscord()) return;
+        try {
+          const q = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
+          if (!q) return;
+          const cur = get();
+          const trackChanged = q.current_track_id !== cur.queue?.current_track_id;
+          const pos = q.position_ms || 0;
+          set({
+            queue: q,
+            shuffle: !!q.shuffle,
+            repeat: q.repeat || cur.repeat,
+            stopAfterCurrent: !!q.stop_after_current,
+            volume: q.volume ?? cur.volume,
+            playing: q.status === "playing",
+            position: trackChanged || Math.abs(pos - cur.position) > 1500 ? pos : cur.position
+          });
+          if (q.current_track_id && (trackChanged || !cur.current)) {
+            await get().hydrateTrack(q.current_track_id);
+          }
+        } catch {
+          /* 409 not in voice, or offline */
+        }
       },
       setPlaybackRate: (r) => {
         const rate = Math.min(2, Math.max(0.5, r));
@@ -769,13 +846,13 @@ export const usePlayer = create<PlayerStore>()(
 );
 
 function onTimeUpdate(el: HTMLAudioElement) {
-  if (el !== getAudio() || seeking) return;
+  if (usingDiscord() || el !== getAudio() || seeking) return;
   const pos = positionMs();
   const dur = durationMs() || usePlayer.getState().duration;
   usePlayer.setState({ position: pos, duration: dur || usePlayer.getState().duration });
   const cur = usePlayer.getState().current;
   if (cur) markProgress(cur.id, pos, dur);
-  if (Date.now() - persistPosAt > 10000 && usePlayer.getState().playing) {
+  if (Date.now() - persistPosAt > 10000 && usePlayer.getState().playing && !usingDiscord()) {
     persistPosAt = Date.now();
     usePlayer.getState().control("seek", { position_ms: Math.round(pos) }).catch(() => undefined);
   }
@@ -785,7 +862,7 @@ function onTimeUpdate(el: HTMLAudioElement) {
 }
 
 function onEnded(el: HTMLAudioElement) {
-  if (el !== getAudio()) return;
+  if (usingDiscord() || el !== getAudio()) return;
   const s = usePlayer.getState();
   if (s.stopAfterCurrent) {
     s.control("stop");
@@ -808,9 +885,11 @@ export function attachAudioListeners() {
       el.ontimeupdate = () => onTimeUpdate(el);
       el.onended = () => onEnded(el);
       el.onplay = () => {
+        if (usingDiscord()) return;
         if (el === getAudio()) usePlayer.setState({ playing: true });
       };
       el.onpause = () => {
+        if (usingDiscord()) return;
         if (el === getAudio() && getIdleAudio()?.paused !== false) usePlayer.setState({ playing: false });
       };
       el.onloadedmetadata = () => {

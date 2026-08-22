@@ -57,6 +57,60 @@ func TestRequestDeviceID(t *testing.T) {
 	}
 }
 
+func TestRequestPlaybackTarget(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(*http.Request)
+		extra      map[string]any
+		bodyTarget string
+		want       string
+	}{
+		{name: "default empty", setup: func(*http.Request) {}, want: ""},
+		{
+			name: "query",
+			setup: func(r *http.Request) {
+				q := r.URL.Query()
+				q.Set("target", "Discord")
+				r.URL.RawQuery = q.Encode()
+			},
+			want: "discord",
+		},
+		{
+			name: "header",
+			setup: func(r *http.Request) {
+				r.Header.Set("X-Playback-Target", " discord ")
+			},
+			want: "discord",
+		},
+		{
+			name: "body wins over query",
+			setup: func(r *http.Request) {
+				q := r.URL.Query()
+				q.Set("target", "web")
+				r.URL.RawQuery = q.Encode()
+			},
+			bodyTarget: "discord",
+			want:       "discord",
+		},
+		{
+			name:       "extra wins",
+			setup:      func(*http.Request) {},
+			extra:      map[string]any{"target": "discord"},
+			bodyTarget: "web",
+			want:       "discord",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/api/v1/me/queue", nil)
+			tc.setup(r)
+			if got := requestPlaybackTarget(r, tc.extra, tc.bodyTarget); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestTrackIDFromQueue(t *testing.T) {
 	id := uuid.MustParse("00000000-0000-4000-8000-000000000050")
 	if got := trackIDFromQueue(map[string]any{"current_track_id": id}); got != id {

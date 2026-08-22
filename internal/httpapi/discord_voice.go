@@ -1,12 +1,19 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
 	discordx "github.com/sounddock/sounddock/internal/discord"
+)
+
+var (
+	errNotInVoice    = errors.New("not in a voice channel")
+	errGuildDisabled = errors.New("this Discord server is disabled")
 )
 
 // MountP7 registers Discord voice-output and scrobble routes on an authenticated /api/v1 router.
@@ -90,6 +97,27 @@ func (s *Server) findUserVoice(r *http.Request) (guildID, channelID string, ok b
 	return g, c, true
 }
 
+func (s *Server) discordPlaySession(r *http.Request) (uuid.UUID, error) {
+	g, _, ok := s.findUserVoice(r)
+	if !ok {
+		return uuid.Nil, errNotInVoice
+	}
+	if !s.guildPlaybackEnabled(r.Context(), g) {
+		return uuid.Nil, errGuildDisabled
+	}
+	u := currentUser(r)
+	return s.Play.Session(r.Context(), "discord_guild", g, &u.ID)
+}
+
+func (s *Server) guildPlaybackEnabled(ctx context.Context, guildID string) bool {
+	var en bool
+	err := s.Pool.QueryRow(ctx, `SELECT enabled FROM discord_guilds WHERE id=$1`, guildID).Scan(&en)
+	if err != nil {
+		return true
+	}
+	return en
+}
+
 func (s *Server) discordJoin(w http.ResponseWriter, r *http.Request) {
 	g, c, ok := s.findUserVoice(r)
 	if !ok {
@@ -97,6 +125,10 @@ func (s *Server) discordJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.ensureDiscordJoin(r, g, c); err != nil {
+		if errors.Is(err, errGuildDisabled) {
+			writeErr(w, 403, "guild_disabled", err.Error())
+			return
+		}
 		writeErr(w, 500, "voice", err.Error())
 		return
 	}
@@ -105,6 +137,9 @@ func (s *Server) discordJoin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) ensureDiscordJoin(r *http.Request, guildID, channelID string) error {
 	ctx := r.Context()
+	if !s.guildPlaybackEnabled(ctx, guildID) {
+		return errGuildDisabled
+	}
 	_, _ = s.Pool.Exec(ctx, `INSERT INTO discord_guilds (id) VALUES ($1) ON CONFLICT DO NOTHING`, guildID)
 	sid, err := s.Play.Session(ctx, "discord_guild", guildID, &currentUser(r).ID)
 	if err != nil {
@@ -133,6 +168,10 @@ func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.ensureDiscordJoin(r, g, c); err != nil {
+		if errors.Is(err, errGuildDisabled) {
+			writeErr(w, 403, "guild_disabled", err.Error())
+			return
+		}
 		writeErr(w, 500, "voice", err.Error())
 		return
 	}

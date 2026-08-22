@@ -37,5 +37,11 @@
     "discord_enabled_when": "discord_enabled && linked && in_voice",
     "default_when_in_voice": "discord",
     "default_otherwise": "browser"
+  },
+  "queue_target": {
+    "query": "target=discord",
+    "body": { "target": "discord" },
+    "header": "X-Playback-Target: discord",
+    "notes": "GET/PUT /me/queue, POST /me/queue/add, and POST /me/queue/control resolve the user's current guild session via VoiceOfUser. 409 not_in_voice if they are not in a voice channel."
   }
 }

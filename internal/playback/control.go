@@ -91,6 +91,20 @@ func (e *Engine) Control(ctx context.Context, sid uuid.UUID, action string, extr
 		return e.move(ctx, sid, 1, ended)
 	case "previous":
 		return e.move(ctx, sid, -1, false)
+	case "index":
+		idx, ok := extraInt(extra, "index")
+		if !ok {
+			return fmt.Errorf("index required")
+		}
+		items, err := e.queueMeta(ctx, sid)
+		if err != nil {
+			return err
+		}
+		if idx < 0 || idx >= len(items) {
+			return fmt.Errorf("index out of range")
+		}
+		_, err = e.pool.Exec(ctx, `UPDATE playback_sessions SET current_index=$2, current_track_id=$3, position_ms=0, status='playing', updated_at=now() WHERE id=$1`, sid, idx, items[idx].TrackID)
+		return err
 	case "remove":
 		pos, _ := extraInt(extra, "position")
 		return e.removeAt(ctx, sid, pos)

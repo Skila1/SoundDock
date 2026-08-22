@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,48 @@ import (
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/scrobble"
 )
+
+func requestPlaybackTarget(r *http.Request, extra map[string]any, bodyTarget string) string {
+	if extra != nil {
+		if s, ok := extra["target"].(string); ok && strings.TrimSpace(s) != "" {
+			return strings.ToLower(strings.TrimSpace(s))
+		}
+	}
+	if strings.TrimSpace(bodyTarget) != "" {
+		return strings.ToLower(strings.TrimSpace(bodyTarget))
+	}
+	if q := r.URL.Query().Get("target"); q != "" {
+		return strings.ToLower(strings.TrimSpace(q))
+	}
+	if h := r.Header.Get("X-Playback-Target"); h != "" {
+		return strings.ToLower(strings.TrimSpace(h))
+	}
+	return ""
+}
+
+func (s *Server) playSession(r *http.Request, extra map[string]any, bodyTarget, deviceID string) (uuid.UUID, error) {
+	if requestPlaybackTarget(r, extra, bodyTarget) == "discord" {
+		return s.discordPlaySession(r)
+	}
+	u := currentUser(r)
+	return s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(deviceID, requestDeviceID(r, extra)))
+}
+
+func (s *Server) writePlaySessionErr(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errNotInVoice) {
+		writeErr(w, 409, "not_in_voice", err.Error())
+		return true
+	}
+	if errors.Is(err, errGuildDisabled) {
+		writeErr(w, 403, "guild_disabled", err.Error())
+		return true
+	}
+	writeErr(w, 500, "queue", err.Error())
+	return true
+}
 
 func requestDeviceID(r *http.Request, extra map[string]any) string {
 	if extra != nil {
@@ -31,14 +74,12 @@ func requestDeviceID(r *http.Request, extra map[string]any) string {
 }
 
 func (s *Server) webPlaySession(r *http.Request, extra map[string]any) (uuid.UUID, error) {
-	u := currentUser(r)
-	return s.Play.WebSession(r.Context(), u.ID, requestDeviceID(r, extra))
+	return s.playSession(r, extra, "", "")
 }
 
 func (s *Server) getQueue(w http.ResponseWriter, r *http.Request) {
 	sid, err := s.webPlaySession(r, nil)
-	if err != nil {
-		writeErr(w, 500, "queue", err.Error())
+	if s.writePlaySessionErr(w, err) {
 		return
 	}
 	q, err := s.Play.Get(r.Context(), sid)
@@ -54,12 +95,11 @@ func (s *Server) putQueue(w http.ResponseWriter, r *http.Request) {
 		TrackIDs []uuid.UUID `json:"track_ids"`
 		Start    int         `json:"start"`
 		DeviceID string      `json:"device_id"`
+		Target   string      `json:"target"`
 	}
 	_ = decodeJSON(r, &body)
-	u := currentUser(r)
-	sid, err := s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(body.DeviceID, requestDeviceID(r, nil)))
-	if err != nil {
-		writeErr(w, 500, "queue", err.Error())
+	sid, err := s.playSession(r, nil, body.Target, body.DeviceID)
+	if s.writePlaySessionErr(w, err) {
 		return
 	}
 	if err := s.Play.Replace(r.Context(), sid, body.TrackIDs, body.Start); err != nil {
@@ -82,12 +122,11 @@ func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 		TrackIDs []uuid.UUID `json:"track_ids"`
 		Next     bool        `json:"next"`
 		DeviceID string      `json:"device_id"`
+		Target   string      `json:"target"`
 	}
 	_ = decodeJSON(r, &body)
-	u := currentUser(r)
-	sid, err := s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(body.DeviceID, requestDeviceID(r, nil)))
-	if err != nil {
-		writeErr(w, 500, "queue", err.Error())
+	sid, err := s.playSession(r, nil, body.Target, body.DeviceID)
+	if s.writePlaySessionErr(w, err) {
 		return
 	}
 	if err := s.Play.Add(r.Context(), sid, body.TrackIDs, body.Next); err != nil {
@@ -102,15 +141,14 @@ func (s *Server) queueControl(w http.ResponseWriter, r *http.Request) {
 		Action   string         `json:"action"`
 		Extra    map[string]any `json:"extra"`
 		DeviceID string         `json:"device_id"`
+		Target   string         `json:"target"`
 	}
 	_ = decodeJSON(r, &body)
 	if body.Extra == nil {
 		body.Extra = map[string]any{}
 	}
-	u := currentUser(r)
-	sid, err := s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(body.DeviceID, requestDeviceID(r, body.Extra)))
-	if err != nil {
-		writeErr(w, 500, "queue", err.Error())
+	sid, err := s.playSession(r, body.Extra, body.Target, body.DeviceID)
+	if s.writePlaySessionErr(w, err) {
 		return
 	}
 	s.maybeListenSkip(r, sid, body.Action, body.Extra)

@@ -229,9 +229,11 @@ func (b *Bot) ensureStreamer(guildID string) {
 func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 	defer b.voices.Delete(guildID)
 	var (
-		trackCancel context.CancelFunc
-		current     uuid.UUID
-		status      string
+		trackCancel  context.CancelFunc
+		current      uuid.UUID
+		status       string
+		appliedStart int
+		appliedAt    time.Time
 	)
 	stopTrack := func() {
 		if trackCancel != nil {
@@ -288,10 +290,17 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 			continue
 		}
 		if tid == current && stat == status && trackCancel != nil {
+			pos := sessionPositionMS(st)
+			expected := appliedStart + int(time.Since(appliedAt).Milliseconds())
+			if pos-expected > 2000 || expected-pos > 2000 {
+				stopTrack()
+			}
 			continue
 		}
 		stopTrack()
 		current, status = tid, stat
+		appliedStart = sessionPositionMS(st)
+		appliedAt = time.Now()
 		tctx, cancel := context.WithCancel(ctx)
 		trackCancel = cancel
 		go b.playTrack(tctx, guildID, sid, tid, st)
@@ -324,7 +333,8 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 	}
 	defer src.Close()
 
-	pcmCmd, pcm, err := src.open(ctx, gainDB)
+	startMS := sessionPositionMS(st)
+	pcmCmd, pcm, err := src.open(ctx, gainDB, startMS)
 	if err != nil {
 		b.recordPlaybackError(ctx, guildID, trackID, "ffmpeg", err.Error())
 		_ = b.play.Control(ctx, sid, "skip", nil)
@@ -351,7 +361,13 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 	defer vc.Speaking(false)
 
 	started := time.Now()
-	counted := false
+	lastPosWrite := time.Time{}
+	lastWritten := startMS
+	thresh := durationMS / 2
+	if thresh > 30000 {
+		thresh = 30000
+	}
+	counted := durationMS > 0 && startMS >= thresh
 	for {
 		pkt, err := enc.Next()
 		if err == io.EOF {
@@ -367,16 +383,23 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 		if !sendOpus(ctx, vc, pkt) {
 			return
 		}
-		if !counted && durationMS > 0 {
-			elapsed := int(time.Since(started).Milliseconds())
-			thresh := durationMS / 2
-			if thresh > 30000 {
-				thresh = 30000
+		elapsed := startMS + int(time.Since(started).Milliseconds())
+		if ctx.Err() != nil {
+			return
+		}
+		if time.Since(lastPosWrite) >= time.Second {
+			lastPosWrite = time.Now()
+			tag, err := b.pool.Exec(ctx, `
+				UPDATE playback_sessions SET position_ms=$2, updated_at=now()
+				WHERE id=$1 AND abs(position_ms - $3) <= 2500`, sid, elapsed, lastWritten)
+			if err != nil || tag.RowsAffected() == 0 {
+				return
 			}
-			if elapsed >= thresh {
-				counted = true
-				b.recordDiscordListens(ctx, guildID, trackID, durationMS)
-			}
+			lastWritten = elapsed
+		}
+		if !counted && durationMS > 0 && elapsed >= thresh {
+			counted = true
+			b.recordDiscordListens(ctx, guildID, trackID, durationMS)
 		}
 	}
 	if ctx.Err() != nil {
@@ -398,14 +421,34 @@ func (s pcmSource) Close() {
 	}
 }
 
-func (s pcmSource) open(ctx context.Context, gainDB float64) (*exec.Cmd, io.ReadCloser, error) {
+func (s pcmSource) open(ctx context.Context, gainDB float64, startMS int) (*exec.Cmd, io.ReadCloser, error) {
 	if s.path != "" {
-		return FFmpegPCM(ctx, s.path, gainDB)
+		return FFmpegPCM(ctx, s.path, gainDB, startMS)
 	}
 	if s.reader != nil {
-		return ffmpegPCMReader(ctx, s.reader, gainDB)
+		return ffmpegPCMReader(ctx, s.reader, gainDB, startMS)
 	}
 	return nil, nil, fmt.Errorf("no ffmpeg source")
+}
+
+func sessionPositionMS(st map[string]any) int {
+	if st == nil {
+		return 0
+	}
+	switch v := st["position_ms"].(type) {
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	default:
+		return 0
+	}
 }
 
 func (b *Bot) ffmpegSourceForTrack(ctx context.Context, trackID uuid.UUID, st map[string]any) (pcmSource, float64, int, error) {

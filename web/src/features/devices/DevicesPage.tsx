@@ -7,6 +7,8 @@ import { EmptyState, PageHeader } from "@/components/ui/empty";
 import { formatDuration } from "@/lib/utils";
 import { toast } from "sonner";
 import type { Track } from "@/types/api";
+import { usePlayer } from "@/stores/player";
+import { discordReady } from "@/lib/device";
 
 type QueueDeviceState = {
   id: string;
@@ -29,10 +31,13 @@ const controls = ["resume", "pause", "stop", "previous", "next"] as const;
 
 export function DevicesPage() {
   const qc = useQueryClient();
+  const output = usePlayer((s) => s.output);
+  const voice = usePlayer((s) => s.voice);
+  const discord = output === "discord" && discordReady(voice);
   const queue = useQuery({
-    queryKey: ["me-queue-devices"],
-    queryFn: () => api.get<QueueDeviceState>("/api/v1/me/queue"),
-    refetchInterval: 5000
+    queryKey: ["me-queue-devices", discord],
+    queryFn: () => api.get<QueueDeviceState>(discord ? "/api/v1/me/queue?target=discord" : "/api/v1/me/queue"),
+    refetchInterval: 2000
   });
   const q = queue.data;
   const track = useQuery({
@@ -43,8 +48,8 @@ export function DevicesPage() {
 
   async function control(action: string) {
     try {
-      await api.post("/api/v1/me/queue/control", { action, extra: {} });
-      toast.success(action === "resume" ? "Playing here" : action[0].toUpperCase() + action.slice(1));
+      await api.post("/api/v1/me/queue/control", { action, extra: {}, ...(discord ? { target: "discord" } : {}) });
+      toast.success(action === "resume" ? (discord ? "Resumed" : "Playing here") : action[0].toUpperCase() + action.slice(1));
       qc.invalidateQueries({ queryKey: ["me-queue-devices"] });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Control failed");
@@ -55,7 +60,9 @@ export function DevicesPage() {
     <div className="max-w-2xl">
       <PageHeader
         title="Devices"
-        description="Handoff playback for your web player. This calls the shared queue API; Discord guild queues are separate."
+        description={discord
+          ? "This is the Discord voice queue for the server you are in. Pause, resume, and skip stay in sync with the bot."
+          : "Handoff playback for this browser. Switch output to Discord to control the voice queue."}
       />
       {!q && !queue.isLoading && (
         <EmptyState icon={Speaker} title="No playback session" description="Start playing a track to create a web device session." />
@@ -66,12 +73,15 @@ export function DevicesPage() {
             <div>
               <div className="flex items-center gap-2">
                 <Speaker className="h-4 w-4 text-accent" />
-                <h2 className="font-semibold">{q.kind === "discord_guild" ? "Discord" : "Web player"}</h2>
+                <h2 className="font-semibold">{q.kind === "discord_guild" || discord ? "Discord" : "Web player"}</h2>
                 <Badge tone={q.status === "playing" ? "success" : "neutral"}>{q.status}</Badge>
               </div>
               <p className="mt-1 text-sm text-muted">
-                {q.device_id ? `Device ${q.device_id}` : "This account’s web session"}
-                {q.owner_key ? ` · ${q.owner_key}` : ""}
+                {q.kind === "discord_guild"
+                  ? `Server ${q.owner_key || voice?.guild_id || ""}`
+                  : q.device_id
+                    ? `Device ${q.device_id}`
+                    : "This account’s web session"}
               </p>
             </div>
           </div>
@@ -87,7 +97,7 @@ export function DevicesPage() {
           <div className="flex flex-wrap gap-2">
             {controls.map((action) => (
               <Button key={action} size="sm" variant={action === "resume" ? "default" : "outline"} onClick={() => control(action)}>
-                {action === "resume" ? "Play here" : action[0].toUpperCase() + action.slice(1)}
+                {action === "resume" ? (discord ? "Resume" : "Play here") : action[0].toUpperCase() + action.slice(1)}
               </Button>
             ))}
           </div>
