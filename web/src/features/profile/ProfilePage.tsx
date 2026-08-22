@@ -35,8 +35,6 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
   const [rg, setRg] = useState(user.replaygain_mode || "off");
   const [xf, setXf] = useState(String(user.crossfade_seconds || 0));
   const [lufs, setLufs] = useState(String(user.target_lufs ?? -18));
-  const [tokenName, setTokenName] = useState("");
-  const [freshSecret, setFreshSecret] = useState("");
 
   const sessions = useQuery({
     queryKey: ["me-sessions"],
@@ -52,7 +50,7 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
 
   return (
     <div className="max-w-2xl">
-      <PageHeader title="Profile" description="Account, playback quality, sessions, and API tokens." />
+      <PageHeader title="Profile" description="Account, playback quality, and sessions." />
       <form
         className="space-y-4 rounded-xl border border-border bg-surface-1 p-5"
         onSubmit={async (e) => {
@@ -133,60 +131,42 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
         </ul>
       </section>
       <section className="mt-6 space-y-3 rounded-xl border border-border bg-surface-1 p-5">
-        <h2 className="font-semibold">Personal access tokens</h2>
-        <p className="text-sm text-muted">For scripts and automations. The secret is shown once.</p>
-        <form
-          className="flex max-w-lg gap-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            try {
-              const r = await api.post<{ secret: string }>("/api/v1/me/tokens", { name: tokenName, scopes: [] });
-              setFreshSecret(r.secret);
-              setTokenName("");
-              toast.success("Token created");
-              qc.invalidateQueries({ queryKey: ["me-tokens"] });
-            } catch (err) {
-              toast.error(err instanceof Error ? err.message : "Could not create token");
-            }
-          }}
-        >
-          <Input value={tokenName} onChange={(e) => setTokenName(e.target.value)} placeholder="Token name" required />
-          <Button type="submit">Create</Button>
-        </form>
-        {freshSecret && (
-          <p className="rounded-lg bg-surface-2 p-3 text-sm">
-            Copy this key now: <code className="break-all">{freshSecret}</code>
-          </p>
-        )}
-        <ul className="space-y-2">
-          {tokenRows.map((t) => (
-            <li key={t.id} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
-              <div>
-                <div className="font-medium">{t.name}</div>
-                <div className="text-xs text-muted">
-                  {t.prefix}… · created {relativeTime(t.created_at)}
-                  {t.last_used_at ? ` · used ${relativeTime(t.last_used_at)}` : " · never used"}
+        <h2 className="font-semibold">API keys</h2>
+        <p className="text-sm text-muted">
+          Keys are created under Administration → API keys, where an administrator sets scopes.
+          {user.is_admin ? <> <a className="text-accent underline" href="/admin/integrations">Open API keys</a></> : null}
+        </p>
+        {tokenRows.length > 0 && (
+          <ul className="space-y-2">
+            {tokenRows.map((t) => (
+              <li key={t.id} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">
+                <div>
+                  <div className="font-medium">{t.name}</div>
+                  <div className="text-xs text-muted">
+                    {t.prefix}… · created {relativeTime(t.created_at)}
+                    {t.last_used_at ? ` · used ${relativeTime(t.last_used_at)}` : " · never used"}
+                  </div>
+                  {(t.scopes || []).length > 0 && <Badge className="mt-1">{(t.scopes || []).join(", ")}</Badge>}
                 </div>
-                {(t.scopes || []).length > 0 && <Badge className="mt-1">{(t.scopes || []).join(", ")}</Badge>}
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={async () => {
-                  try {
-                    await api.del(`/api/v1/me/tokens/${t.id}`);
-                    toast.success("Token revoked");
-                    qc.invalidateQueries({ queryKey: ["me-tokens"] });
-                  } catch (err) {
-                    toast.error(err instanceof Error ? err.message : "Could not revoke");
-                  }
-                }}
-              >
-                Revoke
-              </Button>
-            </li>
-          ))}
-        </ul>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={async () => {
+                    try {
+                      await api.del(`/api/v1/me/tokens/${t.id}`);
+                      toast.success("Token revoked");
+                      qc.invalidateQueries({ queryKey: ["me-tokens"] });
+                    } catch (err) {
+                      toast.error(err instanceof Error ? err.message : "Could not revoke");
+                    }
+                  }}
+                >
+                  Revoke
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
       <div className="mt-6 flex flex-wrap gap-2">
         <Button variant="outline" onClick={() => (window.location.href = "/settings/connected")}>Connected services</Button>

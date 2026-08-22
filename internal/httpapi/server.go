@@ -455,8 +455,8 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			writeErr(w, 401, "unauthorized", "authentication required")
 			return
 		}
-		// API key
-		if strings.HasPrefix(tok, "sd_") {
+		// Personal access tokens are sdp_; integration keys are sd_.
+		if isAPIToken(tok) {
 			u, err := s.apiKeyUser(r.Context(), tok)
 			if err != nil {
 				writeErr(w, 401, "unauthorized", "invalid token")
@@ -476,6 +476,10 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, u)))
 	})
+}
+
+func isAPIToken(tok string) bool {
+	return strings.HasPrefix(tok, patTokenPrefix) || strings.HasPrefix(tok, "sd_")
 }
 
 func bearer(r *http.Request) string {

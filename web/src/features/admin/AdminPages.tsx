@@ -555,29 +555,85 @@ export function AdminDiscord() {
   );
 }
 
+const apiKeyScopes = [
+  { name: "admin", label: "Administrator", desc: "Logs, diagnostics, Discord, updates, users" },
+  { name: "tracks.read", label: "Read catalogue", desc: "List tracks, albums, artists, search" },
+  { name: "tracks.stream", label: "Stream audio", desc: "Play files from the library" },
+  { name: "playlists.write", label: "Playlists", desc: "Create and edit playlists" },
+  { name: "history.read", label: "History", desc: "Listen history and stats" },
+  { name: "library.upload", label: "Upload", desc: "Upload into writable libraries" },
+  { name: "library.import_url", label: "URL import", desc: "Import remote files" },
+  { name: "library.create", label: "Create libraries", desc: "Add library roots" },
+  { name: "library.migrate", label: "Migrate libraries", desc: "Move files into managed storage" }
+];
+
 export function AdminIntegrations() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin-int"], queryFn: () => api.get<any[]>("/api/v1/admin/integrations") });
   const [name, setName] = useState("");
+  const [scopes, setScopes] = useState<string[]>(["admin"]);
   const [secret, setSecret] = useState("");
+  const toggle = (scope: string) => {
+    setScopes((cur) => (cur.includes(scope) ? cur.filter((s) => s !== scope) : [...cur, scope]));
+  };
   return (
     <div>
-      <PageHeader title="Integrations" description="API clients for bots and automations. Secrets are shown once." />
-      <form className="mb-4 flex max-w-lg gap-2" onSubmit={async (e) => {
-        e.preventDefault();
-        const r = await api.post<any>("/api/v1/admin/integrations", { name, scopes: ["read", "stream"] });
-        setSecret(r.secret);
-        toast.success("Client created");
-        qc.invalidateQueries({ queryKey: ["admin-int"] });
-      }}>
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Client name" />
-        <Button type="submit">Create</Button>
+      <PageHeader title="API keys" description="Create keys here, not on Profile. Pick scopes for each key. The secret is shown once." />
+      <form
+        className="mb-6 space-y-4 rounded-xl border border-border bg-surface-1 p-5"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          if (!scopes.length) {
+            toast.error("Pick at least one scope");
+            return;
+          }
+          try {
+            const r = await api.post<any>("/api/v1/admin/integrations", { name, scopes });
+            setSecret(r.secret);
+            setName("");
+            toast.success("API key created");
+            qc.invalidateQueries({ queryKey: ["admin-int"] });
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Could not create key");
+          }
+        }}
+      >
+        <Field label="Name">
+          <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="cursor-debug" required />
+        </Field>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" size="sm" variant="secondary" onClick={() => setScopes(["tracks.read", "tracks.stream", "history.read"])}>Read & stream</Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => setScopes(["tracks.read", "tracks.stream", "playlists.write", "history.read", "library.upload"])}>Library</Button>
+          <Button type="button" size="sm" variant="secondary" onClick={() => setScopes(["admin"])}>Administrator</Button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {apiKeyScopes.map((s) => (
+            <label key={s.name} className="flex items-start gap-3 rounded-lg border border-border px-3 py-2">
+              <input type="checkbox" className="mt-1" checked={scopes.includes(s.name)} onChange={() => toggle(s.name)} />
+              <span>
+                <span className="block text-sm font-medium">{s.label}</span>
+                <span className="block text-xs text-muted">{s.desc}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+        <Button type="submit">Create key</Button>
       </form>
-      {secret && <p className="mb-4 rounded-lg bg-surface-2 p-3 text-sm">Copy this key now: <code>{secret}</code></p>}
+      {secret && (
+        <p className="mb-4 rounded-lg bg-surface-2 p-3 text-sm">
+          Copy this key now: <code className="break-all">{secret}</code>
+        </p>
+      )}
       <ul className="space-y-2">
         {(q.data || []).map((c) => (
           <li key={c.id} className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
-            <div><div className="font-medium">{c.name}</div><div className="text-xs text-muted">{(c.scopes || []).join(", ")}</div></div>
+            <div>
+              <div className="font-medium">{c.name}</div>
+              <div className="text-xs text-muted">
+                {c.prefix ? `${c.prefix}… · ` : ""}{(c.scopes || []).join(", ") || "no scopes"}
+                {c.last_used_at ? ` · used ${relativeTime(c.last_used_at)}` : " · never used"}
+              </div>
+            </div>
             <Button size="sm" variant="ghost" onClick={() => api.del(`/api/v1/admin/integrations/${c.id}`).then(() => { toast("Revoked"); qc.invalidateQueries({ queryKey: ["admin-int"] }); })}>Revoke</Button>
           </li>
         ))}

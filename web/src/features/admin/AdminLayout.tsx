@@ -15,7 +15,7 @@ const links = [
   ["backup-preview", "Backup preview"],
   ["database", "Database"],
   ["discord", "Discord"],
-  ["integrations", "Integrations"],
+  ["integrations", "API keys"],
   ["providers", "External providers"],
   ["webhooks", "Webhooks"],
   ["metadata", "Metadata"],

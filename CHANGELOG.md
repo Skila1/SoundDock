@@ -9,6 +9,7 @@
 - When tags are missing, `Artist - Title` and `Title - Artist` are both understood: tags first, then artists already in the library, then `Artist - Title` as the default.
 - Hover the player volume control and scroll the mouse wheel to raise or lower volume.
 - In-app Update now writes the host request immediately, then pulls via the Docker socket if systemd inotify missed the bind-mount write.
+- API keys are created in Administration with explicit scopes. Profile no longer mints keys.
 
 ## 0.0.9
 

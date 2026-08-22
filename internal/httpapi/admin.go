@@ -459,9 +459,13 @@ func (s *Server) adminDeleteWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminIntegrations(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT id, name, scopes, last_used_at, created_at FROM api_clients WHERE disabled=false`)
+	rows, _ := s.Pool.Query(r.Context(), `
+		SELECT c.id, c.name, c.scopes, c.last_used_at, c.created_at,
+			(SELECT k.prefix FROM api_client_keys k WHERE k.client_id=c.id AND k.revoked_at IS NULL ORDER BY k.created_at DESC LIMIT 1)
+		FROM api_clients c WHERE c.disabled=false
+		ORDER BY c.created_at DESC`)
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "name", "scopes", "last_used_at", "created_at"))
+	writeJSON(w, 200, scanMaps(rows, "id", "name", "scopes", "last_used_at", "created_at", "prefix"))
 }
 
 func (s *Server) adminCreateIntegration(w http.ResponseWriter, r *http.Request) {
@@ -469,20 +473,38 @@ func (s *Server) adminCreateIntegration(w http.ResponseWriter, r *http.Request) 
 		Name   string   `json:"name"`
 		Scopes []string `json:"scopes"`
 	}
-	_ = decodeJSON(r, &body)
-	secret, _ := cryptox.RandomToken(32)
+	if err := decodeJSON(r, &body); err != nil || strings.TrimSpace(body.Name) == "" {
+		writeErr(w, 400, "invalid", "name required")
+		return
+	}
+	scopes, err := normalizeAPIKeyScopes(body.Scopes)
+	if err != nil {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
+	secret, err := cryptox.RandomToken(32)
+	if err != nil {
+		writeErr(w, 500, "token", err.Error())
+		return
+	}
 	plain := "sd_" + secret
 	hash := cryptox.HashToken(plain)
+	name := strings.TrimSpace(body.Name)
 	var id uuid.UUID
-	_ = s.Pool.QueryRow(r.Context(), `INSERT INTO api_clients (name, scopes) VALUES ($1,$2) RETURNING id`, body.Name, body.Scopes).Scan(&id)
+	err = s.Pool.QueryRow(r.Context(), `INSERT INTO api_clients (name, scopes) VALUES ($1,$2) RETURNING id`, name, scopes).Scan(&id)
+	if err != nil {
+		writeErr(w, 500, "db", "could not create API key")
+		return
+	}
 	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO api_client_keys (client_id, prefix, secret_hash) VALUES ($1,$2,$3)`, id, plain[:10], hash)
-	s.Audit.Event(r.Context(), &currentUser(r).ID, "integration.create", body.Name, r.RemoteAddr, nil)
-	writeJSON(w, 201, map[string]any{"id": id, "secret": plain, "note": "shown once"})
+	s.Audit.Event(r.Context(), &currentUser(r).ID, "integration.create", name, r.RemoteAddr, nil)
+	writeJSON(w, 201, map[string]any{"id": id, "name": name, "scopes": scopes, "prefix": plain[:10], "secret": plain, "note": "shown once"})
 }
 
 func (s *Server) adminRevokeIntegration(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE api_client_keys SET revoked_at=now() WHERE client_id=$1`, id)
+	_, _ = s.Pool.Exec(r.Context(), `UPDATE api_clients SET disabled=true WHERE id=$1`, id)
 	s.Audit.Event(r.Context(), &currentUser(r).ID, "integration.revoke", id.String(), r.RemoteAddr, nil)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
