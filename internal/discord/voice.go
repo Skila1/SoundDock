@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/scrobble"
@@ -20,6 +21,31 @@ type guildRuntime struct {
 }
 
 var idleSince sync.Map
+
+func (b *Bot) dropVoice(guildID string) {
+	sess := b.session()
+	if sess == nil {
+		return
+	}
+	if vc, ok := sess.VoiceConnections[guildID]; ok && vc != nil {
+		_ = vc.Disconnect()
+	}
+	delete(sess.VoiceConnections, guildID)
+}
+
+func waitVoiceReady(vc *discordgo.VoiceConnection, d time.Duration) bool {
+	if vc == nil {
+		return false
+	}
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if vc.Ready && vc.OpusSend != nil {
+			return true
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return vc.Ready && vc.OpusSend != nil
+}
 
 // JoinChannel connects the bot to a guild voice channel and starts PCM streaming
 // from the discord_guild playback session. Reuses discord_voice_runtime.
@@ -38,22 +64,31 @@ func (b *Bot) JoinChannel(ctx context.Context, guildID, channelID string) error 
 	}
 	_, _ = b.pool.Exec(ctx, `
 		INSERT INTO discord_voice_runtime (guild_id, voice_channel_id, session_id, connected, last_disconnect_reason)
-		VALUES ($1,$2,$3,true,'')
-		ON CONFLICT (guild_id) DO UPDATE SET voice_channel_id=$2, session_id=$3, connected=true, last_disconnect_reason=''`,
+		VALUES ($1,$2,$3,false,'joining')
+		ON CONFLICT (guild_id) DO UPDATE SET voice_channel_id=$2, session_id=$3, connected=false, last_disconnect_reason='joining'`,
 		guildID, channelID, sid)
 
-	if existing, ok := sess.VoiceConnections[guildID]; ok && existing != nil {
-		if err := existing.ChangeChannel(channelID, false, true); err != nil {
-			return err
+	if v, ok := b.voices.LoadAndDelete(guildID); ok {
+		if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
+			gr.cancel()
 		}
-	} else {
-		vc, err := sess.ChannelVoiceJoin(guildID, channelID, false, true)
-		if err != nil {
-			_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, redacted(err.Error()))
-			return err
-		}
-		_ = vc
 	}
+	// A timed-out VoiceConnection keeps retrying and looks like join/leave.
+	b.dropVoice(guildID)
+	vc, err := sess.ChannelVoiceJoin(guildID, channelID, false, false)
+	if err != nil {
+		b.dropVoice(guildID)
+		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, redacted(err.Error()))
+		return err
+	}
+	if !waitVoiceReady(vc, 15*time.Second) {
+		b.dropVoice(guildID)
+		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, "timeout waiting for voice")
+		return fmt.Errorf("timeout waiting for voice")
+	}
+	_, _ = b.pool.Exec(ctx, `
+		UPDATE discord_voice_runtime SET connected=true, last_disconnect_reason='', session_id=$2, voice_channel_id=$3 WHERE guild_id=$1`,
+		guildID, sid, channelID)
 	b.ensureStreamer(guildID)
 	return nil
 }
@@ -113,6 +148,10 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 		var reason *string
 		_ = b.pool.QueryRow(ctx, `SELECT connected, last_disconnect_reason FROM discord_voice_runtime WHERE guild_id=$1`, guildID).Scan(&connected, &reason)
 		if !connected {
+			if reason != nil && *reason == "joining" {
+				stopTrack()
+				continue
+			}
 			stopTrack()
 			if sess := b.session(); sess != nil {
 				if vc, ok := sess.VoiceConnections[guildID]; ok && vc != nil {
@@ -166,10 +205,7 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 	if !ok || vc == nil {
 		return
 	}
-	for i := 0; i < 40 && (!vc.Ready || vc.OpusSend == nil); i++ {
-		time.Sleep(50 * time.Millisecond)
-	}
-	if !vc.Ready || vc.OpusSend == nil {
+	if !waitVoiceReady(vc, 15*time.Second) {
 		b.recordPlaybackError(ctx, guildID, trackID, "voice", "voice connection not ready")
 		return
 	}

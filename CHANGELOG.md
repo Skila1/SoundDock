@@ -10,6 +10,7 @@
 - Hover the player volume control and scroll the mouse wheel to raise or lower volume.
 - In-app Update now writes the host request immediately, then pulls via the Docker socket if systemd inotify missed the bind-mount write.
 - API keys are created in Administration with explicit scopes. Profile no longer mints keys.
+- Discord voice join waits until the connection is ready and tears down failed sessions so the bot does not keep leaving and rejoining.
 
 ## 0.0.9
 
