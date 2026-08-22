@@ -163,7 +163,7 @@ func main() {
 	role := resolveRole(cfg.Role)
 	log.Info("starting", "role", role, "addr", cfg.HTTPAddr)
 
-	if role == config.RoleAll || role == config.RoleWorker {
+	if role == config.RoleAll || role == config.RoleApp || role == config.RoleWorker {
 		runner.Start(ctx, 2)
 		_, _ = runner.Enqueue(ctx, "maintenance.retention", map[string]any{})
 		_, _ = runner.Enqueue(ctx, "external.playlist.tick", map[string]any{})
@@ -184,7 +184,7 @@ func main() {
 	}
 
 	var httpSrv *http.Server
-	if role == config.RoleAll || role == config.RoleAPI || role == config.RoleDiscord {
+	if role == config.RoleAll || role == config.RoleApp || role == config.RoleAPI || role == config.RoleDiscord {
 		httpSrv = &http.Server{Addr: cfg.HTTPAddr, Handler: srv.Router(), ReadHeaderTimeout: 10 * time.Second}
 		go func() {
 			log.Info("listening", "addr", cfg.HTTPAddr, "role", role)
@@ -219,12 +219,12 @@ func main() {
 func resolveRole(fromEnv config.Role) config.Role {
 	for _, a := range os.Args[1:] {
 		switch config.Role(a) {
-		case config.RoleAll, config.RoleAPI, config.RoleWorker, config.RoleDiscord:
+		case config.RoleAll, config.RoleApp, config.RoleAPI, config.RoleWorker, config.RoleDiscord:
 			return config.Role(a)
 		}
 	}
 	switch fromEnv {
-	case config.RoleAll, config.RoleAPI, config.RoleWorker, config.RoleDiscord:
+	case config.RoleAll, config.RoleApp, config.RoleAPI, config.RoleWorker, config.RoleDiscord:
 		return fromEnv
 	default:
 		return config.RoleAll

@@ -15,6 +15,7 @@
 - Discord voice uses a DAVE/E2EE-capable discordgo fork. Discord now rejects clients that omit `max_dave_protocol_version` with close 4017, which looked like the bot joining and leaving.
 - Discord join/play reuses a healthy voice session instead of disconnecting first. A kicked bot stays left until someone asks it to join again.
 - Discord voice no longer skips most Opus frames on each Ogg page, which made tracks sound several times too fast.
+- The web container no longer starts a second Discord gateway. Only `discord-worker` owns voice, so two sessions cannot kick each other out after a few seconds of audio.
 
 ## 0.0.9
 

@@ -2,11 +2,14 @@ package discordx
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
+
+var botLeavePending sync.Map
 
 func (b *Bot) gatewayLoop(ctx context.Context) {
 	var runCancel context.CancelFunc
@@ -157,16 +160,42 @@ func (b *Bot) onVoiceState(s *discordgo.Session, vs *discordgo.VoiceStateUpdate)
 
 func (b *Bot) onBotVoiceState(vs *discordgo.VoiceStateUpdate) {
 	ctx := context.Background()
-	if vs.ChannelID == "" {
-		if v, ok := b.voices.LoadAndDelete(vs.GuildID); ok {
-			if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
-				gr.cancel()
+	if vs.ChannelID != "" {
+		if v, ok := botLeavePending.LoadAndDelete(vs.GuildID); ok {
+			if cancel, ok := v.(context.CancelFunc); ok {
+				cancel()
 			}
 		}
-		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='kicked' WHERE guild_id=$1`, vs.GuildID)
+		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET voice_channel_id=$2 WHERE guild_id=$1 AND connected=true`, vs.GuildID, vs.ChannelID)
 		return
 	}
-	_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET voice_channel_id=$2 WHERE guild_id=$1 AND connected=true`, vs.GuildID, vs.ChannelID)
+	if _, loaded := botLeavePending.Load(vs.GuildID); loaded {
+		return
+	}
+	tctx, cancel := context.WithCancel(context.Background())
+	botLeavePending.Store(vs.GuildID, cancel)
+	go b.confirmBotLeft(tctx, vs.GuildID)
+}
+
+func (b *Bot) confirmBotLeft(ctx context.Context, guildID string) {
+	defer botLeavePending.Delete(guildID)
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(2 * time.Second):
+	}
+	if _, ok := b.BotChannel(guildID); ok {
+		return
+	}
+	if vc := b.voiceConn(guildID); vc != nil && waitVoiceReady(vc, 0) {
+		return
+	}
+	if v, ok := b.voices.LoadAndDelete(guildID); ok {
+		if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
+			gr.cancel()
+		}
+	}
+	_, _ = b.pool.Exec(context.Background(), `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='kicked' WHERE guild_id=$1`, guildID)
 }
 
 // VoiceOfUser returns the guild and channel the Discord user is actually in.

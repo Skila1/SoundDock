@@ -12,6 +12,7 @@ type Role string
 
 const (
 	RoleAll     Role = "all"
+	RoleApp     Role = "app" // HTTP + jobs, no Discord gateway
 	RoleAPI     Role = "api"
 	RoleWorker  Role = "worker"
 	RoleDiscord Role = "discord"

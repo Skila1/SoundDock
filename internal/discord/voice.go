@@ -22,6 +22,25 @@ type guildRuntime struct {
 
 var idleSince sync.Map
 
+func sendOpus(ctx context.Context, vc *discordgo.VoiceConnection, pkt []byte) (ok bool) {
+	if vc == nil || vc.OpusSend == nil || vc.Status == discordgo.VoiceConnectionStatusDead {
+		return false
+	}
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return false
+	case vc.OpusSend <- pkt:
+		return true
+	case <-time.After(2 * time.Second):
+		return false
+	}
+}
+
 func disconnectVC(vc *discordgo.VoiceConnection) {
 	if vc == nil {
 		return
@@ -237,12 +256,10 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 				stopTrack()
 				continue
 			}
-			stopTrack()
-			if sess := b.session(); sess != nil {
-				if vc, ok := sess.VoiceConnections[guildID]; ok && vc != nil {
-					disconnectVC(vc)
-				}
+			if b.voiceConn(guildID) != nil && waitVoiceReady(b.voiceConn(guildID), 0) {
+				continue
 			}
+			stopTrack()
 			return
 		}
 		sid, err := b.play.Session(ctx, "discord_guild", guildID, nil)
@@ -347,11 +364,7 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 			b.recordPlaybackError(ctx, guildID, trackID, "opus", err.Error())
 			break
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case vc.OpusSend <- pkt:
-		case <-time.After(2 * time.Second):
+		if !sendOpus(ctx, vc, pkt) {
 			return
 		}
 		if !counted && durationMS > 0 {
@@ -500,19 +513,14 @@ func (b *Bot) reconcileVoice(ctx context.Context) {
 			continue
 		}
 		if !connected {
-			if _, ok := b.voices.Load(gid); ok {
-				_ = b.LeaveGuild(ctx, gid)
-			}
-		} else if ch != nil && *ch != "" {
 			if b.voiceConn(gid) == nil {
-				_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='voice_dead' WHERE guild_id=$1`, gid)
 				if v, ok := b.voices.LoadAndDelete(gid); ok {
 					if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
 						gr.cancel()
 					}
 				}
-				continue
 			}
+		} else if ch != nil && *ch != "" && b.voiceConn(gid) != nil {
 			b.ensureStreamer(gid)
 		}
 	}

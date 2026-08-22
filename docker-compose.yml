@@ -21,7 +21,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-    command: ["all"]
+    command: ["app"]
     restart: unless-stopped
     stop_grace_period: 45s
     depends_on:
@@ -30,7 +30,7 @@ services:
     env_file:
       - .env
     environment:
-      SD_ROLE: all
+      SD_ROLE: app
       SD_UPDATE_DIR: /update
       SD_DATABASE_URL: postgres://${POSTGRES_USER:-sounddock}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sounddock}?sslmode=disable
     volumes:

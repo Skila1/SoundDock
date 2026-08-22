@@ -552,7 +552,7 @@ services:
 
   sounddock:
     image: \${SD_IMAGE:-ghcr.io/skila1/sounddock:latest}
-    command: ["all"]
+    command: ["app"]
     restart: unless-stopped
     stop_grace_period: 45s
     depends_on:
@@ -560,7 +560,7 @@ services:
         condition: service_healthy
     env_file: [.env]
     environment:
-      SD_ROLE: all
+      SD_ROLE: app
       SD_COMPOSE_PROJECT: sounddock
       SD_UPDATE_DIR: /update
       SD_DATABASE_URL: postgres://\${POSTGRES_USER:-sounddock}:\${POSTGRES_PASSWORD}@postgres:5432/\${POSTGRES_DB:-sounddock}?sslmode=disable
@@ -659,7 +659,7 @@ cmd_install() {
     grep -q '^SD_COMPOSE_PROJECT=' "${PREFIX}/.env" || echo "SD_COMPOSE_PROJECT=sounddock" >> "${PREFIX}/.env"
   else
     cat > "${PREFIX}/.env" <<EOF
-SD_ROLE=all
+SD_ROLE=app
 SD_HTTP_ADDR=:8080
 SD_INSTANCE_NAME=SoundDock
 SD_DATABASE_URL=postgres://sounddock:${pw}@postgres:5432/sounddock?sslmode=disable
