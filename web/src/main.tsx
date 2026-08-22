@@ -37,7 +37,9 @@ const updateSW = registerSW({
 
 window.addEventListener("beforeinstallprompt", (event) => {
   event.preventDefault();
+  if (sessionStorage.getItem("sd-install-toast") === "1") return;
   const install = event as BeforeInstallPromptEvent;
+  const seen = () => sessionStorage.setItem("sd-install-toast", "1");
   window.setTimeout(() => {
     toast("Install SoundDock", {
       description: "Add the app for offline playback of tracks you save.",
@@ -45,7 +47,10 @@ window.addEventListener("beforeinstallprompt", (event) => {
         label: "Install",
         onClick: () => void install.prompt()
       },
-      duration: 20_000
+      closeButton: true,
+      duration: 4000,
+      onDismiss: seen,
+      onAutoClose: seen
     });
   }, 400);
 });

@@ -20,7 +20,7 @@ export function Providers({ children }: { children: ReactNode }) {
       <TooltipProvider delayDuration={300}>
         {children}
         <PrefsSync />
-        <Toaster theme={theme === "light" ? "light" : "dark"} richColors position="bottom-right" />
+        <Toaster theme={theme === "light" ? "light" : "dark"} richColors position="bottom-right" closeButton />
       </TooltipProvider>
     </QueryClientProvider>
   );
