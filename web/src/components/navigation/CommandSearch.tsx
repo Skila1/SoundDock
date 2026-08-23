@@ -3,12 +3,14 @@ import { useNavigate } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
   Disc3,
+  CircleHelp,
   Globe,
   Heart,
   Home,
   Library,
   Link2,
   ListMusic,
+  MessageCircle,
   Mic2,
   Moon,
   Music,
@@ -29,6 +31,7 @@ import { useUi } from "@/stores/ui";
 import { usePlayer } from "@/stores/player";
 import { useTheme } from "@/stores/theme";
 import { usePrefs } from "@/stores/prefs";
+import { SOUNDDOCK_DISCORD_INVITE } from "@/lib/community";
 
 const NAV = [
   { to: "/", label: "Home", icon: Home },
@@ -133,6 +136,26 @@ export function CommandSearch() {
       icon: Music,
       run: () => {
         control(playing ? "pause" : "resume");
+        close();
+      }
+    },
+    {
+      kind: "action",
+      key: "act-help",
+      label: "Help",
+      icon: CircleHelp,
+      run: () => {
+        window.open(SOUNDDOCK_DISCORD_INVITE, "_blank", "noopener,noreferrer");
+        close();
+      }
+    },
+    {
+      kind: "action",
+      key: "act-discord",
+      label: "Discord server",
+      icon: MessageCircle,
+      run: () => {
+        window.open(SOUNDDOCK_DISCORD_INVITE, "_blank", "noopener,noreferrer");
         close();
       }
     }

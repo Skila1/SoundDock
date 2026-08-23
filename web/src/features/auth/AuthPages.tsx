@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { api } from "@/lib/api";
+import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 
 const errCopy: Record<string, string> = {
   not_in_server: "You must be in the required Discord server to register.",
@@ -126,6 +127,13 @@ export function LoginPage({
           <Field label="Password"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required /></Field>
           <Button type="submit" className="w-full" disabled={busy}>{busy ? "Signing in..." : "Sign in"}</Button>
         </form>
+        {(err === "not_in_server" || err === "missing_role") && (
+          <DiscordServerButton variant="default" size="default" className="w-full" />
+        )}
+        <div className="flex justify-center gap-2 pt-1">
+          <HelpButton />
+          <DiscordServerButton variant="ghost" />
+        </div>
       </div>
     </div>
   );
@@ -175,6 +183,10 @@ export function SetupPage({ onDone, discordConfigured }: { onDone: () => void; d
           <Field label="Password"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
           <Button type="submit" className="w-full" disabled={busy}>{busy ? "Creating..." : "Create admin"}</Button>
         </form>
+        <div className="flex justify-center gap-2 pt-1">
+          <HelpButton />
+          <DiscordServerButton variant="ghost" />
+        </div>
       </div>
     </div>
   );

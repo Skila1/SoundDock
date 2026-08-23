@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { User } from "@/types/api";
 import { ScanProgressBar, latestScan, scanActive, useScanRuns } from "@/features/library/ScanProgress";
+import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 
 type AdminUserRow = {
   id: string;
@@ -425,7 +426,16 @@ export function AdminDiscord() {
   }, [d.data]);
   return (
     <div>
-      <PageHeader title="Discord" description="Optional. Sign-in, bot, and who may register. Nothing here lives in .env." />
+      <PageHeader
+        title="Discord"
+        description="Optional. Sign-in, bot, and who may register. Nothing here lives in .env."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <HelpButton variant="secondary" />
+            <DiscordServerButton />
+          </div>
+        }
+      />
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge tone={d.data?.login_ready ? "success" : "neutral"}>{d.data?.login_ready ? "Sign-in ready" : "Sign-in off"}</Badge>
         <Badge tone={d.data?.token_configured ? "success" : "neutral"}>{d.data?.token_configured ? "Token configured" : "No token"}</Badge>

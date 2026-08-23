@@ -6,6 +6,7 @@ import { useTheme } from "@/stores/theme";
 import { ACCENT_PRESETS, PrefsSync, usePrefs } from "@/stores/prefs";
 import { useUi } from "@/stores/ui";
 import { api } from "@/lib/api";
+import { SOUNDDOCK_DISCORD_INVITE } from "@/lib/community";
 import type { User } from "@/types/api";
 
 export function TopBar({ title, user }: { title?: string; user: User }) {
@@ -75,6 +76,14 @@ export function TopBar({ title, user }: { title?: string; user: User }) {
         <DropdownMenuContent>
           <DropdownMenuItem onSelect={() => nav("/profile")}>Profile</DropdownMenuItem>
           {user.is_admin && <DropdownMenuItem onSelect={() => nav("/admin")}>Administration</DropdownMenuItem>}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <a href={SOUNDDOCK_DISCORD_INVITE} target="_blank" rel="noopener noreferrer">Help</a>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <a href={SOUNDDOCK_DISCORD_INVITE} target="_blank" rel="noopener noreferrer">Discord server</a>
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => api.post("/api/v1/auth/logout").then(() => location.reload())}>Log out</DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

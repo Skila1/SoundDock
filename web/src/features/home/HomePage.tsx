@@ -9,6 +9,7 @@ import { LayoutToggle } from "@/components/media/LayoutToggle";
 import { EmptyState } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
+import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 import { usePlayer } from "@/stores/player";
 import { useUi } from "@/stores/ui";
 import type { Track } from "@/types/api";
@@ -54,6 +55,10 @@ export function HomePage() {
         description="Upload music or import a file you host. Sign-in is Discord-only."
         action={{ label: "Upload music", onClick: () => nav("/upload") }}
       />
+      <div className="mt-4 flex justify-center gap-2">
+        <HelpButton variant="secondary" />
+        <DiscordServerButton />
+      </div>
     );
   }
 

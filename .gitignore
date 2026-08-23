@@ -37,3 +37,6 @@ coverage.out
 
 # Local scratch (cloned references, etc.)
 /tmp/
+
+# Local agent handoff (not published)
+/BRIEFING.md

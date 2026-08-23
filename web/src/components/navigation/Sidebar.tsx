@@ -17,6 +17,7 @@ import {
   Music
 } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
+import { CommunityTextLink, DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
@@ -102,10 +103,22 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
               {it.label}
             </NavLink>
           ))}
+          <CommunityTextLink kind="help" />
+          <CommunityTextLink kind="discord" />
         </div>
       )}
       {collapsible && compact && (
-        <div className="px-2 pb-2">
+        <div className="space-y-1 px-2 pb-2">
+          <Tooltip label="Help">
+            <span className="block w-full">
+              <HelpButton iconOnly variant="ghost" className="w-full" />
+            </span>
+          </Tooltip>
+          <Tooltip label="Discord server">
+            <span className="block w-full">
+              <DiscordServerButton iconOnly variant="ghost" className="w-full" />
+            </span>
+          </Tooltip>
           <Tooltip label="Expand menu">
             <Button size="icon" variant="ghost" className="w-full" onClick={() => ui.set({ navCollapsed: false })} aria-label="Expand menu">
               <PanelLeftOpen className="h-4 w-4" />

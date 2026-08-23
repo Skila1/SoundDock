@@ -7,6 +7,7 @@ import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/misc";
 import { PageHeader } from "@/components/ui/empty";
+import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 import { relativeTime } from "@/lib/utils";
 import { toast } from "sonner";
 import type { User } from "@/types/api";
@@ -50,7 +51,16 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
 
   return (
     <div className="max-w-2xl">
-      <PageHeader title="Profile" description="Account, playback quality, and sessions." />
+      <PageHeader
+        title="Profile"
+        description="Account, playback quality, and sessions."
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <HelpButton variant="secondary" />
+            <DiscordServerButton />
+          </div>
+        }
+      />
       <form
         className="space-y-4 rounded-xl border border-border bg-surface-1 p-5"
         onSubmit={async (e) => {
