@@ -120,6 +120,7 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/me/tokens/{id}", s.revokeToken)
 			r.Get("/announcement", s.publicAnnouncement)
 
+			r.With(s.limit(ratelimit.ClassSearch)).Get("/search/youtube", s.searchYouTube)
 			r.With(s.limit(ratelimit.ClassSearch)).Get("/search", s.search)
 			r.Get("/tracks", s.listTracks)
 			r.Get("/tracks/{id}", s.getTrack)

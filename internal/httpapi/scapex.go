@@ -3,36 +3,35 @@ package httpapi
 import (
 	"context"
 	"net/http"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/scapex"
 )
 
-func (s *Server) appendScapeX(r *http.Request, q, typ string, local []map[string]any) []map[string]any {
-	if s.ScapeX == nil {
-		return local
-	}
-	if typ != "" && !strings.Contains(strings.ToLower(typ), "track") {
-		return local
-	}
+func (s *Server) searchYouTube(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query().Get("q")
 	song := scapex.SongQuery(q)
-	if song == "" {
-		return local
+	if song == "" || s.ScapeX == nil {
+		writeJSON(w, 200, map[string]any{"query": q, "results": []any{}})
+		return
 	}
-	if !s.ScapeX.Ready(r.Context()) {
-		return local
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 8
 	}
-	hits, err := s.ScapeX.Search(r.Context(), song, 8)
+	if limit > 16 {
+		limit = 16
+	}
+	hits, err := s.ScapeX.Search(r.Context(), song, limit)
 	if err != nil || len(hits) == 0 {
-		return local
+		writeJSON(w, 200, map[string]any{"query": q, "results": []any{}})
+		return
 	}
+	out := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
-		if scapex.AlreadyInLibrary(h.Title, h.Artist, local) {
-			continue
-		}
-		item := map[string]any{
+		out = append(out, map[string]any{
 			"type":        "youtube",
 			"id":          h.ID,
 			"title":       h.Title,
@@ -42,10 +41,9 @@ func (s *Server) appendScapeX(r *http.Request, q, typ string, local []map[string
 			"source":      "youtube",
 			"artwork_url": h.ArtworkURL,
 			"stream_url":  h.StreamURL,
-		}
-		local = append(local, item)
+		})
 	}
-	return local
+	writeJSON(w, 200, map[string]any{"query": q, "results": out})
 }
 
 func (s *Server) resolveQueueTracks(ctx context.Context, refs []string) ([]uuid.UUID, error) {

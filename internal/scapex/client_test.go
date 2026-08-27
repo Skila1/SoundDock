@@ -20,6 +20,9 @@ func TestSongQuery(t *testing.T) {
 	if SongQuery("numb played:never") != "numb" {
 		t.Fatal("strip")
 	}
+	if SongQuery("https://youtu.be/kXYiU_JCYtU") != "https://youtu.be/kXYiU_JCYtU" {
+		t.Fatal("youtube url")
+	}
 }
 
 func TestAlreadyInLibrary(t *testing.T) {

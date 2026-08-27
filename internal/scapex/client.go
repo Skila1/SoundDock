@@ -72,7 +72,7 @@ func (c *Client) Search(ctx context.Context, q string, limit int) ([]Hit, error)
 	v := url.Values{}
 	v.Set("q", q)
 	v.Set("limit", strconv.Itoa(limit))
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/search?"+v.Encode(), nil)
 	if err != nil {

@@ -41,16 +41,34 @@ export function SearchPage() {
     enabled: q.trim().length > 0,
     queryFn: () => api.get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(q)}&limit=40`)
   });
+  const youtubeQ = stripPlayTokens(q);
+  const youtube = useQuery({
+    queryKey: ["search-youtube", q],
+    enabled: youtubeQ.length > 1,
+    queryFn: () => api.get<{ results: SearchHit[] }>(`/api/v1/search/youtube?q=${encodeURIComponent(q)}&limit=12`)
+  });
   const grouped = useMemo(() => {
     const hits = results.data?.results || [];
+    const tracks = hits.filter((h) => h.type === "track");
+    const yt = (youtube.data?.results || []).filter((h) => {
+      if (h.type !== "youtube") return false;
+      const nt = h.title.trim().toLowerCase();
+      const na = (h.artist || "").trim().toLowerCase();
+      return !tracks.some((t) => {
+        if (t.title.trim().toLowerCase() !== nt) return false;
+        if (!na) return true;
+        const la = (t.artist || "").trim().toLowerCase();
+        return la.includes(na) || na.includes(la);
+      });
+    });
     return {
-      track: hits.filter((h) => h.type === "track"),
-      youtube: hits.filter((h) => h.type === "youtube"),
+      track: tracks,
+      youtube: yt,
       album: hits.filter((h) => h.type === "album"),
       artist: hits.filter((h) => h.type === "artist"),
       playlist: hits.filter((h) => h.type === "playlist")
     };
-  }, [results.data]);
+  }, [results.data, youtube.data]);
   const currentFilter = activeFilter(q);
 
   const applyFilter = (token: string) => {
@@ -69,7 +87,7 @@ export function SearchPage() {
           setQ(e.target.value);
           setSp({ q: e.target.value });
         }}
-        placeholder="Tracks, albums, artists, playlists — or played:never last_played:7d"
+        placeholder="Tracks, albums, artists, playlists, or played:never last_played:7d"
         className="mb-3 max-w-xl"
       />
       <div className="mb-6 flex flex-wrap gap-2">
@@ -86,7 +104,7 @@ export function SearchPage() {
         ))}
       </div>
       {!q && <p className="text-muted">Search your SoundDock library. Missing tracks can be fetched from YouTube.</p>}
-      {q && !results.data?.results?.length && !results.isLoading && (
+      {q && !results.isLoading && !youtube.isLoading && !results.data?.results?.length && !grouped.youtube.length && (
         <EmptyState icon={Search} title={`No results for ‘${q}’.`} description="Try another spelling, or wait for ScapeX if YouTube search is enabled." />
       )}
       {grouped.artist.length > 0 && (

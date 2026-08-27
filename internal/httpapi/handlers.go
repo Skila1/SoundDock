@@ -168,7 +168,6 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, item)
 	}
-	out = s.appendScapeX(r, q, typ, out)
 	writeJSON(w, 200, map[string]any{"query": q, "results": out})
 }
 

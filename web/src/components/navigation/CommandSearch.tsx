@@ -1,26 +1,7 @@
-import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import type { LucideIcon } from "lucide-react";
-import {
-  Disc3,
-  CircleHelp,
-  Globe,
-  Heart,
-  Home,
-  Library,
-  Link2,
-  ListMusic,
-  MessageCircle,
-  Mic2,
-  Moon,
-  Music,
-  Rows3,
-  Search,
-  Settings,
-  Sun,
-  Upload,
-  UserRound
-} from "lucide-react";
+import { ListPlus, Search } from "lucide-react";
+import { toast } from "sonner";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Artwork } from "@/components/media/Artwork";
@@ -29,42 +10,41 @@ import { artworkUrl } from "@/lib/utils";
 import type { SearchHit } from "@/types/api";
 import { useUi } from "@/stores/ui";
 import { usePlayer } from "@/stores/player";
-import { useTheme } from "@/stores/theme";
-import { usePrefs } from "@/stores/prefs";
-import { SOUNDDOCK_DISCORD_INVITE } from "@/lib/community";
-
-const NAV = [
-  { to: "/", label: "Home", icon: Home },
-  { to: "/search", label: "Search", icon: Search },
-  { to: "/artists", label: "Artists", icon: Mic2 },
-  { to: "/albums", label: "Albums", icon: Disc3 },
-  { to: "/tracks", label: "Tracks", icon: Music },
-  { to: "/playlists", label: "Playlists", icon: ListMusic },
-  { to: "/favourites", label: "Favourites", icon: Heart },
-  { to: "/library", label: "Libraries", icon: Library },
-  { to: "/upload", label: "Upload", icon: Upload },
-  { to: "/import", label: "Remote Import", icon: Globe },
-  { to: "/settings/connected", label: "Connected Services", icon: Link2 },
-  { to: "/profile", label: "Profile", icon: UserRound },
-  { to: "/admin", label: "Administration", icon: Settings }
-];
 
 type RecentRow = { kind: "recent"; key: string; label: string };
-type HitRow = { kind: "hit"; key: string; hit: SearchHit };
-type NavRow = { kind: "nav"; key: string; to: string; label: string; icon: LucideIcon };
-type ActionRow = { kind: "action"; key: string; label: string; icon: LucideIcon; run: () => void };
-type Row = RecentRow | HitRow | NavRow | ActionRow;
+type HitRow = { kind: "hit"; key: string; hit: SearchHit; source: "library" | "youtube" };
+type CatalogRow = { kind: "catalog"; key: string; q: string };
+type Row = RecentRow | HitRow | CatalogRow;
+
+function isYouTubeQuery(q: string) {
+  const t = q.trim();
+  if (/^https?:\/\/(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\//i.test(t)) return true;
+  return /^[A-Za-z0-9_-]{11}$/.test(t);
+}
+
+function sameSong(title: string, artist: string, local: SearchHit[]) {
+  const nt = title.trim().toLowerCase();
+  const na = artist.trim().toLowerCase();
+  if (!nt) return false;
+  return local.some((row) => {
+    if (row.type !== "track") return false;
+    if ((row.title || "").trim().toLowerCase() !== nt) return false;
+    if (!na) return true;
+    const la = (row.artist || "").trim().toLowerCase();
+    return la.includes(na) || na.includes(la);
+  });
+}
 
 export function CommandSearch() {
   const ui = useUi();
   const nav = useNavigate();
   const play = usePlayer((s) => s.playTracks);
-  const playing = usePlayer((s) => s.playing);
-  const control = usePlayer((s) => s.control);
-  const theme = useTheme();
-  const prefs = usePrefs();
+  const add = usePlayer((s) => s.add);
   const [q, setQ] = useState("");
-  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [library, setLibrary] = useState<SearchHit[]>([]);
+  const [youtube, setYoutube] = useState<SearchHit[]>([]);
+  const [libLoading, setLibLoading] = useState(false);
+  const [ytLoading, setYtLoading] = useState(false);
   const [i, setI] = useState(0);
   const recents = JSON.parse(localStorage.getItem("sd-recent-search") || "[]") as string[];
 
@@ -80,17 +60,45 @@ export function CommandSearch() {
   }, [ui]);
 
   useEffect(() => {
-    if (!q.trim()) {
-      setHits([]);
+    const term = q.trim();
+    if (!term) {
+      setLibrary([]);
+      setYoutube([]);
+      setLibLoading(false);
+      setYtLoading(false);
       return;
     }
+    let cancelled = false;
+    setLibLoading(true);
+    setYtLoading(true);
     const t = setTimeout(() => {
-      api.get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(q)}&limit=12`).then((r) => {
-        setHits(r.results || []);
-        setI(0);
-      });
+      api
+        .get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(term)}&type=track&limit=8`)
+        .then((r) => {
+          if (!cancelled) setLibrary((r.results || []).filter((h) => h.type === "track"));
+        })
+        .catch(() => {
+          if (!cancelled) setLibrary([]);
+        })
+        .finally(() => {
+          if (!cancelled) setLibLoading(false);
+        });
+      api
+        .get<{ results: SearchHit[] }>(`/api/v1/search/youtube?q=${encodeURIComponent(term)}&limit=8`)
+        .then((r) => {
+          if (!cancelled) setYoutube(r.results || []);
+        })
+        .catch(() => {
+          if (!cancelled) setYoutube([]);
+        })
+        .finally(() => {
+          if (!cancelled) setYtLoading(false);
+        });
     }, 180);
-    return () => clearTimeout(t);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
   }, [q]);
 
   const close = () => ui.set({ commandOpen: false });
@@ -101,86 +109,50 @@ export function CommandSearch() {
     localStorage.setItem("sd-recent-search", JSON.stringify(next));
   };
 
+  const ytHits = useMemo(
+    () => youtube.filter((h) => h.type === "youtube" && !sameSong(h.title, h.artist || "", library)),
+    [youtube, library]
+  );
+  const youtubeFirst = isYouTubeQuery(q);
+
   const goHit = (h: SearchHit) => {
     remember(q);
     close();
-    if (h.type === "track") play([h.id]);
-    else if (h.type === "youtube") play([h.id]);
+    if (h.type === "track" || h.type === "youtube") play([h.id]);
     else nav(`/${h.type}s/${h.id}`);
   };
 
-  const actions: ActionRow[] = [
-    {
-      kind: "action",
-      key: "act-theme",
-      label: theme.theme === "dark" ? "Switch to light theme" : "Switch to dark theme",
-      icon: theme.theme === "dark" ? Sun : Moon,
-      run: () => {
-        theme.setTheme(theme.theme === "dark" ? "light" : "dark");
-        close();
-      }
-    },
-    {
-      kind: "action",
-      key: "act-density",
-      label: prefs.density === "compact" ? "Use comfortable density" : "Use compact density",
-      icon: Rows3,
-      run: () => {
-        prefs.toggleDensity();
-        close();
-      }
-    },
-    {
-      kind: "action",
-      key: "act-play",
-      label: playing ? "Pause playback" : "Resume playback",
-      icon: Music,
-      run: () => {
-        control(playing ? "pause" : "resume");
-        close();
-      }
-    },
-    {
-      kind: "action",
-      key: "act-help",
-      label: "Help",
-      icon: CircleHelp,
-      run: () => {
-        window.open(SOUNDDOCK_DISCORD_INVITE, "_blank", "noopener,noreferrer");
-        close();
-      }
-    },
-    {
-      kind: "action",
-      key: "act-discord",
-      label: "Discord server",
-      icon: MessageCircle,
-      run: () => {
-        window.open(SOUNDDOCK_DISCORD_INVITE, "_blank", "noopener,noreferrer");
-        close();
-      }
-    }
-  ];
+  const queueHit = (e: MouseEvent, h: SearchHit) => {
+    e.preventDefault();
+    e.stopPropagation();
+    remember(q);
+    add([h.id]).then(() => toast.success(h.type === "youtube" ? "Downloading and adding to queue" : "Added to queue"));
+  };
 
-  const needle = q.trim().toLowerCase();
-  const navRows: NavRow[] = NAV.filter((n) => !needle || n.label.toLowerCase().includes(needle)).map((n) => ({
-    kind: "nav",
-    key: "nav-" + n.to,
-    to: n.to,
-    label: n.label,
-    icon: n.icon
-  }));
-  const actionRows: ActionRow[] = actions.filter((a) => !needle || a.label.toLowerCase().includes(needle));
-
-  const recentRows: RecentRow[] = !q
+  const recentRows: RecentRow[] = !q.trim()
     ? recents.map((r) => ({ kind: "recent" as const, key: "recent-" + r, label: r }))
     : [];
-  const hitRows: HitRow[] = hits.map((h) => ({ kind: "hit" as const, key: h.type + h.id, hit: h }));
-  const rows: Row[] = [...recentRows, ...hitRows, ...navRows, ...actionRows];
+  const libraryRows: HitRow[] = library.map((h) => ({
+    kind: "hit" as const,
+    key: "library-" + h.id,
+    hit: h,
+    source: "library"
+  }));
+  const youtubeRows: HitRow[] = ytHits.map((h) => ({
+    kind: "hit" as const,
+    key: "youtube-" + h.id,
+    hit: h,
+    source: "youtube"
+  }));
+  const catalogRow: CatalogRow | null = q.trim()
+    ? { kind: "catalog", key: "catalog", q: q.trim() }
+    : null;
+  const hitBlocks = youtubeFirst ? [...youtubeRows, ...libraryRows] : [...libraryRows, ...youtubeRows];
+  const rows: Row[] = [...recentRows, ...hitBlocks, ...(catalogRow ? [catalogRow] : [])];
 
   useEffect(() => {
     setI(0);
-  }, [q, hits.length, navRows.length, actionRows.length]);
+  }, [q, library.length, ytHits.length]);
 
   useEffect(() => {
     if (ui.commandOpen) setI(0);
@@ -189,11 +161,11 @@ export function CommandSearch() {
   const activate = (row: Row) => {
     if (row.kind === "recent") setQ(row.label);
     else if (row.kind === "hit") goHit(row.hit);
-    else if (row.kind === "nav") {
-      remember(q);
+    else {
+      remember(row.q);
       close();
-      nav(row.to);
-    } else row.run();
+      nav(`/search?q=${encodeURIComponent(row.q)}`);
+    }
   };
 
   const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -211,18 +183,66 @@ export function CommandSearch() {
     }
   };
 
+  const searching = Boolean(q.trim());
+  const empty = searching && !libLoading && !ytLoading && library.length === 0 && ytHits.length === 0;
+
+  const renderHit = (r: HitRow) => {
+    const idx = rows.indexOf(r);
+    const h = r.hit;
+    return (
+      <div
+        key={r.key}
+        className={`flex w-full items-center gap-1 rounded-md px-1 py-1 ${idx === i ? "bg-surface-2" : "hover:bg-surface-2"}`}
+        onMouseEnter={() => setI(idx)}
+      >
+        <button
+          className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-1 py-1 text-left"
+          onClick={() => activate(r)}
+        >
+          <div className="h-9 w-9 overflow-hidden rounded">
+            <Artwork
+              src={h.type === "youtube" ? h.artwork_url || artworkUrl("youtube", h.id, "thumb") : artworkUrl(h.type, h.id, "thumb")}
+              id={h.id}
+              name={h.title}
+              kind={h.type === "youtube" ? "track" : h.type}
+              size="sm"
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm" dangerouslySetInnerHTML={{ __html: highlight(h.title, q) }} />
+            <div className="truncate text-xs text-muted">
+              {r.source === "youtube" ? "YouTube" : "Library"}
+              {h.artist ? ` · ${h.artist}` : h.album ? ` · ${h.album}` : ""}
+            </div>
+          </div>
+        </button>
+        <button
+          type="button"
+          className="rounded p-1 text-muted hover:bg-surface-3 hover:text-foreground"
+          title="Add to queue"
+          onClick={(e) => queueHit(e, h)}
+        >
+          <ListPlus className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  };
+
   return (
     <Dialog open={ui.commandOpen} onOpenChange={(v) => ui.set({ commandOpen: v })}>
-      <DialogContent className="p-0" title="Search">
+      <DialogContent className="p-0" title="Search songs">
         <Input
           autoFocus
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={onKey}
-          placeholder="Search tracks, albums, artists…"
+          placeholder="Song, artist, or YouTube URL"
           className="border-0 bg-transparent"
         />
         <div className="max-h-80 overflow-auto border-t border-border p-2">
+          {!searching && recentRows.length === 0 && (
+            <p className="px-2 py-3 text-sm text-muted">Search your library, or paste a YouTube URL. Matches from YouTube show as extras.</p>
+          )}
           {recentRows.map((r) => {
             const idx = rows.indexOf(r);
             return (
@@ -236,69 +256,45 @@ export function CommandSearch() {
               </button>
             );
           })}
-          {hitRows.map((r) => {
-            const idx = rows.indexOf(r);
-            const h = r.hit;
-            return (
-              <button
-                key={r.key}
-                className={`flex w-full items-center gap-3 rounded-md px-2 py-2 text-left ${idx === i ? "bg-surface-2" : "hover:bg-surface-2"}`}
-                onClick={() => activate(r)}
-                onMouseEnter={() => setI(idx)}
-              >
-                <div className="h-9 w-9 overflow-hidden rounded">
-                  <Artwork src={h.type === "youtube" ? h.artwork_url || artworkUrl("youtube", h.id, "thumb") : artworkUrl(h.type, h.id, "thumb")} id={h.id} name={h.title} kind={h.type === "youtube" ? "track" : h.type} size="sm" />
-                </div>
-                <div className="min-w-0">
-                  <div className="truncate text-sm" dangerouslySetInnerHTML={{ __html: highlight(h.title, q) }} />
-                  <div className="text-xs text-muted">{h.type === "youtube" ? "YouTube" : h.type} · {h.artist || h.album || ""}</div>
-                </div>
-              </button>
-            );
-          })}
-          {(navRows.length > 0 || actionRows.length > 0) && (
+          {searching && youtubeFirst && (
             <>
-              {(recentRows.length > 0 || hitRows.length > 0) && (
-                <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-subtle">Navigate</div>
-              )}
-              {navRows.map((r) => {
-                const idx = rows.indexOf(r);
-                const Icon = r.icon;
-                return (
-                  <button
-                    key={r.key}
-                    className={`flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm ${idx === i ? "bg-surface-2" : "hover:bg-surface-2"}`}
-                    onClick={() => activate(r)}
-                    onMouseEnter={() => setI(idx)}
-                  >
-                    <Icon className="h-4 w-4 shrink-0 text-muted" />
-                    <span>{r.label}</span>
-                  </button>
-                );
-              })}
-              {actionRows.length > 0 && (
-                <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-subtle">Actions</div>
-              )}
-              {actionRows.map((r) => {
-                const idx = rows.indexOf(r);
-                const Icon = r.icon;
-                return (
-                  <button
-                    key={r.key}
-                    className={`flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm ${idx === i ? "bg-surface-2" : "hover:bg-surface-2"}`}
-                    onClick={() => activate(r)}
-                    onMouseEnter={() => setI(idx)}
-                  >
-                    <Icon className="h-4 w-4 shrink-0 text-muted" />
-                    <span>{r.label}</span>
-                  </button>
-                );
-              })}
+              <Section label="YouTube" loading={ytLoading} />
+              {youtubeRows.map(renderHit)}
+              {(libraryRows.length > 0 || libLoading) && <Section label="Library" loading={libLoading} />}
+              {libraryRows.map(renderHit)}
             </>
+          )}
+          {searching && !youtubeFirst && (
+            <>
+              <Section label="Library" loading={libLoading} />
+              {libraryRows.map(renderHit)}
+              {(ytLoading || youtubeRows.length > 0) && <Section label="YouTube" loading={ytLoading} />}
+              {youtubeRows.map(renderHit)}
+            </>
+          )}
+          {empty && <p className="px-2 py-3 text-sm text-muted">No songs matched. Try another spelling or a YouTube URL.</p>}
+          {catalogRow && (
+            <button
+              className={`mt-1 flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm ${rows.indexOf(catalogRow) === i ? "bg-surface-2" : "hover:bg-surface-2"}`}
+              onClick={() => activate(catalogRow)}
+              onMouseEnter={() => setI(rows.indexOf(catalogRow))}
+            >
+              <Search className="h-4 w-4 shrink-0 text-muted" />
+              <span>Search catalog for “{catalogRow.q}”</span>
+            </button>
           )}
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function Section({ label, loading }: { label: string; loading: boolean }) {
+  return (
+    <div className="flex items-center justify-between px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wide text-subtle">
+      <span>{label}</span>
+      {loading && <span className="font-normal normal-case tracking-normal text-muted">Searching…</span>}
+    </div>
   );
 }
 

@@ -49,16 +49,18 @@ export function HomePage() {
 
   if (!recent.length && !added.length) {
     return (
-      <EmptyState
-        icon={Disc3}
-        title="Your library is empty."
-        description="Upload music or import a file you host. Sign-in is Discord-only."
-        action={{ label: "Upload music", onClick: () => nav("/upload") }}
-      />
-      <div className="mt-4 flex justify-center gap-2">
-        <HelpButton variant="secondary" />
-        <DiscordServerButton />
-      </div>
+      <>
+        <EmptyState
+          icon={Disc3}
+          title="Your library is empty."
+          description="Upload music or import a file you host. Sign-in is Discord-only."
+          action={{ label: "Upload music", onClick: () => nav("/upload") }}
+        />
+        <div className="mt-4 flex justify-center gap-2">
+          <HelpButton variant="secondary" />
+          <DiscordServerButton />
+        </div>
+      </>
     );
   }
 

@@ -28,7 +28,7 @@ export function TopBar({ title, user }: { title?: string; user: User }) {
       </Button>
       <div className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{title}</div>
       <Button variant="secondary" className="hidden max-w-sm flex-1 justify-start gap-2 text-muted md:flex" onClick={() => ui.set({ commandOpen: true })}>
-        <Search className="h-4 w-4" /> Search library
+        <Search className="h-4 w-4" /> Search songs
         <kbd className="ml-auto rounded border border-border px-1.5 text-[10px]">⌘K</kbd>
       </Button>
       <Button size="icon" variant="ghost" className="md:hidden" onClick={() => ui.set({ commandOpen: true })} aria-label="Search">

@@ -17,6 +17,8 @@ func TestWave1RoutesRegistered(t *testing.T) {
 	}
 	need := []string{
 		"POST /api/v1/me/listen",
+		"GET /api/v1/search",
+		"GET /api/v1/search/youtube",
 		"GET /api/v1/me/queue",
 		"PUT /api/v1/me/queue",
 		"POST /api/v1/me/queue/add",
