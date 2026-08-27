@@ -5,7 +5,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Sidebar } from "@/components/navigation/Sidebar";
 import { TopBar } from "@/components/navigation/TopBar";
 import { MobileNav } from "@/components/navigation/MobileNav";
-import { CommandSearch } from "@/components/navigation/CommandSearch";
 import { PlayerBar } from "@/components/player/PlayerBar";
 import { QueuePanel } from "@/components/player/QueuePanel";
 import { QueueSheet } from "@/components/player/QueueSheet";
@@ -82,7 +81,6 @@ export function AppShell({ user }: { user: User }) {
       <MobileNav />
       <QueueSheet />
       <NowPlaying />
-      <CommandSearch />
       <Sheet open={ui.mobileNav} onOpenChange={(v) => ui.set({ mobileNav: v })}>
         <SheetContent side="left" title="Menu">
           <div className="mt-8" onClick={() => ui.set({ mobileNav: false })}>

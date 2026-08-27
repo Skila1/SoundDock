@@ -1,7 +1,8 @@
-import { ArrowLeft, ArrowRight, Check, Menu, Moon, Palette, Rows3, Search, Sun } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Menu, Moon, Palette, Rows3, Sun } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { CommandSearch } from "@/components/navigation/CommandSearch";
 import { useTheme } from "@/stores/theme";
 import { ACCENT_PRESETS, PrefsSync, usePrefs } from "@/stores/prefs";
 import { useUi } from "@/stores/ui";
@@ -26,14 +27,10 @@ export function TopBar({ title, user }: { title?: string; user: User }) {
       <Button size="icon" variant="ghost" className="hidden md:inline-flex" onClick={() => nav(1)} aria-label="Forward">
         <ArrowRight />
       </Button>
-      <div className="min-w-0 flex-1 truncate text-sm font-medium text-muted">{title}</div>
-      <Button variant="secondary" className="hidden max-w-sm flex-1 justify-start gap-2 text-muted md:flex" onClick={() => ui.set({ commandOpen: true })}>
-        <Search className="h-4 w-4" /> Search songs
-        <kbd className="ml-auto rounded border border-border px-1.5 text-[10px]">⌘K</kbd>
-      </Button>
-      <Button size="icon" variant="ghost" className="md:hidden" onClick={() => ui.set({ commandOpen: true })} aria-label="Search">
-        <Search />
-      </Button>
+      <div className="hidden min-w-0 max-w-[9rem] truncate text-sm font-medium text-muted md:block lg:max-w-xs">{title}</div>
+      <div className="min-w-0 flex-1">
+        <CommandSearch />
+      </div>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button size="icon" variant="ghost" aria-label="Appearance">

@@ -18,7 +18,7 @@
 - The web container no longer starts a second Discord gateway. Only `discord-worker` owns voice, so two sessions cannot kick each other out after a few seconds of audio.
 - When output is Discord, the web player uses that guild queue (`?target=discord`): pause, resume, seek, and time stay in sync. Resume no longer restarts the track from the beginning.
 - Administration can enable or disable an invited Discord server without a second bot token.
-- The top search bar looks up song names and YouTube URLs in the library and, through ScapeX, on YouTube. Play or queue downloads a YouTube hit into the library.
+- Header search is a dropdown from the top bar, not a modal. It shows two library matches and five YouTube matches. Choosing a result adds it to the queue without skipping the current song. YouTube hits download into the library first.
 - Help and Discord server buttons open the SoundDock community invite.
 
 ## 0.0.9

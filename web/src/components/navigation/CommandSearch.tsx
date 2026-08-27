@@ -1,12 +1,12 @@
-import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { ListPlus, Search } from "lucide-react";
 import { toast } from "sonner";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Artwork } from "@/components/media/Artwork";
 import { api } from "@/lib/api";
-import { artworkUrl } from "@/lib/utils";
+import { artworkUrl, cn } from "@/lib/utils";
 import type { SearchHit } from "@/types/api";
 import { useUi } from "@/stores/ui";
 import { usePlayer } from "@/stores/player";
@@ -15,6 +15,9 @@ type RecentRow = { kind: "recent"; key: string; label: string };
 type HitRow = { kind: "hit"; key: string; hit: SearchHit; source: "library" | "youtube" };
 type CatalogRow = { kind: "catalog"; key: string; q: string };
 type Row = RecentRow | HitRow | CatalogRow;
+
+const LIBRARY_LIMIT = 2;
+const YOUTUBE_LIMIT = 5;
 
 function isYouTubeQuery(q: string) {
   const t = q.trim();
@@ -36,28 +39,75 @@ function sameSong(title: string, artist: string, local: SearchHit[]) {
 }
 
 export function CommandSearch() {
-  const ui = useUi();
   const nav = useNavigate();
-  const play = usePlayer((s) => s.playTracks);
   const add = usePlayer((s) => s.add);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
   const [library, setLibrary] = useState<SearchHit[]>([]);
   const [youtube, setYoutube] = useState<SearchHit[]>([]);
   const [libLoading, setLibLoading] = useState(false);
   const [ytLoading, setYtLoading] = useState(false);
   const [i, setI] = useState(0);
+  const [panel, setPanel] = useState({ top: 0, left: 0, width: 480 });
   const recents = JSON.parse(localStorage.getItem("sd-recent-search") || "[]") as string[];
+
+  const placePanel = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const width = Math.min(Math.max(r.width, 440), window.innerWidth - 16);
+    let left = r.left + (r.width - width) / 2;
+    if (left + width > window.innerWidth - 8) left = window.innerWidth - 8 - width;
+    if (left < 8) left = 8;
+    setPanel({ top: r.bottom + 8, left, width });
+  };
 
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        ui.set({ commandOpen: true });
+        inputRef.current?.focus();
+        inputRef.current?.select();
+        setOpen(true);
+      } else if (e.key === "Escape" && (open || document.activeElement === inputRef.current)) {
+        e.preventDefault();
+        setOpen(false);
+        inputRef.current?.blur();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [ui]);
+  }, [open]);
+
+  useEffect(() => {
+    useUi.getState().set({ commandOpen: open });
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    placePanel();
+    const onMove = () => placePanel();
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    return () => {
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+    };
+  }, [open, q]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPtr = (e: PointerEvent) => {
+      const t = e.target as Node;
+      if (wrapRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    window.addEventListener("pointerdown", onPtr);
+    return () => window.removeEventListener("pointerdown", onPtr);
+  }, [open]);
 
   useEffect(() => {
     const term = q.trim();
@@ -73,9 +123,9 @@ export function CommandSearch() {
     setYtLoading(true);
     const t = setTimeout(() => {
       api
-        .get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(term)}&type=track&limit=8`)
+        .get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(term)}&type=track&limit=${LIBRARY_LIMIT}`)
         .then((r) => {
-          if (!cancelled) setLibrary((r.results || []).filter((h) => h.type === "track"));
+          if (!cancelled) setLibrary((r.results || []).filter((h) => h.type === "track").slice(0, LIBRARY_LIMIT));
         })
         .catch(() => {
           if (!cancelled) setLibrary([]);
@@ -84,7 +134,7 @@ export function CommandSearch() {
           if (!cancelled) setLibLoading(false);
         });
       api
-        .get<{ results: SearchHit[] }>(`/api/v1/search/youtube?q=${encodeURIComponent(term)}&limit=8`)
+        .get<{ results: SearchHit[] }>(`/api/v1/search/youtube?q=${encodeURIComponent(term)}&limit=${YOUTUBE_LIMIT + 4}`)
         .then((r) => {
           if (!cancelled) setYoutube(r.results || []);
         })
@@ -101,38 +151,31 @@ export function CommandSearch() {
     };
   }, [q]);
 
-  const close = () => ui.set({ commandOpen: false });
-
   const remember = (term: string) => {
     if (!term.trim()) return;
     const next = [term, ...recents.filter((x) => x !== term)].slice(0, 8);
     localStorage.setItem("sd-recent-search", JSON.stringify(next));
   };
 
+  const libraryHits = library.slice(0, LIBRARY_LIMIT);
   const ytHits = useMemo(
-    () => youtube.filter((h) => h.type === "youtube" && !sameSong(h.title, h.artist || "", library)),
-    [youtube, library]
+    () =>
+      youtube
+        .filter((h) => h.type === "youtube" && !sameSong(h.title, h.artist || "", libraryHits))
+        .slice(0, YOUTUBE_LIMIT),
+    [youtube, libraryHits]
   );
   const youtubeFirst = isYouTubeQuery(q);
 
-  const goHit = (h: SearchHit) => {
-    remember(q);
-    close();
-    if (h.type === "track" || h.type === "youtube") play([h.id]);
-    else nav(`/${h.type}s/${h.id}`);
-  };
-
-  const queueHit = (e: MouseEvent, h: SearchHit) => {
-    e.preventDefault();
-    e.stopPropagation();
+  const queueHit = (h: SearchHit) => {
     remember(q);
     add([h.id]).then(() => toast.success(h.type === "youtube" ? "Downloading and adding to queue" : "Added to queue"));
   };
 
   const recentRows: RecentRow[] = !q.trim()
-    ? recents.map((r) => ({ kind: "recent" as const, key: "recent-" + r, label: r }))
+    ? recents.slice(0, 6).map((r) => ({ kind: "recent" as const, key: "recent-" + r, label: r }))
     : [];
-  const libraryRows: HitRow[] = library.map((h) => ({
+  const libraryRows: HitRow[] = libraryHits.map((h) => ({
     kind: "hit" as const,
     key: "library-" + h.id,
     hit: h,
@@ -152,26 +195,33 @@ export function CommandSearch() {
 
   useEffect(() => {
     setI(0);
-  }, [q, library.length, ytHits.length]);
-
-  useEffect(() => {
-    if (ui.commandOpen) setI(0);
-  }, [ui.commandOpen]);
+  }, [q, libraryHits.length, ytHits.length]);
 
   const activate = (row: Row) => {
-    if (row.kind === "recent") setQ(row.label);
-    else if (row.kind === "hit") goHit(row.hit);
-    else {
-      remember(row.q);
-      close();
-      nav(`/search?q=${encodeURIComponent(row.q)}`);
+    if (row.kind === "recent") {
+      setQ(row.label);
+      return;
     }
+    if (row.kind === "hit") {
+      queueHit(row.hit);
+      return;
+    }
+    remember(row.q);
+    setOpen(false);
+    nav(`/search?q=${encodeURIComponent(row.q)}`);
   };
 
   const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+      inputRef.current?.blur();
+      return;
+    }
     if (!rows.length) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
+      setOpen(true);
       setI((n) => (n + 1) % rows.length);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
@@ -184,108 +234,139 @@ export function CommandSearch() {
   };
 
   const searching = Boolean(q.trim());
-  const empty = searching && !libLoading && !ytLoading && library.length === 0 && ytHits.length === 0;
+  const empty = searching && !libLoading && !ytLoading && libraryHits.length === 0 && ytHits.length === 0;
+  const showPanel = open;
 
   const renderHit = (r: HitRow) => {
     const idx = rows.indexOf(r);
     const h = r.hit;
     return (
-      <div
+      <button
         key={r.key}
-        className={`flex w-full items-center gap-1 rounded-md px-1 py-1 ${idx === i ? "bg-surface-2" : "hover:bg-surface-2"}`}
+        type="button"
+        className={cn(
+          "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left",
+          idx === i ? "bg-surface-2" : "hover:bg-surface-2"
+        )}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => activate(r)}
         onMouseEnter={() => setI(idx)}
       >
-        <button
-          className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-1 py-1 text-left"
-          onClick={() => activate(r)}
-        >
-          <div className="h-9 w-9 overflow-hidden rounded">
-            <Artwork
-              src={h.type === "youtube" ? h.artwork_url || artworkUrl("youtube", h.id, "thumb") : artworkUrl(h.type, h.id, "thumb")}
-              id={h.id}
-              name={h.title}
-              kind={h.type === "youtube" ? "track" : h.type}
-              size="sm"
-            />
+        <div className="h-11 w-11 overflow-hidden rounded-md">
+          <Artwork
+            src={h.type === "youtube" ? h.artwork_url || artworkUrl("youtube", h.id, "thumb") : artworkUrl(h.type, h.id, "thumb")}
+            id={h.id}
+            name={h.title}
+            kind={h.type === "youtube" ? "track" : h.type}
+            size="sm"
+          />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm" dangerouslySetInnerHTML={{ __html: highlight(h.title, q) }} />
+          <div className="truncate text-xs text-muted">
+            {r.source === "youtube" ? "YouTube" : "Library"}
+            {h.artist ? ` · ${h.artist}` : h.album ? ` · ${h.album}` : ""}
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm" dangerouslySetInnerHTML={{ __html: highlight(h.title, q) }} />
-            <div className="truncate text-xs text-muted">
-              {r.source === "youtube" ? "YouTube" : "Library"}
-              {h.artist ? ` · ${h.artist}` : h.album ? ` · ${h.album}` : ""}
-            </div>
-          </div>
-        </button>
-        <button
-          type="button"
-          className="rounded p-1 text-muted hover:bg-surface-3 hover:text-foreground"
-          title="Add to queue"
-          onClick={(e) => queueHit(e, h)}
-        >
-          <ListPlus className="h-4 w-4" />
-        </button>
-      </div>
+        </div>
+        <ListPlus className="h-4 w-4 shrink-0 text-muted" />
+      </button>
     );
   };
 
-  return (
-    <Dialog open={ui.commandOpen} onOpenChange={(v) => ui.set({ commandOpen: v })}>
-      <DialogContent className="p-0" title="Search songs">
-        <Input
-          autoFocus
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          onKeyDown={onKey}
-          placeholder="Song, artist, or YouTube URL"
-          className="border-0 bg-transparent"
-        />
-        <div className="max-h-80 overflow-auto border-t border-border p-2">
-          {!searching && recentRows.length === 0 && (
-            <p className="px-2 py-3 text-sm text-muted">Search your library, or paste a YouTube URL. Matches from YouTube show as extras.</p>
-          )}
-          {recentRows.map((r) => {
-            const idx = rows.indexOf(r);
-            return (
+  const dropdown = showPanel
+    ? createPortal(
+        <div
+          ref={panelRef}
+          style={{ top: panel.top, left: panel.left, width: panel.width }}
+          className="fixed z-50 overflow-hidden rounded-xl border border-border bg-surface-1 shadow-card"
+          id="header-search-results"
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <div className="max-h-[min(28rem,calc(100vh-5.5rem))] overflow-auto p-2">
+            {!searching && recentRows.length === 0 && (
+              <p className="px-2 py-3 text-sm text-muted">Search your library, or paste a YouTube URL. Click a result to add it to the queue.</p>
+            )}
+            {recentRows.map((r) => {
+              const idx = rows.indexOf(r);
+              return (
+                <button
+                  key={r.key}
+                  type="button"
+                  className={cn(
+                    "block w-full rounded-lg px-2 py-2 text-left text-sm text-muted hover:bg-surface-2",
+                    idx === i && "bg-surface-2"
+                  )}
+                  onClick={() => activate(r)}
+                  onMouseEnter={() => setI(idx)}
+                >
+                  {r.label}
+                </button>
+              );
+            })}
+            {searching && youtubeFirst && (
+              <>
+                <Section label="YouTube" loading={ytLoading} />
+                {youtubeRows.map(renderHit)}
+                {(libraryRows.length > 0 || libLoading) && <Section label="Library" loading={libLoading} />}
+                {libraryRows.map(renderHit)}
+              </>
+            )}
+            {searching && !youtubeFirst && (
+              <>
+                {(libLoading || libraryRows.length > 0) && <Section label="Library" loading={libLoading} />}
+                {libraryRows.map(renderHit)}
+                {(ytLoading || youtubeRows.length > 0) && <Section label="YouTube" loading={ytLoading} />}
+                {youtubeRows.map(renderHit)}
+              </>
+            )}
+            {empty && <p className="px-2 py-3 text-sm text-muted">No songs matched. Try another spelling or a YouTube URL.</p>}
+            {catalogRow && (
               <button
-                key={r.key}
-                className={`block w-full rounded px-2 py-2 text-left text-sm text-muted hover:bg-surface-2 ${idx === i ? "bg-surface-2" : ""}`}
-                onClick={() => activate(r)}
-                onMouseEnter={() => setI(idx)}
+                type="button"
+                className={cn(
+                  "mt-1 flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left text-sm",
+                  rows.indexOf(catalogRow) === i ? "bg-surface-2" : "hover:bg-surface-2"
+                )}
+                onClick={() => activate(catalogRow)}
+                onMouseEnter={() => setI(rows.indexOf(catalogRow))}
               >
-                {r.label}
+                <Search className="h-4 w-4 shrink-0 text-muted" />
+                <span>Search catalog for “{catalogRow.q}”</span>
               </button>
-            );
-          })}
-          {searching && youtubeFirst && (
-            <>
-              <Section label="YouTube" loading={ytLoading} />
-              {youtubeRows.map(renderHit)}
-              {(libraryRows.length > 0 || libLoading) && <Section label="Library" loading={libLoading} />}
-              {libraryRows.map(renderHit)}
-            </>
-          )}
-          {searching && !youtubeFirst && (
-            <>
-              <Section label="Library" loading={libLoading} />
-              {libraryRows.map(renderHit)}
-              {(ytLoading || youtubeRows.length > 0) && <Section label="YouTube" loading={ytLoading} />}
-              {youtubeRows.map(renderHit)}
-            </>
-          )}
-          {empty && <p className="px-2 py-3 text-sm text-muted">No songs matched. Try another spelling or a YouTube URL.</p>}
-          {catalogRow && (
-            <button
-              className={`mt-1 flex w-full items-center gap-3 rounded-md px-2 py-2 text-left text-sm ${rows.indexOf(catalogRow) === i ? "bg-surface-2" : "hover:bg-surface-2"}`}
-              onClick={() => activate(catalogRow)}
-              onMouseEnter={() => setI(rows.indexOf(catalogRow))}
-            >
-              <Search className="h-4 w-4 shrink-0 text-muted" />
-              <span>Search catalog for “{catalogRow.q}”</span>
-            </button>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
+            )}
+          </div>
+        </div>,
+        document.body
+      )
+    : null;
+
+  return (
+    <div ref={wrapRef} className="relative min-w-0 w-full">
+      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted" />
+      <Input
+        ref={inputRef}
+        value={q}
+        onChange={(e) => {
+          setQ(e.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => {
+          setOpen(true);
+          placePanel();
+        }}
+        onKeyDown={onKey}
+        placeholder="Song, artist, or YouTube URL"
+        className="h-10 rounded-full border-border bg-surface-2 pl-9 pr-14 focus-visible:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        role="combobox"
+        aria-expanded={showPanel}
+        aria-controls="header-search-results"
+        autoComplete="off"
+      />
+      <kbd className="pointer-events-none absolute right-3 top-1/2 hidden -translate-y-1/2 rounded border border-border px-1.5 text-[10px] text-muted md:inline">
+        ⌘K
+      </kbd>
+      {dropdown}
+    </div>
   );
 }
 
