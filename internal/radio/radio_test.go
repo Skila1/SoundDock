@@ -23,6 +23,45 @@ func TestClampLimit(t *testing.T) {
 	}
 }
 
+func TestClampFill(t *testing.T) {
+	if ClampFill(0) != 12 {
+		t.Fatal("default")
+	}
+	if ClampFill(1) != 1 {
+		t.Fatal("min")
+	}
+	if ClampFill(20) != 20 {
+		t.Fatal("max")
+	}
+	if ClampFill(50) != 20 {
+		t.Fatal("cap")
+	}
+}
+
+func TestSimilarQuery(t *testing.T) {
+	if SimilarQuery("Numb", "Linkin Park", "Rock, Metal") != "Linkin Park Rock songs" {
+		t.Fatal(SimilarQuery("Numb", "Linkin Park", "Rock, Metal"))
+	}
+	if SimilarQuery("Numb", "Linkin Park", "") != "Linkin Park songs" {
+		t.Fatal("artist only")
+	}
+	if SimilarQuery("Numb", "", "Pop") != "Pop mix" {
+		t.Fatal("genre only")
+	}
+	if SimilarQuery("Numb", "", "") != "Numb" {
+		t.Fatal("title only")
+	}
+}
+
+func TestSameSong(t *testing.T) {
+	if !SameSong("Numb", "numb") {
+		t.Fatal("case")
+	}
+	if SameSong("Numb", "In The End") {
+		t.Fatal("different")
+	}
+}
+
 func TestValidKind(t *testing.T) {
 	for _, k := range Kinds {
 		if !ValidKind(k) {

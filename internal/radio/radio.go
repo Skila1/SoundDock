@@ -40,9 +40,10 @@ type Request struct {
 }
 
 type Result struct {
-	Kind     string      `json:"kind"`
-	SeedID   uuid.UUID   `json:"seed_id"`
-	TrackIDs []uuid.UUID `json:"track_ids"`
+	Kind       string      `json:"kind"`
+	SeedID     uuid.UUID   `json:"seed_id"`
+	TrackIDs   []uuid.UUID `json:"track_ids"`
+	YoutubeIDs []string    `json:"youtube_ids,omitempty"`
 }
 
 type RefreshPayload struct {
@@ -63,6 +64,17 @@ func ClampLimit(n int) int {
 	}
 	if n > 100 {
 		return 100
+	}
+	return n
+}
+
+// ClampFill is the 1–20 YouTube autoplay pull size.
+func ClampFill(n int) int {
+	if n <= 0 {
+		return 12
+	}
+	if n > 20 {
+		return 20
 	}
 	return n
 }
@@ -204,9 +216,10 @@ func (s *Service) albumRadio(ctx context.Context, albumID uuid.UUID, libs []uuid
 }
 
 func (s *Service) trackRadio(ctx context.Context, trackID uuid.UUID, libs []uuid.UUID, limit int) ([]uuid.UUID, error) {
-	var albumID *uuid.UUID
-	var year *int
-	_ = s.pool.QueryRow(ctx, `SELECT album_id, year FROM tracks WHERE id=$1`, trackID).Scan(&albumID, &year)
+	meta, err := s.TrackMeta(ctx, trackID)
+	if err != nil {
+		return nil, err
+	}
 	ids, err := s.queryIDs(ctx, `
 		SELECT t.id FROM tracks t
 		JOIN track_artists ta ON ta.track_id=t.id
@@ -216,11 +229,11 @@ func (s *Service) trackRadio(ctx context.Context, trackID uuid.UUID, libs []uuid
 	if err != nil {
 		return nil, err
 	}
-	if len(ids) < limit && albumID != nil {
+	if len(ids) < limit && meta.AlbumID != nil {
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
 			WHERE t.album_id=$1 AND t.library_id = ANY($2) AND t.id<>$3 AND t.id <> ALL($4)
-			ORDER BY random() LIMIT $5`, *albumID, libs, trackID, idsOrDummy(ids), limit-len(ids))
+			ORDER BY random() LIMIT $5`, *meta.AlbumID, libs, trackID, idsOrDummy(ids), limit-len(ids))
 		if err != nil {
 			return ids, err
 		}
@@ -238,8 +251,23 @@ func (s *Service) trackRadio(ctx context.Context, trackID uuid.UUID, libs []uuid
 		}
 		ids = uniqueAppend(ids, more, limit)
 	}
-	if len(ids) < limit && year != nil {
-		d := DecadeStart(*year)
+	genre := FirstGenre(meta.Genre)
+	if len(ids) < limit && genre != "" {
+		more, err := s.queryIDs(ctx, `
+			SELECT t.id FROM tracks t
+			WHERE t.library_id = ANY($1) AND t.id<>$2 AND t.id <> ALL($3)
+			  AND (t.genre_text ILIKE $4 OR EXISTS (
+				SELECT 1 FROM track_genres tg JOIN genres g ON g.id=tg.genre_id
+				WHERE tg.track_id=t.id AND g.name ILIKE $4
+			  ))
+			ORDER BY random() LIMIT $5`, libs, trackID, idsOrDummy(ids), genre, limit-len(ids))
+		if err != nil {
+			return ids, err
+		}
+		ids = uniqueAppend(ids, more, limit)
+	}
+	if len(ids) < limit && meta.Year != nil {
+		d := DecadeStart(*meta.Year)
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
 			WHERE t.library_id = ANY($1) AND t.id<>$2 AND t.id <> ALL($3)
@@ -250,7 +278,84 @@ func (s *Service) trackRadio(ctx context.Context, trackID uuid.UUID, libs []uuid
 		}
 		ids = uniqueAppend(ids, more, limit)
 	}
+	if len(ids) < limit && meta.Title != "" {
+		more, err := s.queryIDs(ctx, `
+			SELECT t.id FROM tracks t
+			WHERE t.library_id = ANY($1) AND t.id<>$2 AND t.id <> ALL($3)
+			  AND similarity(t.title, $4) > 0.18
+			ORDER BY similarity(t.title, $4) DESC, random() LIMIT $5`, libs, trackID, idsOrDummy(ids), meta.Title, limit-len(ids))
+		if err != nil {
+			return ids, err
+		}
+		ids = uniqueAppend(ids, more, limit)
+	}
 	return ids, nil
+}
+
+type TrackMeta struct {
+	Title   string
+	Artist  string
+	Genre   string
+	Year    *int
+	AlbumID *uuid.UUID
+}
+
+func (s *Service) TrackMeta(ctx context.Context, id uuid.UUID) (TrackMeta, error) {
+	var m TrackMeta
+	err := s.pool.QueryRow(ctx, `
+		SELECT t.title, coalesce(t.genre_text,''), t.year, t.album_id,
+		       coalesce((SELECT string_agg(ar.name, ', ' ORDER BY ta.position)
+		         FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
+		         WHERE ta.track_id=t.id AND ta.role='primary'),'')
+		FROM tracks t WHERE t.id=$1`, id).Scan(&m.Title, &m.Genre, &m.Year, &m.AlbumID, &m.Artist)
+	if err != nil {
+		return m, err
+	}
+	if strings.TrimSpace(m.Genre) == "" {
+		_ = s.pool.QueryRow(ctx, `
+			SELECT coalesce(g.name,'') FROM track_genres tg
+			JOIN genres g ON g.id=tg.genre_id
+			WHERE tg.track_id=$1 LIMIT 1`, id).Scan(&m.Genre)
+	}
+	return m, nil
+}
+
+func FirstGenre(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if i := strings.IndexAny(s, ",;/|"); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+func SimilarQuery(title, artist, genre string) string {
+	title = strings.TrimSpace(title)
+	artist = strings.TrimSpace(artist)
+	genre = FirstGenre(genre)
+	switch {
+	case artist != "" && genre != "":
+		return artist + " " + genre + " songs"
+	case artist != "":
+		return artist + " songs"
+	case genre != "":
+		return genre + " mix"
+	default:
+		return title
+	}
+}
+
+func SameSong(a, b string) bool {
+	na, nb := normSong(a), normSong(b)
+	return na != "" && na == nb
+}
+
+func normSong(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.ReplaceAll(s, "’", "'")
+	return s
 }
 
 func (s *Service) genreRadio(ctx context.Context, seed uuid.UUID, name string, libs []uuid.UUID, limit int) ([]uuid.UUID, error) {

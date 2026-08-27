@@ -45,11 +45,14 @@ func (e *Engine) Control(ctx context.Context, sid uuid.UUID, action string, extr
 		_, err := e.pool.Exec(ctx, `UPDATE playback_sessions SET status='stopped', position_ms=0, stop_after_current=false, updated_at=now() WHERE id=$1`, sid)
 		return err
 	case "clear":
-		if _, err := e.pool.Exec(ctx, `DELETE FROM playback_queue_items WHERE session_id=$1`, sid); err != nil {
+		if v, ok := extraBool(extra, "all"); ok && v {
+			if _, err := e.pool.Exec(ctx, `DELETE FROM playback_queue_items WHERE session_id=$1`, sid); err != nil {
+				return err
+			}
+			_, err := e.pool.Exec(ctx, `UPDATE playback_sessions SET current_track_id=NULL, current_index=0, status='stopped', position_ms=0, updated_at=now() WHERE id=$1`, sid)
 			return err
 		}
-		_, err := e.pool.Exec(ctx, `UPDATE playback_sessions SET current_track_id=NULL, current_index=0, status='stopped', position_ms=0, updated_at=now() WHERE id=$1`, sid)
-		return err
+		return e.clearKeepCurrent(ctx, sid)
 	case "shuffle":
 		_, err := e.pool.Exec(ctx, `UPDATE playback_sessions SET shuffle = NOT shuffle, updated_at=now() WHERE id=$1`, sid)
 		return err
@@ -118,6 +121,44 @@ func (e *Engine) Control(ctx context.Context, sid uuid.UUID, action string, extr
 	default:
 		return fmt.Errorf("unknown action")
 	}
+}
+
+func (e *Engine) clearKeepCurrent(ctx context.Context, sid uuid.UUID) error {
+	var idx int
+	var tid *uuid.UUID
+	if err := e.pool.QueryRow(ctx, `SELECT current_index, current_track_id FROM playback_sessions WHERE id=$1`, sid).Scan(&idx, &tid); err != nil {
+		return err
+	}
+	if tid == nil || *tid == uuid.Nil {
+		if _, err := e.pool.Exec(ctx, `DELETE FROM playback_queue_items WHERE session_id=$1`, sid); err != nil {
+			return err
+		}
+		_, err := e.pool.Exec(ctx, `UPDATE playback_sessions SET current_index=0, current_track_id=NULL, updated_at=now() WHERE id=$1`, sid)
+		return err
+	}
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM playback_queue_items WHERE session_id=$1 AND position<>$2`, sid, idx); err != nil {
+		return err
+	}
+	var n int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM playback_queue_items WHERE session_id=$1`, sid).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := tx.Exec(ctx, `INSERT INTO playback_queue_items (session_id, position, track_id) VALUES ($1, 0, $2)`, sid, *tid); err != nil {
+			return err
+		}
+	} else if _, err := tx.Exec(ctx, `UPDATE playback_queue_items SET position=0 WHERE session_id=$1`, sid); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE playback_sessions SET current_index=0, current_track_id=$2, updated_at=now() WHERE id=$1`, sid, *tid); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (e *Engine) move(ctx context.Context, sid uuid.UUID, delta int, ended bool) error {

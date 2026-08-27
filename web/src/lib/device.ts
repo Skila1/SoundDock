@@ -16,6 +16,7 @@ export type DevicePrefs = {
   outputManual: OutputTarget | null;
   sinkId: string;
   autoplay: boolean;
+  autoplaySet?: boolean;
   visualizer: boolean;
   playbackRate: number;
   tinyMode: boolean;
@@ -33,7 +34,7 @@ const defaults = (): DevicePrefs => ({
   deviceId: newDeviceId(),
   outputManual: null,
   sinkId: "",
-  autoplay: true,
+  autoplay: false,
   visualizer: false,
   playbackRate: 1,
   tinyMode: false
@@ -52,7 +53,7 @@ export function loadDevicePrefs(): DevicePrefs {
       deviceId: parsed.deviceId || base.deviceId,
       outputManual: parsed.outputManual === "browser" || parsed.outputManual === "discord" ? parsed.outputManual : null,
       sinkId: typeof parsed.sinkId === "string" ? parsed.sinkId : "",
-      autoplay: parsed.autoplay !== false,
+      autoplay: parsed.autoplaySet ? parsed.autoplay === true : false,
       visualizer: !!parsed.visualizer,
       playbackRate: typeof parsed.playbackRate === "number" && parsed.playbackRate > 0 ? parsed.playbackRate : 1,
       tinyMode: !!parsed.tinyMode

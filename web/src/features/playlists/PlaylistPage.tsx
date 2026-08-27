@@ -237,7 +237,7 @@ export function PlaylistPage() {
             <div className="min-w-0 flex-1">
               <TrackList
                 tracks={[t]}
-                onPlay={() => play(ids, i)}
+                onPlay={() => play([ids[i]])}
                 onQueue={(tr) => add([tr.id])}
                 onNext={(tr) => add([tr.id], true)}
               />

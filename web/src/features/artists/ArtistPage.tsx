@@ -80,7 +80,7 @@ export function ArtistPage() {
           <h2 className="mb-3 text-lg font-semibold">Popular</h2>
           <TrackList
             tracks={a.tracks || []}
-            onPlay={(i) => play(ids, i)}
+            onPlay={(i) => play([ids[i]])}
             onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
             onNext={(t) => add([t.id], true).then(() => toast.success("Playing next"))}
             showAlbum

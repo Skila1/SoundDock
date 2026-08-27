@@ -136,7 +136,7 @@ export function SearchPage() {
                 year: h.year
               };
             })}
-            onPlay={(i) => play(grouped.track.map((h) => h.id), i)}
+            onPlay={(i) => play([grouped.track[i].id])}
             onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
             onNext={(t) => add([t.id], true).then(() => toast.success("Playing next"))}
           />
@@ -156,7 +156,7 @@ export function SearchPage() {
               source: "youtube",
               artwork_url: h.artwork_url
             }))}
-            onPlay={(i) => play(grouped.youtube.map((h) => h.id), i)}
+            onPlay={(i) => play([grouped.youtube[i].id])}
             onQueue={(t) => add([t.id]).then(() => toast.success("Downloading and adding to queue"))}
             onNext={(t) => add([t.id], true).then(() => toast.success("Downloading to play next"))}
           />

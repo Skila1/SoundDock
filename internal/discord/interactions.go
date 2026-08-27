@@ -216,7 +216,7 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		sid, err := b.play.Session(ctx, "discord_guild", i.GuildID, nil)
 		if err == nil {
 			_ = b.play.Control(ctx, sid, "stop", nil)
-			_ = b.play.Control(ctx, sid, "clear", nil)
+			_ = b.play.Control(ctx, sid, "clear", map[string]any{"all": true})
 		}
 		b.reply(s, i, "Stopped and cleared.")
 	case "clear":

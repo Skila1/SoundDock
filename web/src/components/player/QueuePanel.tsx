@@ -126,8 +126,11 @@ export function QueuePanel({ onClose, onCollapse }: { onClose?: () => void; onCo
         {!ids.length && <p className="px-2 text-sm text-muted">Queue is empty. Play a track from Home.</p>}
       </div>
       <div className="space-y-2 border-t border-border px-4 py-3">
-        <label className="flex items-center justify-between text-sm">
-          Autoplay
+        <label className="flex items-center justify-between gap-3 text-sm" title="Queues similar library tracks by artist, album, genre, and decade. When those run out, Autoplay pulls 1 to 20 similar tracks from YouTube.">
+          <span>
+            Autoplay
+            <span className="mt-0.5 block text-xs font-normal text-muted">Similar library tracks, then YouTube</span>
+          </span>
           <Switch checked={p.autoplay} onCheckedChange={p.setAutoplay} />
         </label>
         <label className="flex items-center justify-between text-sm">

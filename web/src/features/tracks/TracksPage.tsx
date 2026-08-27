@@ -34,14 +34,14 @@ export function TracksPage() {
               subtitle={t.artist || t.album}
               kind="track"
               explicit={t.explicit}
-              onPlay={() => play(ids, i)}
+              onPlay={() => play([ids[i]])}
             />
           ))}
         </div>
       ) : (
         <TrackList
           tracks={tracks}
-          onPlay={(i) => play(ids, i)}
+          onPlay={(i) => play([ids[i]])}
           onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
           onNext={(t) => add([t.id], true).then(() => toast.success("Playing next"))}
         />

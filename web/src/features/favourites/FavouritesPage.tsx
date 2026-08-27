@@ -43,7 +43,7 @@ export function FavouritesPage() {
             <TabsTrigger value="artists">Artists ({d.artists.length})</TabsTrigger>
             <TabsTrigger value="playlists">Playlists ({d.playlists.length})</TabsTrigger>
           </TabsList>
-          <TabsContent value="tracks"><TrackList tracks={d.tracks} onPlay={(i) => play(d.tracks.map((t) => t.id), i)} /></TabsContent>
+          <TabsContent value="tracks"><TrackList tracks={d.tracks} onPlay={(i) => play([d.tracks[i].id])} /></TabsContent>
           <TabsContent value="albums"><div className="grid grid-cols-2 gap-4 sm:grid-cols-4">{d.albums.map((a) => <MediaCard key={a.id} className="max-w-none min-w-0" to={`/albums/${a.id}`} id={a.id} title={a.title} kind="album" />)}</div></TabsContent>
           <TabsContent value="artists"><div className="grid grid-cols-2 gap-4 sm:grid-cols-4">{d.artists.map((a) => <MediaCard key={a.id} className="max-w-none min-w-0" to={`/artists/${a.id}`} id={a.id} title={a.name} kind="artist" />)}</div></TabsContent>
           <TabsContent value="playlists"><div className="grid grid-cols-2 gap-4 sm:grid-cols-4">{d.playlists.map((p) => <MediaCard key={p.id} className="max-w-none min-w-0" to={`/playlists/${p.id}`} id={p.id} title={p.name} kind="playlist" />)}</div></TabsContent>

@@ -295,6 +295,13 @@ async function startLocal(id: string, positionMsValue: number, shouldPlay: boole
   }
 }
 
+function hasActiveTrack() {
+  const s = usePlayer.getState();
+  if (s.playing) return true;
+  const status = s.queue?.status;
+  return !!(s.current && (status === "playing" || status === "paused"));
+}
+
 async function maybeReplenishRadio() {
   const s = usePlayer.getState();
   if (!s.autoplay || s.stopAfterCurrent || radioBusy) return;
@@ -302,12 +309,22 @@ async function maybeReplenishRadio() {
   const idx = s.queue?.current_index ?? 0;
   if (!items.length || items.length - idx > 2) return;
   const seed = s.current?.id;
-  if (!seed) return;
+  if (!seed || !isLibraryTrackId(seed)) return;
   radioBusy = true;
   try {
-    const r = await api.get<{ track_ids?: string[] }>(`/api/v1/radio?kind=track&seed_id=${encodeURIComponent(seed)}&limit=20`);
-    const extra = (r.track_ids || []).filter((id) => id && id !== seed && !items.some((it) => it.track_id === id));
-    if (extra.length) await s.add(extra, false);
+    const r = await api.get<{ track_ids?: string[]; youtube_ids?: string[] }>(
+      `/api/v1/radio?kind=track&seed_id=${encodeURIComponent(seed)}&limit=20&fill=youtube`
+    );
+    const have = new Set(items.map((it) => it.track_id));
+    have.add(seed);
+    const extra = (r.track_ids || []).filter((id) => id && !have.has(id));
+    if (extra.length) await usePlayer.getState().add(extra, false);
+    const yt = (r.youtube_ids || []).filter(Boolean).slice(0, 20);
+    for (let i = 0; i < yt.length; i += 4) {
+      const live = usePlayer.getState();
+      if (!live.autoplay || live.stopAfterCurrent) break;
+      await live.add(yt.slice(i, i + 4), false);
+    }
   } catch {
     /* radio optional */
   } finally {
@@ -490,10 +507,16 @@ export const usePlayer = create<PlayerStore>()(
       },
       playTracks: async (ids, start = 0) => {
         if (!ids.length) return;
+        const idx = Math.max(0, Math.min(start, ids.length - 1));
+        if (hasActiveTrack()) {
+          const toAdd = ids.slice(idx);
+          await get().add(toAdd);
+          toast.success(toAdd.length === 1 ? "Added to queue" : `Added ${toAdd.length} tracks to queue`);
+          return;
+        }
         if (ids.some((id) => !isLibraryTrackId(id))) {
           toast.message("Getting it from YouTube…");
         }
-        const idx = Math.max(0, Math.min(start, ids.length - 1));
         await get().pollVoice();
         if (discordBlocked()) {
           toast.error("Join a Discord voice channel to play");
@@ -656,7 +679,7 @@ export const usePlayer = create<PlayerStore>()(
           pauseAll();
           set({ playing: q.status === "playing" });
         }
-        if (action === "stop" || action === "clear") {
+        if (action === "stop") {
           pauseAll();
           set({ playing: false, position: 0 });
         }
@@ -783,6 +806,8 @@ export const usePlayer = create<PlayerStore>()(
           if (q.current_track_id && (trackChanged || !cur.current)) {
             await get().hydrateTrack(q.current_track_id);
           }
+          const idx = q.current_index ?? 0;
+          if ((q.items || []).length - idx <= 2) maybeReplenishRadio();
         } catch {
           /* 409 not in voice, or offline */
         }
@@ -795,7 +820,7 @@ export const usePlayer = create<PlayerStore>()(
         updatePositionState();
       },
       setAutoplay: (on) => {
-        saveDevicePrefs({ autoplay: on });
+        saveDevicePrefs({ autoplay: on, autoplaySet: true });
         set({ autoplay: on });
         if (on) maybeReplenishRadio();
       },

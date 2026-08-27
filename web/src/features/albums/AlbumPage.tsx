@@ -88,7 +88,7 @@ export function AlbumPage() {
           <TrackList
             tracks={list}
             showAlbum={false}
-            onPlay={(i) => play(ids, ids.indexOf(list[i].id))}
+            onPlay={(i) => play([list[i].id])}
             onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
             onNext={(t) => add([t.id], true)}
           />

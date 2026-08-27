@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/radio"
@@ -16,6 +17,10 @@ func (s *Server) getRadio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	fillYouTube := strings.EqualFold(r.URL.Query().Get("fill"), "youtube")
+	if fillYouTube {
+		limit = radio.ClampFill(limit)
+	}
 	var seed uuid.UUID
 	if raw := r.URL.Query().Get("seed_id"); raw != "" {
 		id, err := uuid.Parse(raw)
@@ -48,6 +53,12 @@ func (s *Server) getRadio(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 500, "db", err.Error())
 		}
 		return
+	}
+	if fillYouTube && seed != uuid.Nil {
+		need := limit - len(res.TrackIDs)
+		if need > 0 {
+			res.YoutubeIDs = s.similarYouTube(r.Context(), seed, need, res.TrackIDs)
+		}
 	}
 	writeJSON(w, 200, res)
 }

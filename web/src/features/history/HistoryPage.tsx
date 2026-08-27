@@ -54,7 +54,7 @@ export function HistoryPage() {
             key={`${t.id}-${t.played_at}-${i}`}
             type="button"
             className="flex w-full items-center gap-3 rounded-md px-2 py-1.5 text-left hover:bg-surface-2"
-            onClick={() => play(ids, i)}
+            onClick={() => play([ids[i]])}
             onContextMenu={(e) => {
               e.preventDefault();
               add([t.id], true).then(() => toast.success("Playing next"));

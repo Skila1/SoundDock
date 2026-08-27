@@ -123,7 +123,7 @@ function TrackSection({
     return (
       <TrackList
         tracks={tracks}
-        onPlay={(i) => onPlay(ids, i)}
+        onPlay={(i) => onPlay([ids[i]])}
         onQueue={(t) => onQueue([t.id]).then(() => toast.success("Added to queue"))}
         onNext={(t) => onNext(t)}
       />
@@ -140,7 +140,7 @@ function TrackSection({
           title={t.title}
           subtitle={t.artist || t.album || "Unknown artist"}
           kind="track"
-          onPlay={() => onPlay(ids, i)}
+          onPlay={() => onPlay([ids[i]])}
         />
       ))}
     </div>
