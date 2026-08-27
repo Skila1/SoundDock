@@ -40,6 +40,7 @@ func New(pool *pgxpool.Pool, art *artwork.Store, log *slog.Logger, hook *webhook
 type Payload struct {
 	LibraryID uuid.UUID `json:"library_id"`
 	Kind      string    `json:"kind"`
+	Prefix    string    `json:"prefix,omitempty"`
 }
 
 func (s *Scanner) Handler(providers func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) jobs.Handler {
@@ -51,6 +52,9 @@ func (s *Scanner) Handler(providers func(context.Context, uuid.UUID) (storage.St
 		prov, libID, prefix, err := providers(ctx, p.LibraryID)
 		if err != nil {
 			return err
+		}
+		if strings.TrimSpace(p.Prefix) != "" {
+			prefix = path.Join(prefix, p.Prefix)
 		}
 		return s.ScanLibrary(ctx, libID, prov, prefix, p.Kind, job.ID)
 	}

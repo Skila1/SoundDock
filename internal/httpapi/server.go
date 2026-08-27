@@ -32,6 +32,7 @@ import (
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/playback"
+	"github.com/sounddock/sounddock/internal/scapex"
 	"github.com/sounddock/sounddock/internal/search"
 	"github.com/sounddock/sounddock/internal/storage"
 	"github.com/sounddock/sounddock/internal/transcode"
@@ -61,6 +62,7 @@ type Server struct {
 	SignKey  []byte
 	Managed  *storage.Local
 	OpenAPI  []byte
+	ScapeX   *scapex.Client
 }
 
 func (s *Server) Router() http.Handler {
@@ -397,7 +399,7 @@ func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 		"features": map[string]bool{
 			"search": true, "playlists": true, "uploads": true, "remote_import": true,
 			"external_playlists": true, "webhooks": true, "pwa": true, "replaygain": true, "crossfade": true,
-			"discord_login": oauth.Ready(),
+			"discord_login": oauth.Ready(), "scapex": s.ScapeX != nil && s.ScapeX.Ready(r.Context()),
 		},
 	})
 }

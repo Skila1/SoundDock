@@ -92,26 +92,31 @@ func (s *Server) getQueue(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) putQueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TrackIDs []uuid.UUID `json:"track_ids"`
-		Start    int         `json:"start"`
-		DeviceID string      `json:"device_id"`
-		Target   string      `json:"target"`
+		TrackIDs []string `json:"track_ids"`
+		Start    int      `json:"start"`
+		DeviceID string   `json:"device_id"`
+		Target   string   `json:"target"`
 	}
 	_ = decodeJSON(r, &body)
 	sid, err := s.playSession(r, nil, body.Target, body.DeviceID)
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	if err := s.Play.Replace(r.Context(), sid, body.TrackIDs, body.Start); err != nil {
+	ids, err := s.resolveQueueTracks(r.Context(), body.TrackIDs)
+	if err != nil {
+		writeErr(w, 502, "scapex", err.Error())
+		return
+	}
+	if err := s.Play.Replace(r.Context(), sid, ids, body.Start); err != nil {
 		writeErr(w, 400, "queue", err.Error())
 		return
 	}
-	if len(body.TrackIDs) > 0 && s.Hooks != nil {
+	if len(ids) > 0 && s.Hooks != nil {
 		start := body.Start
-		if start < 0 || start >= len(body.TrackIDs) {
+		if start < 0 || start >= len(ids) {
 			start = 0
 		}
-		s.Hooks.Emit(r.Context(), "playback.started", map[string]any{"track_id": body.TrackIDs[start]})
+		s.Hooks.Emit(r.Context(), "playback.started", map[string]any{"track_id": ids[start]})
 	}
 	q, _ := s.Play.Get(r.Context(), sid)
 	writeJSON(w, 200, q)
@@ -119,17 +124,22 @@ func (s *Server) putQueue(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TrackIDs []uuid.UUID `json:"track_ids"`
-		Next     bool        `json:"next"`
-		DeviceID string      `json:"device_id"`
-		Target   string      `json:"target"`
+		TrackIDs []string `json:"track_ids"`
+		Next     bool     `json:"next"`
+		DeviceID string   `json:"device_id"`
+		Target   string   `json:"target"`
 	}
 	_ = decodeJSON(r, &body)
 	sid, err := s.playSession(r, nil, body.Target, body.DeviceID)
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	if err := s.Play.Add(r.Context(), sid, body.TrackIDs, body.Next); err != nil {
+	ids, err := s.resolveQueueTracks(r.Context(), body.TrackIDs)
+	if err != nil {
+		writeErr(w, 502, "scapex", err.Error())
+		return
+	}
+	if err := s.Play.Add(r.Context(), sid, ids, body.Next); err != nil {
 		writeErr(w, 400, "queue", err.Error())
 		return
 	}

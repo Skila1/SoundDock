@@ -54,6 +54,11 @@ export function colorFromId(id: string) {
   return `hsl(${hue} 28% 28%)`;
 }
 
-export function artworkUrl(kind: "track" | "album" | "artist" | "playlist", id: string, size: "thumb" | "card" | "page" | "now" = "card") {
+export function artworkUrl(kind: "track" | "album" | "artist" | "playlist" | "youtube", id: string, size: "thumb" | "card" | "page" | "now" = "card") {
+  if (kind === "youtube") return `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
   return `/api/v1/${kind}s/${id}/artwork?size=${size}`;
+}
+
+export function isLibraryTrackId(id: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 }

@@ -149,6 +149,10 @@ export function TrackList({
   const targetIds = (t: Track) => (selected.has(t.id) && selected.size > 1 ? [...selected] : [t.id]);
 
   const doFav = async (t: Track) => {
+    if (t.source === "youtube") {
+      toast.message("Play or queue it first so it lands in the library");
+      return;
+    }
     if (onFav) {
       onFav(t);
       return;
@@ -236,13 +240,18 @@ export function TrackList({
           </div>
           <div className="flex min-w-0 items-center gap-3">
             <div className="hidden h-10 w-10 shrink-0 overflow-hidden rounded sm:block">
-              <Artwork src={artworkUrl("track", t.id, "thumb")} id={t.id} name={t.title} kind="track" size="sm" />
+              <Artwork src={t.source === "youtube" ? t.artwork_url || artworkUrl("youtube", t.id, "thumb") : artworkUrl("track", t.id, "thumb")} id={t.id} name={t.title} kind="track" size="sm" />
             </div>
             <div className="min-w-0">
               <div className="flex min-w-0 items-center gap-1.5">
-                <Link to={`/tracks/${t.id}`} className="truncate text-sm font-medium hover:underline" onClick={(e) => e.stopPropagation()}>
-                  {t.title}
-                </Link>
+                {t.source === "youtube" ? (
+                  <span className="truncate text-sm font-medium">{t.title}</span>
+                ) : (
+                  <Link to={`/tracks/${t.id}`} className="truncate text-sm font-medium hover:underline" onClick={(e) => e.stopPropagation()}>
+                    {t.title}
+                  </Link>
+                )}
+                {t.source === "youtube" && <Badge>YouTube</Badge>}
                 {t.explicit && <Badge tone="warning">E</Badge>}
                 {t.codec && <Badge>{t.codec}</Badge>}
                 {isHires(t) && <Badge tone="accent">Hi-Res</Badge>}

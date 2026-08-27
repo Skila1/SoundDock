@@ -45,6 +45,7 @@ export function SearchPage() {
     const hits = results.data?.results || [];
     return {
       track: hits.filter((h) => h.type === "track"),
+      youtube: hits.filter((h) => h.type === "youtube"),
       album: hits.filter((h) => h.type === "album"),
       artist: hits.filter((h) => h.type === "artist"),
       playlist: hits.filter((h) => h.type === "playlist")
@@ -84,9 +85,9 @@ export function SearchPage() {
           </Button>
         ))}
       </div>
-      {!q && <p className="text-muted">Search your SoundDock library.</p>}
+      {!q && <p className="text-muted">Search your SoundDock library. Missing tracks can be fetched from YouTube.</p>}
       {q && !results.data?.results?.length && !results.isLoading && (
-        <EmptyState icon={Search} title={`No results for ‘${q}’.`} description="Try another spelling or a broader query." />
+        <EmptyState icon={Search} title={`No results for ‘${q}’.`} description="Try another spelling, or wait for ScapeX if YouTube search is enabled." />
       )}
       {grouped.artist.length > 0 && (
         <section className="mb-8">
@@ -120,6 +121,26 @@ export function SearchPage() {
             onPlay={(i) => play(grouped.track.map((h) => h.id), i)}
             onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
             onNext={(t) => add([t.id], true).then(() => toast.success("Playing next"))}
+          />
+        </section>
+      )}
+      {grouped.youtube.length > 0 && (
+        <section className="mb-8">
+          <h2 className="mb-3 font-semibold">YouTube</h2>
+          <p className="mb-3 text-sm text-muted">Not in your library. Play or queue to download into SoundDock.</p>
+          <TrackList
+            tracks={grouped.youtube.map((h) => ({
+              id: h.id,
+              title: h.title,
+              artist: h.artist,
+              album: h.album,
+              duration_ms: h.duration_ms,
+              source: "youtube",
+              artwork_url: h.artwork_url
+            }))}
+            onPlay={(i) => play(grouped.youtube.map((h) => h.id), i)}
+            onQueue={(t) => add([t.id]).then(() => toast.success("Downloading and adding to queue"))}
+            onNext={(t) => add([t.id], true).then(() => toast.success("Downloading to play next"))}
           />
         </section>
       )}

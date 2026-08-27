@@ -158,8 +158,8 @@ func (s *Server) ensureDiscordJoin(r *http.Request, guildID, channelID string) e
 
 func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TrackIDs []uuid.UUID `json:"track_ids"`
-		Start    int         `json:"start"`
+		TrackIDs []string `json:"track_ids"`
+		Start    int      `json:"start"`
 	}
 	_ = decodeJSON(r, &body)
 	g, c, ok := s.findUserVoice(r)
@@ -181,7 +181,12 @@ func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "queue", err.Error())
 		return
 	}
-	if err := s.Play.Replace(r.Context(), sid, body.TrackIDs, body.Start); err != nil {
+	ids, err := s.resolveQueueTracks(r.Context(), body.TrackIDs)
+	if err != nil {
+		writeErr(w, 502, "scapex", err.Error())
+		return
+	}
+	if err := s.Play.Replace(r.Context(), sid, ids, body.Start); err != nil {
 		writeErr(w, 500, "queue", err.Error())
 		return
 	}

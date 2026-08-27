@@ -33,6 +33,7 @@ services:
       SD_ROLE: app
       SD_UPDATE_DIR: /update
       SD_DATABASE_URL: postgres://${POSTGRES_USER:-sounddock}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sounddock}?sslmode=disable
+      SD_SCAPEX_URL: http://scapex:7788
     volumes:
       - sounddock_data:/data
       - ${SD_LIBRARY_HOST:-./libraries}:/libraries:ro
@@ -44,6 +45,32 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+      start_period: 20s
+    networks:
+      - sounddock
+
+  scapex:
+    build:
+      context: ../ScapeX
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SD_DATABASE_URL: postgres://${POSTGRES_USER:-sounddock}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sounddock}?sslmode=disable
+      SCAPEX_HTTP: ":7788"
+      SCAPEX_INBOX: /data/managed/inbox
+      SCAPEX_YTDLP: ${SCAPEX_YTDLP:-}
+      SCAPEX_YT_COOKIES: ${SCAPEX_YT_COOKIES:-}
+      SCAPEX_YT_BROWSER: ${SCAPEX_YT_BROWSER:-}
+    volumes:
+      - sounddock_data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:7788/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
       start_period: 20s
     networks:
       - sounddock

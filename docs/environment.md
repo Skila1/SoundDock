@@ -10,3 +10,4 @@ See `.env.example`. The installer only writes what is needed to boot. Discord cl
 | `SD_METRICS_ENABLED` | Optional Prometheus `/metrics` |
 | `SD_IMAGE` | Image to pull (`ghcr.io/skila1/sounddock:latest`) |
 | `SD_LIBRARY_HOST` | Host folder mounted at `/libraries` |
+| `SD_SCAPEX_URL` | ScapeX sidecar on the compose network (`http://scapex:7788`). Empty disables YouTube search/fetch |

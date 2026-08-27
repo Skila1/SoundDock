@@ -31,6 +31,7 @@ import (
 	"github.com/sounddock/sounddock/internal/radio"
 	"github.com/sounddock/sounddock/internal/retention"
 	"github.com/sounddock/sounddock/internal/scan"
+	"github.com/sounddock/sounddock/internal/scapex"
 	"github.com/sounddock/sounddock/internal/scrobble"
 	"github.com/sounddock/sounddock/internal/search"
 	"github.com/sounddock/sounddock/internal/storage"
@@ -115,6 +116,7 @@ func main() {
 		Log:     log,
 		SignKey: cryptox.SigningKey(cfg.MasterKey),
 		Managed: managed,
+		ScapeX:  scapex.New(cfg.ScapeXURL),
 	}
 	if fsys, err := web.FS(); err == nil {
 		srv.Web = fsys

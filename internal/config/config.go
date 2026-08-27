@@ -38,6 +38,7 @@ type Config struct {
 	RedisURL        string
 	MeiliURL        string
 	MeiliKey        string
+	ScapeXURL       string
 	ShutdownWait    time.Duration
 }
 
@@ -66,6 +67,7 @@ func Load() Config {
 		RedisURL:        env("SD_REDIS_URL", ""),
 		MeiliURL:        env("SD_MEILISEARCH_URL", ""),
 		MeiliKey:        env("SD_MEILISEARCH_KEY", ""),
+		ScapeXURL:       strings.TrimRight(env("SD_SCAPEX_URL", ""), "/"),
 		ShutdownWait:    40 * time.Second,
 	}
 }

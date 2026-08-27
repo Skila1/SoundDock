@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { api } from "@/lib/api";
+import { isLibraryTrackId } from "@/lib/utils";
 import { toast } from "sonner";
 import type { QueueState, Track } from "@/types/api";
 import {
@@ -489,6 +490,9 @@ export const usePlayer = create<PlayerStore>()(
       },
       playTracks: async (ids, start = 0) => {
         if (!ids.length) return;
+        if (ids.some((id) => !isLibraryTrackId(id))) {
+          toast.message("Getting it from YouTube…");
+        }
         const idx = Math.max(0, Math.min(start, ids.length - 1));
         await get().pollVoice();
         if (discordBlocked()) {
@@ -581,6 +585,9 @@ export const usePlayer = create<PlayerStore>()(
         if (nid) preloadTrack(nid);
       },
       add: async (ids, next) => {
+        if (ids.some((id) => !isLibraryTrackId(id))) {
+          toast.message("Getting it from YouTube…");
+        }
         const existing = new Set(idsOf(get().queue));
         const dups = ids.filter((id) => existing.has(id));
         if (dups.length) toast.warning(dups.length === 1 ? "That track is already in the queue" : `${dups.length} tracks are already in the queue`);

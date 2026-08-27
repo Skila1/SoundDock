@@ -28,6 +28,8 @@ export type Track = {
   artists?: ArtistRef[];
   artist?: string;
   created_at?: string;
+  source?: string;
+  artwork_url?: string;
 };
 
 export type Album = {
@@ -75,7 +77,7 @@ export type Library = {
 };
 
 export type SearchHit = {
-  type: "track" | "album" | "artist" | "playlist";
+  type: "track" | "album" | "artist" | "playlist" | "youtube";
   id: string;
   title: string;
   artist?: string;
@@ -84,6 +86,8 @@ export type SearchHit = {
   codec?: string;
   year?: number | null;
   score?: number;
+  source?: string;
+  artwork_url?: string;
 };
 
 export type QueueState = {

@@ -105,6 +105,7 @@ export function CommandSearch() {
     remember(q);
     close();
     if (h.type === "track") play([h.id]);
+    else if (h.type === "youtube") play([h.id]);
     else nav(`/${h.type}s/${h.id}`);
   };
 
@@ -246,11 +247,11 @@ export function CommandSearch() {
                 onMouseEnter={() => setI(idx)}
               >
                 <div className="h-9 w-9 overflow-hidden rounded">
-                  <Artwork src={artworkUrl(h.type, h.id, "thumb")} id={h.id} name={h.title} kind={h.type} size="sm" />
+                  <Artwork src={h.type === "youtube" ? h.artwork_url || artworkUrl("youtube", h.id, "thumb") : artworkUrl(h.type, h.id, "thumb")} id={h.id} name={h.title} kind={h.type === "youtube" ? "track" : h.type} size="sm" />
                 </div>
                 <div className="min-w-0">
                   <div className="truncate text-sm" dangerouslySetInnerHTML={{ __html: highlight(h.title, q) }} />
-                  <div className="text-xs text-muted">{h.type} · {h.artist || h.album || ""}</div>
+                  <div className="text-xs text-muted">{h.type === "youtube" ? "YouTube" : h.type} · {h.artist || h.album || ""}</div>
                 </div>
               </button>
             );
