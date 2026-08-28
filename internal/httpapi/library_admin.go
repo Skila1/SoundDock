@@ -28,6 +28,10 @@ type storedFile struct {
 }
 
 func (s *Server) collectManagedFiles(ctx context.Context, trackIDs []uuid.UUID) []storedFile {
+	return s.collectTrackFiles(ctx, trackIDs, true)
+}
+
+func (s *Server) collectTrackFiles(ctx context.Context, trackIDs []uuid.UUID, managedOnly bool) []storedFile {
 	if len(trackIDs) == 0 {
 		return nil
 	}
@@ -36,7 +40,7 @@ func (s *Server) collectManagedFiles(ctx context.Context, trackIDs []uuid.UUID) 
 		FROM track_files tf
 		JOIN libraries l ON l.id = tf.library_id
 		JOIN storage_providers sp ON sp.id = l.storage_provider_id
-		WHERE tf.track_id = ANY($1) AND tf.quality='original'`, trackIDs)
+		WHERE tf.track_id = ANY($1) AND tf.deleted_at IS NULL`, trackIDs)
 	if err != nil {
 		return nil
 	}
@@ -47,11 +51,33 @@ func (s *Server) collectManagedFiles(ctx context.Context, trackIDs []uuid.UUID) 
 		if err := rows.Scan(&f.Lib, &f.Key, &f.Typ); err != nil {
 			continue
 		}
-		if managedStorage(f.Typ) && f.Key != "" {
-			out = append(out, f)
+		if f.Key == "" {
+			continue
 		}
+		if managedOnly && !managedStorage(f.Typ) {
+			continue
+		}
+		out = append(out, f)
 	}
 	return out
+}
+
+func (s *Server) PurgeTrackMedia(ctx context.Context, trackID uuid.UUID) (int64, error) {
+	var size int64
+	_ = s.Pool.QueryRow(ctx, `
+		SELECT coalesce(sum(size_bytes),0) FROM track_files
+		WHERE track_id=$1 AND deleted_at IS NULL`, trackID).Scan(&size)
+	files := s.collectTrackFiles(ctx, []uuid.UUID{trackID}, false)
+	if _, err := s.Pool.Exec(ctx, `DELETE FROM track_files WHERE track_id=$1`, trackID); err != nil {
+		return 0, err
+	}
+	if _, err := s.Pool.Exec(ctx, `
+		UPDATE tracks SET media_unavailable_at=COALESCE(media_unavailable_at, now()), updated_at=now()
+		WHERE id=$1`, trackID); err != nil {
+		return 0, err
+	}
+	s.deleteManagedFiles(ctx, files)
+	return size, nil
 }
 
 func (s *Server) deleteManagedFiles(ctx context.Context, files []storedFile) {

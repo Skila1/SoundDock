@@ -442,21 +442,6 @@ func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, scanMaps(rows, "id", "action", "target", "ip", "created_at"))
 }
 
-func (s *Server) adminRetention(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT key, days FROM retention_policies`)
-	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "key", "days"))
-}
-
-func (s *Server) adminPutRetention(w http.ResponseWriter, r *http.Request) {
-	var body map[string]int
-	_ = decodeJSON(r, &body)
-	for k, d := range body {
-		_, _ = s.Pool.Exec(r.Context(), `INSERT INTO retention_policies (key, days) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET days=EXCLUDED.days`, k, d)
-	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
-}
-
 func (s *Server) adminWebhooks(w http.ResponseWriter, r *http.Request) {
 	rows, _ := s.Pool.Query(r.Context(), `SELECT id, url, events, enabled FROM webhook_endpoints`)
 	defer rows.Close()

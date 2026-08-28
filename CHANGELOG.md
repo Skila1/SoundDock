@@ -30,8 +30,8 @@
 - Tracks can be bulk-deleted or cleared. Spotify playlists keep their Spotify id and can be synced again; missing songs still come through YouTube inside SoundDock.
 - YouTube search and fetch run inside SoundDock. There is no separate ScapeX service.
 - Administration > System > Workers exposes playback, search, acquisition, sync, and maintenance pools with reserved capacity for playback and search. Hung yt-dlp, Spotify imports, scans, merges, deletes, and metadata jobs are queued and cannot starve the API.
-- Clear queue keeps the song that is playing. Play on a track while something is already playing adds it to the queue instead of replacing the current song.
-- Help and Discord server buttons open the SoundDock community invite.
+- Play starts that track when nothing is playing. Play on another track while one is already playing adds it once, and a double-click cannot enqueue the same song twice.
+- Administration > Media > Retention can prune ScapeX / YouTube-acquired tracks by age, managed storage, or free disk space. Favourites, Keep forever, manual playlists, the queue, and NAS libraries stay unless an admin opts a library in. Pruned playlist tracks remain as re-acquirable stubs.
 
 ## 0.0.9
 

@@ -698,29 +698,7 @@ export function AdminTranscode() {
   );
 }
 
-export function AdminRetention() {
-  const q = useQuery({ queryKey: ["ret"], queryFn: () => api.get<any[]>("/api/v1/admin/retention") });
-  const [days, setDays] = useState<Record<string, string>>({});
-  return (
-    <div>
-      <PageHeader title="Retention" />
-      <form className="max-w-md space-y-3" onSubmit={async (e) => {
-        e.preventDefault();
-        const body: Record<string, number> = {};
-        (q.data || []).forEach((r) => { body[r.key] = Number(days[r.key] ?? r.days); });
-        await api.put("/api/v1/admin/retention", body);
-        toast.success("Retention saved");
-      }}>
-        {(q.data || []).map((r) => (
-          <Field key={r.key} label={r.key}>
-            <Input type="number" value={days[r.key] ?? r.days} onChange={(e) => setDays({ ...days, [r.key]: e.target.value })} />
-          </Field>
-        ))}
-        <Button type="submit">Save</Button>
-      </form>
-    </div>
-  );
-}
+export { AdminRetention } from "./AdminRetention";
 
 export function AdminSecurity() {
   const q = useQuery({ queryKey: ["audit"], queryFn: () => api.get<any[]>("/api/v1/admin/audit") });

@@ -74,7 +74,7 @@ func Description(id ID) string {
 	case PoolSync:
 		return "Spotify and other external playlist import and periodic sync."
 	case PoolMaintenance:
-		return "Library scans, merges, bulk deletes, metadata, fingerprints, backups, and other background upkeep."
+		return "Library scans, merges, bulk deletes, metadata, fingerprints, backups, media retention, and other background upkeep."
 	default:
 		return ""
 	}

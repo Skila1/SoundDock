@@ -143,7 +143,8 @@ func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "queue", err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	q, _ := s.Play.Get(r.Context(), sid)
+	writeJSON(w, 200, q)
 }
 
 func (s *Server) queueControl(w http.ResponseWriter, r *http.Request) {

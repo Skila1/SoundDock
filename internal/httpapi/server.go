@@ -32,6 +32,7 @@ import (
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/playback"
+	"github.com/sounddock/sounddock/internal/retention"
 	"github.com/sounddock/sounddock/internal/scapex"
 	"github.com/sounddock/sounddock/internal/search"
 	"github.com/sounddock/sounddock/internal/storage"
@@ -61,8 +62,9 @@ type Server struct {
 	Draining bool
 	SignKey  []byte
 	Managed  *storage.Local
-	OpenAPI  []byte
-	ScapeX   *scapex.Client
+	OpenAPI    []byte
+	ScapeX     *scapex.Client
+	Retention  *retention.Engine
 }
 
 func (s *Server) Router() http.Handler {
@@ -296,6 +298,10 @@ func (s *Server) Router() http.Handler {
 					r.Get("/audit", s.adminAudit)
 					r.Get("/retention", s.adminRetention)
 					r.Put("/retention", s.adminPutRetention)
+					r.Post("/retention/preview", s.adminRetentionPreview)
+					r.Post("/retention/run", s.adminRetentionRun)
+					r.Post("/retention/exclusions", s.adminRetentionExclusion)
+					r.Delete("/retention/exclusions/{id}", s.adminDeleteRetentionExclusion)
 					r.Get("/webhooks", s.adminWebhooks)
 					r.Post("/webhooks", s.adminCreateWebhook)
 					r.Delete("/webhooks/{id}", s.adminDeleteWebhook)

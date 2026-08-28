@@ -137,7 +137,8 @@ func main() {
 	runner.Register("ingest.url", ing.URLHandler(srv.ProviderFor))
 	runner.Register("ingest.zip", ing.ZipHandler(srv.ProviderFor))
 	runner.Register("library.migrate", ing.MigrateHandler(srv.ProviderFor))
-	runner.Register("maintenance.retention", retention.Handler(pool))
+	srv.Retention = retention.New(pool, runner, srv.Audit, cfg.ManagedDir, srv.PurgeTrackMedia)
+	runner.Register("maintenance.retention", retention.Handler(srv.Retention))
 	runner.Register("external.playlist.import", external.Handler(pool, box, hooks, srv.YouTube()))
 	runner.Register("external.playlist.tick", external.TickHandler(pool, runner.Enqueue))
 	runner.Register("backup.run", func(ctx context.Context, job jobs.Job) error {
@@ -186,6 +187,7 @@ func main() {
 					return
 				case <-t.C:
 					_, _ = runner.Enqueue(ctx, "external.playlist.tick", map[string]any{})
+					_, _ = retention.EnqueueUnlessBusy(ctx, pool, runner.Enqueue, retention.Payload{Scheduled: true})
 					update.Tick(ctx, pool)
 				}
 			}

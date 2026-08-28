@@ -107,7 +107,7 @@ func (s *Scanner) ScanLibrary(ctx context.Context, libID uuid.UUID, prov storage
 			}
 		}
 		seenN++
-		if err := s.ingestFile(ctx, libID, prov, e, e.Key, known); err != nil {
+		if err := s.ingestFile(ctx, libID, prov, e, e.Key, kind, known); err != nil {
 			failed++
 			_, _ = s.pool.Exec(ctx, `INSERT INTO scan_file_errors (scan_run_id, storage_key, error) VALUES ($1,$2,$3)`, runID, e.Key, err.Error())
 			s.log.Warn("scan file failed", "key", e.Key, "err", err)
@@ -157,7 +157,7 @@ func ProgressPct(done, total int) int {
 	return pct
 }
 
-func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, e storage.Entry, originalName string, known func(string) bool) error {
+func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, e storage.Entry, originalName, kind string, known func(string) bool) error {
 	var localPath string
 	if ls, ok := prov.(storage.FFmpegSourcer); ok {
 		src, err := ls.FFmpegSource(ctx, e.Key)
@@ -306,11 +306,23 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 	}
 
 	title := nullTitle(probe.Title, originalName)
+	acq, acqRef := "", ""
+	if ref := InboxVideoID(e.Key, kind); ref != "" {
+		acq, acqRef = "youtube", ref
+	}
 	var existing uuid.UUID
 	err = s.pool.QueryRow(ctx, `SELECT track_id FROM track_files WHERE library_id=$1 AND storage_key=$2`, libID, e.Key).Scan(&existing)
 	var trackID uuid.UUID
 	if err == nil {
 		trackID = existing
+	} else if acqRef != "" {
+		_ = s.pool.QueryRow(ctx, `SELECT id FROM tracks WHERE library_id=$1 AND acquisition_ref=$2 ORDER BY created_at DESC LIMIT 1`, libID, acqRef).Scan(&existing)
+		if existing != uuid.Nil {
+			trackID = existing
+			err = nil
+		}
+	}
+	if err == nil && trackID != uuid.Nil {
 		_, _ = s.pool.Exec(ctx, `
 			UPDATE tracks SET
 			  title=$2,
@@ -335,6 +347,15 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		if err != nil {
 			return err
 		}
+	}
+	if acqRef != "" {
+		_, _ = s.pool.Exec(ctx, `
+			UPDATE tracks SET
+			  acquisition=CASE WHEN acquisition='' THEN $2 ELSE acquisition END,
+			  acquisition_ref=CASE WHEN $3 <> '' THEN $3 ELSE acquisition_ref END,
+			  media_unavailable_at=NULL,
+			  updated_at=now()
+			WHERE id=$1`, trackID, acq, acqRef)
 	}
 	_, _ = s.pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'primary',0) ON CONFLICT DO NOTHING`, trackID, trackArtistID)
 	if probe.Composer != "" {
@@ -411,7 +432,7 @@ func (s *Scanner) IngestKey(ctx context.Context, libID uuid.UUID, prov storage.S
 	if err != nil {
 		return err
 	}
-	return s.ingestFile(ctx, libID, prov, storage.Entry{Key: key, Size: info.Size, ModTime: info.ModTime}, originalName, s.knownArtistFn(ctx))
+	return s.ingestFile(ctx, libID, prov, storage.Entry{Key: key, Size: info.Size, ModTime: info.ModTime}, originalName, "", s.knownArtistFn(ctx))
 }
 
 func (s *Scanner) knownArtistFn(ctx context.Context) func(string) bool {

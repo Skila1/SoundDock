@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/radio"
@@ -48,6 +49,9 @@ func (s *Server) searchYouTube(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) resolveQueueTracks(ctx context.Context, refs []string) ([]uuid.UUID, error) {
 	tracks, youtube := scapex.ParseTrackRefs(refs)
+	if err := s.reacquireMissing(ctx, tracks); err != nil {
+		return nil, err
+	}
 	if len(youtube) == 0 {
 		return tracks, nil
 	}
@@ -56,6 +60,48 @@ func (s *Server) resolveQueueTracks(ctx context.Context, refs []string) ([]uuid.
 		return nil, err
 	}
 	return append(tracks, got...), nil
+}
+
+func (s *Server) reacquireMissing(ctx context.Context, ids []uuid.UUID) error {
+	if len(ids) == 0 || s.ScapeX == nil {
+		return nil
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT t.acquisition_ref
+		FROM tracks t
+		WHERE t.id = ANY($1)
+		  AND coalesce(t.acquisition_ref,'') <> ''
+		  AND t.acquisition IN ('youtube', 'scapex', '')
+		  AND (
+		    t.media_unavailable_at IS NOT NULL
+		    OR NOT EXISTS (
+		      SELECT 1 FROM track_files tf
+		      WHERE tf.track_id=t.id AND tf.quality='original' AND tf.deleted_at IS NULL
+		    )
+		  )`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var refs []string
+	seen := map[string]bool{}
+	for rows.Next() {
+		var ref string
+		if rows.Scan(&ref) != nil {
+			continue
+		}
+		ref = strings.TrimSpace(ref)
+		if ref == "" || seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		refs = append(refs, ref)
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	_, err = s.fetchYouTube(ctx, refs)
+	return err
 }
 
 func (s *Server) fetchYouTube(ctx context.Context, refs []string) ([]uuid.UUID, error) {

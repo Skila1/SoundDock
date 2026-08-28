@@ -114,6 +114,25 @@ func CompanionStorageKey(originalKey, hash string) string {
 	return path.Join(prefix, "compressed", hash[:2], hash+".flac")
 }
 
+func InboxVideoID(key, kind string) string {
+	k := strings.ReplaceAll(strings.TrimSpace(key), "\\", "/")
+	k = strings.TrimPrefix(k, "/")
+	if kind != "inbox" && !strings.HasPrefix(k, "inbox/") && !strings.Contains(k, "/inbox/") {
+		return ""
+	}
+	base := strings.TrimSuffix(path.Base(k), path.Ext(k))
+	if len(base) == 11 {
+		for _, c := range base {
+			if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+				continue
+			}
+			return ""
+		}
+		return base
+	}
+	return ""
+}
+
 func IsHashStorageKey(key string) bool {
 	k := strings.ReplaceAll(key, "\\", "/")
 	base := path.Base(k)

@@ -236,8 +236,14 @@ export function TrackList({
             currentId === t.id && "text-accent",
             selected.has(t.id) && "bg-surface-2"
           )}
-          onClick={(e) => handleSelect(t, i, e)}
-          onDoubleClick={() => onPlay(i)}
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest("a,button,input,[role='menu']")) return;
+            if (e.shiftKey || e.ctrlKey || e.metaKey) {
+              handleSelect(t, i, e);
+              return;
+            }
+            onPlay(i);
+          }}
         >
           <div className="relative text-center text-xs text-subtle">
             <span className="group-hover:hidden">{t.track_number || i + 1}</span>

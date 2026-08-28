@@ -36,6 +36,9 @@ export type TrackMeta = Track & {
   read_only?: boolean;
   write_back_supported?: boolean;
   metadata_source?: string;
+  keep_forever?: boolean;
+  media_unavailable?: boolean;
+  acquisition?: string;
 };
 
 async function loadTrack(id: string): Promise<TrackMeta> {
@@ -109,6 +112,8 @@ export function TrackPage() {
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {t.explicit && <Badge tone="warning">Explicit</Badge>}
+            {t.media_unavailable && <Badge tone="warning">Unavailable — will reacquire</Badge>}
+            {t.keep_forever && <Badge tone="success">Keep forever</Badge>}
             {t.codec && <Badge>{t.codec}</Badge>}
             {hires && <Badge tone="accent">Hi-Res</Badge>}
             {t.genre && <Badge>{t.genre}</Badge>}
@@ -127,6 +132,18 @@ export function TrackPage() {
             <Button variant="ghost" onClick={toggleFav} aria-label="Favourite"><Heart className={fav ? "fill-current" : ""} /></Button>
             <Button variant="ghost" onClick={() => downloadTrack(t)}><Download /> Download</Button>
             {admin && <Button variant="ghost" onClick={() => setEdit(true)}><Pencil /> Edit</Button>}
+            {admin && (
+              <Button
+                variant="ghost"
+                onClick={async () => {
+                  await saveTrackMeta(t.id, { keep_forever: !t.keep_forever });
+                  qc.invalidateQueries({ queryKey: ["track-meta", id] });
+                  toast.success(t.keep_forever ? "Track can be pruned again" : "Marked Keep forever");
+                }}
+              >
+                {t.keep_forever ? "Allow prune" : "Keep forever"}
+              </Button>
+            )}
           </div>
         </div>
       </div>

@@ -66,6 +66,29 @@ let currentMeta: PlayerTrack | undefined;
 let nextMeta: PlayerTrack | undefined;
 let skipLocalStart = false;
 let advancing = false;
+let queueGate: Promise<unknown> = Promise.resolve();
+let lastQueueMutAt = 0;
+
+function enqueueQueueOp<T>(fn: () => Promise<T>): Promise<T> {
+  const next = queueGate.then(fn, fn);
+  queueGate = next.then(
+    () => undefined,
+    () => undefined
+  );
+  return next;
+}
+
+function alreadyQueuedAtEnd(ids: string[]) {
+  if (!ids.length) return false;
+  const items = idsOf(usePlayer.getState().queue);
+  if (ids.length > items.length) return false;
+  const tail = items.slice(items.length - ids.length);
+  return tail.every((id, i) => id === ids[i]);
+}
+
+function shouldSkipDupAppend(ids: string[]) {
+  return Date.now() - lastQueueMutAt < 1000 && alreadyQueuedAtEnd(ids);
+}
 
 function emptyQueue(partial?: Partial<PlayerQueue>): PlayerQueue {
   return {
@@ -295,11 +318,47 @@ async function startLocal(id: string, positionMsValue: number, shouldPlay: boole
   }
 }
 
-function hasActiveTrack() {
-  const s = usePlayer.getState();
-  if (s.playing) return true;
-  const status = s.queue?.status;
-  return !!(s.current && (status === "playing" || status === "paused"));
+function isPlaybackLive() {
+  return !!usePlayer.getState().playing;
+}
+
+async function appendToQueue(ids: string[], next?: boolean) {
+  if (!ids.length) return false;
+  if (shouldSkipDupAppend(ids)) return false;
+  if (ids.some((id) => !isLibraryTrackId(id))) {
+    toast.message("Getting it from YouTube…");
+  }
+  if (usingDiscord()) {
+    try {
+      await joinDiscord();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Join a Discord voice channel to add tracks");
+      return false;
+    }
+  }
+  const q = await api.post<PlayerQueue>(queuePath("/api/v1/me/queue/add"), queuePayload({ track_ids: ids, next }));
+  lastQueueMutAt = Date.now();
+  if (q && Array.isArray(q.items)) {
+    usePlayer.setState({
+      queue: q,
+      shuffle: !!q.shuffle,
+      repeat: q.repeat || usePlayer.getState().repeat,
+      stopAfterCurrent: !!q.stop_after_current
+    });
+    return true;
+  }
+  try {
+    const fresh = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
+    usePlayer.setState({
+      queue: fresh,
+      shuffle: !!fresh.shuffle,
+      repeat: fresh.repeat || usePlayer.getState().repeat,
+      stopAfterCurrent: !!fresh.stop_after_current
+    });
+  } catch {
+    /* keep local queue */
+  }
+  return true;
 }
 
 async function maybeReplenishRadio() {
@@ -509,60 +568,64 @@ export const usePlayer = create<PlayerStore>()(
       playTracks: async (ids, start = 0) => {
         if (!ids.length) return;
         const idx = Math.max(0, Math.min(start, ids.length - 1));
-        if (hasActiveTrack()) {
-          const toAdd = ids.slice(idx);
-          await get().add(toAdd);
-          toast.success(toAdd.length === 1 ? "Added to queue" : `Added ${toAdd.length} tracks to queue`);
-          return;
-        }
-        if (ids.some((id) => !isLibraryTrackId(id))) {
-          toast.message("Getting it from YouTube…");
-        }
-        await get().pollVoice();
-        if (discordBlocked()) {
-          toast.error("Join a Discord voice channel to play");
-          return;
-        }
-        if (usingDiscord()) {
-          pauseAll();
-          try {
-            await joinDiscord();
-            await playDiscord(ids, idx);
-          } catch (e) {
-            const msg = e instanceof Error ? e.message : "Discord play failed";
-            toast.error(msg);
+        await enqueueQueueOp(async () => {
+          if (isPlaybackLive()) {
+            const toAdd = ids.slice(idx);
+            const added = await appendToQueue(toAdd, false);
+            if (added) toast.success(toAdd.length === 1 ? "Added to queue" : `Added ${toAdd.length} tracks to queue`);
             return;
           }
-          try {
-            const q = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
-            set({ ...applyQueueFields(q || emptyQueue()), playing: true, position: 0 });
-          } catch {
-            set({
-              queue: emptyQueue({
-                items: ids.map((track_id, position) => ({ id: track_id, position, track_id })),
-                current_index: idx,
-                current_track_id: ids[idx],
-                status: "playing"
-              }),
-              playing: true,
-              position: 0
-            });
+          if (ids.some((id) => !isLibraryTrackId(id))) {
+            toast.message("Getting it from YouTube…");
           }
-          await get().hydrateTrack(ids[idx]);
-          ensureDiscordPoll();
-          return;
-        }
-        const q = await api.put<PlayerQueue>("/api/v1/me/queue", { track_ids: ids, start: idx });
-        set({ ...applyQueueFields(q), playing: true });
-        const id = ids[idx];
-        currentMeta = undefined;
-        listen = null;
-        const t = await get().hydrateTrack(id);
-        const played = await startLocal(id, 0, true, t);
-        set({ playing: played });
-        if (played) beginListen(id);
-        const nid = ids[idx + 1];
-        if (nid) preloadTrack(nid);
+          await get().pollVoice();
+          if (discordBlocked()) {
+            toast.error("Join a Discord voice channel to play");
+            return;
+          }
+          if (usingDiscord()) {
+            pauseAll();
+            try {
+              await joinDiscord();
+              await playDiscord(ids, idx);
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : "Discord play failed";
+              toast.error(msg);
+              return;
+            }
+            try {
+              const q = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
+              set({ ...applyQueueFields(q || emptyQueue()), playing: true, position: 0 });
+            } catch {
+              set({
+                queue: emptyQueue({
+                  items: ids.map((track_id, position) => ({ id: track_id, position, track_id })),
+                  current_index: idx,
+                  current_track_id: ids[idx],
+                  status: "playing"
+                }),
+                playing: true,
+                position: 0
+              });
+            }
+            lastQueueMutAt = Date.now();
+            await get().hydrateTrack(ids[idx]);
+            ensureDiscordPoll();
+            return;
+          }
+          const q = await api.put<PlayerQueue>("/api/v1/me/queue", { track_ids: ids, start: idx });
+          lastQueueMutAt = Date.now();
+          set({ ...applyQueueFields(q), playing: true });
+          const id = ids[idx];
+          currentMeta = undefined;
+          listen = null;
+          const t = await get().hydrateTrack(id);
+          const played = await startLocal(id, 0, true, t);
+          set({ playing: played });
+          if (played) beginListen(id);
+          const nid = ids[idx + 1];
+          if (nid) preloadTrack(nid);
+        });
       },
       playNow: async (index) => {
         const q = get().queue;
@@ -609,32 +672,7 @@ export const usePlayer = create<PlayerStore>()(
         if (nid) preloadTrack(nid);
       },
       add: async (ids, next) => {
-        if (ids.some((id) => !isLibraryTrackId(id))) {
-          toast.message("Getting it from YouTube…");
-        }
-        const existing = new Set(idsOf(get().queue));
-        const dups = ids.filter((id) => existing.has(id));
-        if (dups.length) toast.warning(dups.length === 1 ? "That track is already in the queue" : `${dups.length} tracks are already in the queue`);
-        if (usingDiscord()) {
-          try {
-            await joinDiscord();
-          } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Join a Discord voice channel to add tracks");
-            return;
-          }
-        }
-        await api.post(queuePath("/api/v1/me/queue/add"), queuePayload({ track_ids: ids, next }));
-        try {
-          const q = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
-          set({
-            queue: q,
-            shuffle: !!q.shuffle,
-            repeat: q.repeat || get().repeat,
-            stopAfterCurrent: !!q.stop_after_current
-          });
-        } catch {
-          /* keep local queue */
-        }
+        await enqueueQueueOp(() => appendToQueue(ids, next));
       },
       control: async (action, extra) => {
         const before = get();

@@ -118,23 +118,42 @@ func (d *Dock) findTrack(ctx context.Context, lib uuid.UUID, videoID, title stri
 	if videoID != "" {
 		err := d.pool.QueryRow(ctx, `
 			SELECT t.id FROM tracks t
-			JOIN track_files tf ON tf.track_id = t.id
-			WHERE t.library_id=$1 AND tf.storage_key ILIKE '%' || $2 || '%'
+			JOIN track_files tf ON tf.track_id = t.id AND tf.deleted_at IS NULL
+			WHERE t.library_id=$1 AND (
+			  tf.storage_key ILIKE '%' || $2 || '%'
+			  OR t.acquisition_ref = $2
+			)
 			ORDER BY t.created_at DESC LIMIT 1`, lib, videoID).Scan(&id)
 		if err == nil {
+			d.tagAcquisition(ctx, id, videoID)
 			return id, true, nil
 		}
 	}
 	if title != "" {
 		err := d.pool.QueryRow(ctx, `
 			SELECT t.id FROM tracks t
+			JOIN track_files tf ON tf.track_id = t.id AND tf.deleted_at IS NULL
 			WHERE t.library_id=$1 AND t.title ILIKE $2
 			ORDER BY t.created_at DESC LIMIT 1`, lib, title).Scan(&id)
 		if err == nil {
+			d.tagAcquisition(ctx, id, videoID)
 			return id, true, nil
 		}
 	}
 	return uuid.Nil, false, nil
+}
+
+func (d *Dock) tagAcquisition(ctx context.Context, id uuid.UUID, videoID string) {
+	if id == uuid.Nil {
+		return
+	}
+	_, _ = d.pool.Exec(ctx, `
+		UPDATE tracks SET
+		  acquisition=CASE WHEN acquisition='' THEN 'youtube' ELSE acquisition END,
+		  acquisition_ref=CASE WHEN $2 <> '' AND acquisition_ref='' THEN $2 ELSE acquisition_ref END,
+		  media_unavailable_at=NULL,
+		  updated_at=now()
+		WHERE id=$1`, id, strings.TrimSpace(videoID))
 }
 
 func (d *Dock) FinalizeDownload(src LocalTrack) (LocalTrack, error) {

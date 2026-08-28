@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -47,6 +48,7 @@ type trackMetaBody struct {
 	Locked      *bool   `json:"locked"`
 	Lyrics      *string `json:"lyrics"`
 	Artist      *string `json:"artist"`
+	KeepForever *bool   `json:"keep_forever"`
 	WriteBack   bool    `json:"write_back"`
 }
 
@@ -59,33 +61,36 @@ func (s *Server) getTrackMetadata(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	u := currentUser(r)
 	var (
-		title, genre, isrc, mbid, album, source string
-		codec, container                        *string
-		dur, tn, dn                             int
-		year                                    *int
-		expl                                    *bool
-		locked                                  bool
-		albumID                                 *uuid.UUID
-		libID                                   uuid.UUID
-		gain, conf                              *float64
-		bitDepth, sampleRate, bitrate, channels *int
-		size                                    *int64
+		title, genre, isrc, mbid, album, source, acq string
+		codec, container                             *string
+		dur, tn, dn                                  int
+		year                                         *int
+		expl                                         *bool
+		locked, keepForever                          bool
+		albumID                                      *uuid.UUID
+		libID                                        uuid.UUID
+		gain, conf                                   *float64
+		bitDepth, sampleRate, bitrate, channels      *int
+		size                                         *int64
+		unavailable                                  *time.Time
 	)
 	err = s.Pool.QueryRow(ctx, `
 		SELECT t.title, t.duration_ms, t.track_number, t.disc_number, t.year, t.explicit, t.album_id, t.library_id,
 		       t.genre_text, t.isrc, t.mbid, t.locked, t.manual_gain_db, t.metadata_source, t.metadata_confidence,
 		       coalesce(al.title,''),
-		       tf.codec, tf.bit_depth, tf.sample_rate, tf.bitrate, tf.channels, tf.size_bytes, tf.container
+		       tf.codec, tf.bit_depth, tf.sample_rate, tf.bitrate, tf.channels, tf.size_bytes, tf.container,
+		       t.keep_forever, t.acquisition, t.media_unavailable_at
 		FROM tracks t
 		LEFT JOIN albums al ON al.id=t.album_id
 		LEFT JOIN LATERAL (
 			SELECT codec, bit_depth, sample_rate, bitrate, channels, size_bytes, container
-			FROM track_files WHERE track_id=t.id AND quality='original' LIMIT 1
+			FROM track_files WHERE track_id=t.id AND quality='original' AND deleted_at IS NULL LIMIT 1
 		) tf ON TRUE
 		WHERE t.id=$1`, id).Scan(
 		&title, &dur, &tn, &dn, &year, &expl, &albumID, &libID,
 		&genre, &isrc, &mbid, &locked, &gain, &source, &conf,
-		&album, &codec, &bitDepth, &sampleRate, &bitrate, &channels, &size, &container)
+		&album, &codec, &bitDepth, &sampleRate, &bitrate, &channels, &size, &container,
+		&keepForever, &acq, &unavailable)
 	if err != nil {
 		writeErr(w, 404, "not_found", "track not found")
 		return
@@ -129,6 +134,9 @@ func (s *Server) getTrackMetadata(w http.ResponseWriter, r *http.Request) {
 		"artwork_url":          "/api/v1/tracks/" + id.String() + "/artwork?size=page",
 		"stream_url":           "/api/v1/tracks/" + id.String() + "/stream",
 		"write_back_supported": org == "managed" && !ro,
+		"keep_forever":         keepForever,
+		"acquisition":          acq,
+		"media_unavailable":    unavailable != nil,
 	})
 }
 
@@ -207,6 +215,10 @@ func (s *Server) applyTrackMeta(ctx context.Context, id uuid.UUID, body trackMet
 	if body.Artist != nil && !s.fieldLocked(ctx, "track", id, "artist") {
 		s.replaceTrackArtists(ctx, id, *body.Artist)
 		updated = append(updated, "artist")
+	}
+	if body.KeepForever != nil {
+		_, _ = s.Pool.Exec(ctx, `UPDATE tracks SET keep_forever=$2, updated_at=now() WHERE id=$1`, id, *body.KeepForever)
+		updated = append(updated, "keep_forever")
 	}
 	_ = userID
 	return updated

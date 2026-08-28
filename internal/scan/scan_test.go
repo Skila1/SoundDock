@@ -32,6 +32,15 @@ func TestProgressPct(t *testing.T) {
 	}
 }
 
+func TestInboxVideoID(t *testing.T) {
+	if InboxVideoID("inbox/dQw4w9WgXcQ.m4a", "inbox") != "dQw4w9WgXcQ" {
+		t.Fatal("inbox")
+	}
+	if InboxVideoID("uploads/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.flac", "upload") != "" {
+		t.Fatal("hash")
+	}
+}
+
 func TestHashStorageKey(t *testing.T) {
 	hash := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	got := HashStorageKey("", hash, ".flac")

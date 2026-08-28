@@ -84,6 +84,7 @@ export function MediaCard({
             className="absolute bottom-2 right-2 translate-y-2 opacity-0 shadow-lg transition group-hover:translate-y-0 group-hover:opacity-100"
             onClick={(e) => {
               e.preventDefault();
+              e.stopPropagation();
               onPlay();
             }}
             aria-label={`Play ${title}`}

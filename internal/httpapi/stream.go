@@ -74,7 +74,7 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request) {
 
 	var fileID, libID uuid.UUID
 	var key, codec string
-	err := s.Pool.QueryRow(r.Context(), `SELECT id, library_id, storage_key, codec FROM track_files WHERE track_id=$1 AND quality='original' LIMIT 1`, id).Scan(&fileID, &libID, &key, &codec)
+	err := s.Pool.QueryRow(r.Context(), `SELECT id, library_id, storage_key, codec FROM track_files WHERE track_id=$1 AND quality='original' AND deleted_at IS NULL LIMIT 1`, id).Scan(&fileID, &libID, &key, &codec)
 	if err != nil {
 		writeErr(w, 404, "not_found", "media missing")
 		return
