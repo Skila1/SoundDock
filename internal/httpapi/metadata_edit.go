@@ -270,24 +270,6 @@ func (s *Server) bulkTrackMetadata(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	meta := trackMetaBody{Genre: body.Genre, Year: body.Year, Explicit: body.Explicit, DiscNumber: body.DiscNumber, TrackNumber: body.TrackNumber, WriteBack: body.WriteBack}
-	if s.Jobs != nil && len(body.IDs) > 0 {
-		jid, err := s.Jobs.Enqueue(r.Context(), "tracks.metadata", tracksMetaPayload{
-			IDs: body.IDs, Genre: body.Genre, Year: body.Year, Explicit: body.Explicit,
-			DiscNumber: body.DiscNumber, TrackNumber: body.TrackNumber, WriteBack: body.WriteBack,
-			ActorID: currentUser(r).ID,
-		})
-		if err != nil {
-			s.writeJobErr(w, err)
-			return
-		}
-		out := map[string]any{"queued": true, "job_id": jid, "updated": len(body.IDs), "write_back": body.WriteBack}
-		if body.WriteBack {
-			out["write_back_status"] = "pending_p3"
-			out["write_back_path"] = "/api/v1/tracks/bulk/writeback"
-		}
-		writeJSON(w, 202, out)
-		return
-	}
 	n := 0
 	for _, id := range body.IDs {
 		if s.trackGloballyLocked(r.Context(), id) {

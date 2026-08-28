@@ -15,6 +15,7 @@ import { usePlayer } from "@/stores/player";
 import type { Favourite, Track, User } from "@/types/api";
 import { toast } from "sonner";
 import { callWriteBack, downloadTrack, saveTrackMeta, uploadArtwork } from "@/components/media/TrackList";
+import { refreshCatalogue } from "@/lib/catalogue";
 
 export type TrackMeta = Track & {
   genre?: string;
@@ -150,7 +151,7 @@ export function TrackPage() {
       {t.lyrics && (
         <section className="mb-8 max-w-xl whitespace-pre-wrap text-sm text-muted">{t.lyrics}</section>
       )}
-      {edit && <TrackEditDialog track={t} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); qc.invalidateQueries({ queryKey: ["track-meta", id] }); }} />}
+      {edit && <TrackEditDialog track={t} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); qc.invalidateQueries({ queryKey: ["track-meta", id] }); refreshCatalogue(qc); }} />}
     </div>
   );
 }

@@ -13,6 +13,7 @@ import { usePlayer } from "@/stores/player";
 import { useUi } from "@/stores/ui";
 import type { Track, User } from "@/types/api";
 import { toast } from "sonner";
+import { clearCatalogueTracks, refreshCatalogue } from "@/lib/catalogue";
 
 export function TracksPage() {
   const qc = useQueryClient();
@@ -75,10 +76,15 @@ export function TracksPage() {
                 type="button"
                 variant="destructive"
                 onClick={async () => {
-                  await api.post("/api/v1/tracks/bulk", { delete: true, all: true, delete_files: delFiles });
-                  toast.success("Delete queued");
-                  setAllOpen(false);
-                  qc.invalidateQueries({ queryKey: ["tracks"] });
+                  try {
+                    await api.post("/api/v1/tracks/bulk", { delete: true, all: true, delete_files: delFiles });
+                    clearCatalogueTracks(qc);
+                    toast.success("Removed all tracks");
+                    setAllOpen(false);
+                    refreshCatalogue(qc);
+                  } catch {
+                    toast.error("Could not remove tracks");
+                  }
                 }}
               >
                 Remove all

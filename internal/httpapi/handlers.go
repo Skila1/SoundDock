@@ -297,31 +297,13 @@ func (s *Server) deleteTracks(w http.ResponseWriter, r *http.Request, ids []uuid
 		writeJSON(w, 200, map[string]any{"deleted": 0, "skipped": []any{}})
 		return
 	}
-	skipped := []map[string]any{}
-	if deleteFiles {
-		skipped = s.previewNonManagedDeletes(ctx, ids, all, lib)
-	}
-	if s.Jobs == nil {
-		n, skippedNow, err := s.deleteTrackIDs(ctx, ids, all, lib, deleteFiles)
-		if err != nil {
-			writeErr(w, 400, "delete", err.Error())
-			return
-		}
-		if skippedNow != nil {
-			skipped = skippedNow
-		}
-		s.Audit.Event(ctx, &currentUser(r).ID, "tracks.delete", "", r.RemoteAddr, nil)
-		writeJSON(w, 200, map[string]any{"deleted": n, "deleted_files": deleteFiles, "skipped": skipped})
-		return
-	}
-	jid, err := s.Jobs.Enqueue(ctx, "tracks.bulk_delete", tracksDeletePayload{
-		IDs: ids, All: all, LibraryID: lib, DeleteFiles: deleteFiles, ActorID: currentUser(r).ID,
-	})
+	n, skipped, err := s.deleteTrackIDs(ctx, ids, all, lib, deleteFiles)
 	if err != nil {
-		s.writeJobErr(w, err)
+		writeErr(w, 400, "delete", err.Error())
 		return
 	}
-	writeJSON(w, 202, map[string]any{"queued": true, "job_id": jid, "deleted_files": deleteFiles, "skipped": skipped})
+	s.Audit.Event(ctx, &currentUser(r).ID, "tracks.delete", "", r.RemoteAddr, nil)
+	writeJSON(w, 200, map[string]any{"deleted": n, "deleted_files": deleteFiles, "skipped": skipped})
 }
 
 func (s *Server) serveArtwork(w http.ResponseWriter, r *http.Request, ownerType string, ownerID uuid.UUID) {

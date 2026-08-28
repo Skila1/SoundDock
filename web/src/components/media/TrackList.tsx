@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/misc";
 import { formatDuration, artworkUrl, cn } from "@/lib/utils";
+import { patchTracksInCaches, refreshCatalogue, removeTracksFromCaches } from "@/lib/catalogue";
 import { api } from "@/lib/api";
 import type { Favourite, Playlist, Track, User } from "@/types/api";
 import { toast } from "sonner";
@@ -48,7 +49,7 @@ export async function callWriteBack(ids: string[], artwork = false) {
   const body = { ids, write_tags: true, write_artwork: artwork, managed_only: true };
   try {
     await api.post("/api/v1/tracks/bulk/writeback", body);
-    toast.success("Write-back queued");
+    toast.success("Writing tags to files");
     return true;
   } catch {
     let ok = 0;
@@ -213,14 +214,22 @@ export function TrackList({
     if (year && !Number.isNaN(year)) body.year = year;
     body.write_back = bulkWriteBack;
     try {
-      await api.post("/api/v1/tracks/bulk/metadata", body);
+      try {
+        await api.post("/api/v1/tracks/bulk/metadata", body);
+      } catch {
+        await api.post("/api/v1/tracks/bulk", { ids, genre: body.genre, year: body.year });
+      }
+      const patch: { genre?: string; year?: number } = {};
+      if (typeof body.genre === "string") patch.genre = body.genre;
+      if (typeof body.year === "number") patch.year = body.year;
+      if (Object.keys(patch).length) patchTracksInCaches(qc, ids, patch);
+      toast.success(ids.length === 1 ? "Updated" : `Updated ${ids.length} tracks`);
+      if (bulkWriteBack) await callWriteBack(ids);
+      setBulkOpen(false);
+      refreshCatalogue(qc);
     } catch {
-      await api.post("/api/v1/tracks/bulk", { ids, genre: body.genre, year: body.year });
+      toast.error("Could not update tracks");
     }
-      toast.success(`Queued update for ${ids.length} tracks`);
-    if (bulkWriteBack) await callWriteBack(ids);
-    setBulkOpen(false);
-    qc.invalidateQueries({ queryKey: ["tracks"] });
   };
 
   const row = (t: TrackChrome, i: number, style?: CSSProperties) => (
@@ -468,11 +477,16 @@ export function TrackList({
                 variant="destructive"
                 onClick={async () => {
                   const ids = [...selected];
-                  await api.post("/api/v1/tracks/bulk", { ids, delete: true, delete_files: delFiles });
-                  toast.success("Delete queued");
-                  setDelOpen(false);
-                  setSelected(new Set());
-                  qc.invalidateQueries({ queryKey: ["tracks"] });
+                  try {
+                    await api.post("/api/v1/tracks/bulk", { ids, delete: true, delete_files: delFiles });
+                    removeTracksFromCaches(qc, ids);
+                    toast.success(ids.length === 1 ? "Removed" : `Removed ${ids.length} tracks`);
+                    setDelOpen(false);
+                    setSelected(new Set());
+                    refreshCatalogue(qc);
+                  } catch {
+                    toast.error("Could not remove tracks");
+                  }
                 }}
               >
                 Remove
