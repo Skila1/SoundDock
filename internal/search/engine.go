@@ -179,6 +179,13 @@ func (e *Engine) tracks(ctx context.Context, q Query, libs []uuid.UUID, limit in
 		LEFT JOIN LATERAL (SELECT codec FROM track_files WHERE track_id=t.id LIMIT 1) tf ON TRUE
 		WHERE (%s)
 		  AND (%s)
+		  AND NOT (
+		    coalesce(t.acquisition,'') IN ('youtube','scapex')
+		    AND NOT EXISTS (
+		      SELECT 1 FROM track_files tf0
+		      WHERE tf0.track_id=t.id AND tf0.deleted_at IS NULL
+		    )
+		  )
 		  %s %s %s
 		GROUP BY t.id, al.title, tf.codec
 		ORDER BY score DESC

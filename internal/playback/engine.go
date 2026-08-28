@@ -181,9 +181,16 @@ func (e *Engine) Queue(ctx context.Context, sid uuid.UUID) ([]map[string]any, er
 func (e *Engine) queue(ctx context.Context, q db, sid uuid.UUID) ([]map[string]any, error) {
 	rows, err := q.Query(ctx, `
 		SELECT q.id, q.position, q.track_id, q.origin,
-			q.requested_by_user_id, q.requested_by_discord_user_id, u.display_name
+			q.requested_by_user_id, q.requested_by_discord_user_id, u.display_name,
+			coalesce(t.title,''), coalesce(t.duration_ms,0), coalesce(t.acquisition_ref,''),
+			coalesce((
+				SELECT string_agg(ar.name, ', ' ORDER BY ta.position)
+				FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
+				WHERE ta.track_id=t.id AND ta.role='primary'
+			),'')
 		FROM playback_queue_items q
 		LEFT JOIN users u ON u.id = q.requested_by_user_id
+		LEFT JOIN tracks t ON t.id = q.track_id
 		WHERE q.session_id=$1
 		ORDER BY q.position`, sid)
 	if err != nil {
@@ -198,12 +205,26 @@ func (e *Engine) queue(ctx context.Context, q db, sid uuid.UUID) ([]map[string]a
 		var origin string
 		var reqUser *uuid.UUID
 		var reqDiscord, display *string
-		if err := rows.Scan(&id, &pos, &tid, &origin, &reqUser, &reqDiscord, &display); err != nil {
+		var title, acqRef, artist string
+		var duration int
+		if err := rows.Scan(&id, &pos, &tid, &origin, &reqUser, &reqDiscord, &display, &title, &duration, &acqRef, &artist); err != nil {
 			return nil, err
 		}
 		item := map[string]any{"id": id, "position": pos, "track_id": tid, "origin": origin}
 		if rb := requestedByMap(reqUser, reqDiscord, display); rb != nil {
 			item["requested_by"] = rb
+		}
+		if title != "" {
+			item["title"] = title
+		}
+		if artist != "" {
+			item["artist"] = artist
+		}
+		if duration > 0 {
+			item["duration_ms"] = duration
+		}
+		if acqRef != "" {
+			item["youtube_id"] = acqRef
 		}
 		out = append(out, item)
 	}

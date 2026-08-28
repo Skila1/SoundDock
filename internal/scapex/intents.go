@@ -92,9 +92,33 @@ func CanonicalSourceRef(raw string) string {
 	return raw
 }
 
+// TrackHint is display metadata already known from search (or a pasted hit).
+// Stubs use this so the queue never shows a YouTube id as the title.
+type TrackHint struct {
+	Title      string
+	Artist     string
+	DurationMS int
+}
+
+func IsPlaceholderTitle(s string) bool {
+	s = strings.TrimSpace(s)
+	return s == "" || strings.EqualFold(s, "Restoring") || strings.HasPrefix(s, "YouTube ")
+}
+
+func stubTitle(ref string, hint TrackHint) string {
+	if t := strings.TrimSpace(hint.Title); t != "" && !IsPlaceholderTitle(t) {
+		return t
+	}
+	if ref != "" {
+		return "YouTube " + ref
+	}
+	return "Restoring"
+}
+
 // EnsureStubTrack finds or creates a catalogue row for a YouTube source_ref.
-// The stub has no track_files until the fetch job commits.
-func EnsureStubTrack(ctx context.Context, pool *pgxpool.Pool, libraryID uuid.UUID, sourceRef string) (uuid.UUID, error) {
+// The stub has no track_files until the fetch job commits. Known search
+// metadata is written immediately so the queue can show the real name.
+func EnsureStubTrack(ctx context.Context, pool *pgxpool.Pool, libraryID uuid.UUID, sourceRef string, hint TrackHint) (uuid.UUID, error) {
 	if pool == nil {
 		return uuid.Nil, fmt.Errorf("no database")
 	}
@@ -111,13 +135,66 @@ func EnsureStubTrack(ctx context.Context, pool *pgxpool.Pool, libraryID uuid.UUI
 		WHERE library_id=$1 AND acquisition_ref=$2
 		ORDER BY created_at DESC LIMIT 1`, libraryID, ref).Scan(&id)
 	if err == nil {
+		ApplyStubHint(ctx, pool, id, hint)
 		return id, nil
 	}
-	title := "YouTube " + ref
+	title := stubTitle(ref, hint)
+	dur := hint.DurationMS
+	if dur < 0 {
+		dur = 0
+	}
 	err = pool.QueryRow(ctx, `
-		INSERT INTO tracks (library_id, title, acquisition, acquisition_ref)
-		VALUES ($1,$2,'youtube',$3) RETURNING id`, libraryID, title, ref).Scan(&id)
-	return id, err
+		INSERT INTO tracks (library_id, title, duration_ms, acquisition, acquisition_ref)
+		VALUES ($1,$2,$3,'youtube',$4) RETURNING id`, libraryID, title, dur, ref).Scan(&id)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	setStubArtists(ctx, pool, id, hint.Artist)
+	return id, nil
+}
+
+func ApplyStubHint(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, hint TrackHint) {
+	if pool == nil || id == uuid.Nil {
+		return
+	}
+	title := strings.TrimSpace(hint.Title)
+	if title != "" && !IsPlaceholderTitle(title) {
+		if hint.DurationMS > 0 {
+			_, _ = pool.Exec(ctx, `
+				UPDATE tracks SET title=$2, duration_ms=CASE WHEN duration_ms=0 THEN $3 ELSE duration_ms END, updated_at=now()
+				WHERE id=$1`, id, title, hint.DurationMS)
+		} else {
+			_, _ = pool.Exec(ctx, `UPDATE tracks SET title=$2, updated_at=now() WHERE id=$1`, id, title)
+		}
+	} else if hint.DurationMS > 0 {
+		_, _ = pool.Exec(ctx, `UPDATE tracks SET duration_ms=CASE WHEN duration_ms=0 THEN $2 ELSE duration_ms END, updated_at=now() WHERE id=$1`, id, hint.DurationMS)
+	}
+	if strings.TrimSpace(hint.Artist) != "" {
+		setStubArtists(ctx, pool, id, hint.Artist)
+	}
+}
+
+func setStubArtists(ctx context.Context, pool *pgxpool.Pool, trackID uuid.UUID, names string) {
+	if pool == nil || trackID == uuid.Nil {
+		return
+	}
+	_, _ = pool.Exec(ctx, `DELETE FROM track_artists WHERE track_id=$1 AND role='primary'`, trackID)
+	pos := 0
+	for _, raw := range strings.Split(names, ",") {
+		name := strings.TrimSpace(raw)
+		if name == "" {
+			continue
+		}
+		var aid uuid.UUID
+		err := pool.QueryRow(ctx, `SELECT id FROM artists WHERE lower(name)=lower($1) LIMIT 1`, name).Scan(&aid)
+		if err != nil {
+			_ = pool.QueryRow(ctx, `INSERT INTO artists (name) VALUES ($1) RETURNING id`, name).Scan(&aid)
+		}
+		if aid != uuid.Nil {
+			_, _ = pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'primary',$3) ON CONFLICT DO NOTHING`, trackID, aid, pos)
+			pos++
+		}
+	}
 }
 
 func InsertIntent(ctx context.Context, pool *pgxpool.Pool, in IntentInput, jobID uuid.UUID) (uuid.UUID, error) {
@@ -192,6 +269,48 @@ func FailJobIntents(ctx context.Context, pool *pgxpool.Pool, jobID uuid.UUID, ms
 		WHERE job_id=$1 AND status NOT IN ('applied','cancelled','stale')`,
 		jobID, StatusFailed, strings.TrimSpace(msg))
 	return err
+}
+
+// DropFailedAcquire removes failed YouTube stubs from every queue and deletes
+// them from the catalogue if they never received a file.
+func DropFailedAcquire(ctx context.Context, pool *pgxpool.Pool, play Player, jobID uuid.UUID) {
+	if pool == nil || jobID == uuid.Nil {
+		return
+	}
+	intents, err := ListJobIntents(ctx, pool, jobID)
+	if err != nil {
+		return
+	}
+	seen := map[uuid.UUID]bool{}
+	var ids []uuid.UUID
+	for _, in := range intents {
+		if in.TrackID == uuid.Nil || seen[in.TrackID] {
+			continue
+		}
+		seen[in.TrackID] = true
+		ids = append(ids, in.TrackID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	var drop []uuid.UUID
+	for _, id := range ids {
+		var files int
+		_ = pool.QueryRow(ctx, `SELECT count(*) FROM track_files WHERE track_id=$1 AND deleted_at IS NULL`, id).Scan(&files)
+		if files > 0 {
+			continue
+		}
+		drop = append(drop, id)
+	}
+	if len(drop) == 0 {
+		return
+	}
+	if play != nil {
+		_ = play.DropTracks(ctx, drop)
+	} else {
+		_, _ = pool.Exec(ctx, `DELETE FROM playback_queue_items WHERE track_id = ANY($1)`, drop)
+	}
+	_, _ = pool.Exec(ctx, `DELETE FROM tracks WHERE id = ANY($1) AND acquisition IN ('youtube','scapex')`, drop)
 }
 
 func RecordTrackSource(ctx context.Context, pool *pgxpool.Pool, trackID uuid.UUID, provider, sourceRef string, jobID uuid.UUID) error {

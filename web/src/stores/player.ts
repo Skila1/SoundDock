@@ -79,6 +79,13 @@ export type RequestedBy = {
   display_name?: string;
 };
 
+export type QueueTrackHint = {
+  id: string;
+  title?: string;
+  artist?: string;
+  duration_ms?: number;
+};
+
 export type PlayerQueueItem = {
   id: string;
   position: number;
@@ -88,6 +95,9 @@ export type PlayerQueueItem = {
   intent_id?: string;
   youtube_id?: string;
   external_id?: string;
+  title?: string;
+  artist?: string;
+  duration_ms?: number;
   requested_by?: RequestedBy;
 };
 
@@ -214,6 +224,10 @@ function asQueueItem(raw: unknown): PlayerQueueItem | null {
   if (typeof raw.intent_id === "string") item.intent_id = raw.intent_id;
   if (typeof raw.youtube_id === "string") item.youtube_id = raw.youtube_id;
   if (typeof raw.external_id === "string") item.external_id = raw.external_id;
+  if (typeof raw.title === "string" && raw.title.trim()) item.title = raw.title;
+  if (typeof raw.artist === "string" && raw.artist.trim()) item.artist = raw.artist;
+  const duration = numOrUndef(raw.duration_ms);
+  if (duration != null) item.duration_ms = duration;
   const requested = asRequestedBy(raw.requested_by);
   if (requested) item.requested_by = requested;
   return item;
@@ -675,7 +689,13 @@ function isPlaybackLive() {
   return !!s.queue?.current_track_id;
 }
 
-async function appendToQueue(ids: string[], next?: boolean) {
+function hintPayload(ids: string[], hints?: QueueTrackHint[]) {
+  if (!hints?.length) return undefined;
+  const want = new Set(ids);
+  return hints.filter((h) => h.id && want.has(h.id));
+}
+
+async function appendToQueue(ids: string[], next?: boolean, hints?: QueueTrackHint[]) {
   if (!ids.length) return false;
   if (shouldSkipDupAppend(ids)) return false;
   if (ids.some((id) => !isLibraryTrackId(id))) {
@@ -689,7 +709,12 @@ async function appendToQueue(ids: string[], next?: boolean) {
       return false;
     }
   }
-  const q = await api.post<PlayerQueue>("/api/v1/me/queue/add", { track_ids: ids, next, device_id: getDeviceId() });
+  const q = await api.post<PlayerQueue>("/api/v1/me/queue/add", {
+    track_ids: ids,
+    tracks: hintPayload(ids, hints),
+    next,
+    device_id: getDeviceId()
+  });
   lastQueueMutAt = Date.now();
   if (q && Array.isArray(q.items)) {
     ingestQueue(q);
@@ -860,9 +885,9 @@ type PlayerStore = {
   listeners: PresenceParticipant[];
   pendingUndo: PendingUndo | null;
   load: () => Promise<void>;
-  playTracks: (ids: string[], start?: number) => Promise<void>;
+  playTracks: (ids: string[], start?: number, hints?: QueueTrackHint[]) => Promise<void>;
   playNow: (index: number) => Promise<void>;
-  add: (ids: string[], next?: boolean) => Promise<void>;
+  add: (ids: string[], next?: boolean, hints?: QueueTrackHint[]) => Promise<void>;
   control: (action: string, extra?: Record<string, unknown>) => Promise<void>;
   seek: (ms: number) => void;
   setVolume: (v: number) => void;
@@ -961,13 +986,13 @@ export const usePlayer = create<PlayerStore>()(
           return fallback;
         }
       },
-      playTracks: async (ids, start = 0) => {
+      playTracks: async (ids, start = 0, hints) => {
         if (!ids.length) return;
         const idx = Math.max(0, Math.min(start, ids.length - 1));
         await enqueueQueueOp(async () => {
           if (isPlaybackLive()) {
             const toAdd = ids.slice(idx);
-            const added = await appendToQueue(toAdd, false);
+            const added = await appendToQueue(toAdd, false, hints?.slice(idx));
             if (added) toast.success(toAdd.length === 1 ? "Added to queue" : `Added ${toAdd.length} tracks to queue`);
             return;
           }
@@ -991,6 +1016,7 @@ export const usePlayer = create<PlayerStore>()(
               session = next;
               const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
                 track_ids: ids,
+                tracks: hintPayload(ids, hints),
                 start: idx,
                 device_id: getDeviceId(),
                 command_id: newCommandId()
@@ -1003,12 +1029,14 @@ export const usePlayer = create<PlayerStore>()(
               return;
             }
             lastQueueMutAt = Date.now();
-            await get().hydrateTrack(ids[idx]);
+            const currentId = usePlayer.getState().queue?.current_track_id || ids[idx];
+            await get().hydrateTrack(currentId);
             ensureSessionPoll();
             return;
           }
           const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
             track_ids: ids,
+            tracks: hintPayload(ids, hints),
             start: idx,
             device_id: getDeviceId(),
             command_id: newCommandId()
@@ -1016,8 +1044,14 @@ export const usePlayer = create<PlayerStore>()(
           lastQueueMutAt = Date.now();
           ingestQueue(q);
           set(patchFromSession(session, { playing: true }));
-          const id = ids[idx];
-          currentMeta = undefined;
+          const id = q.current_track_id || ids[idx];
+          const hint = hints?.[idx] || hints?.find((h) => h.id === ids[idx]);
+          if (hint?.title) {
+            currentMeta = { id, title: hint.title, artist: hint.artist, duration_ms: hint.duration_ms };
+            set({ current: currentMeta, duration: hint.duration_ms || 0 });
+          } else {
+            currentMeta = undefined;
+          }
           listen = null;
           const t = await get().hydrateTrack(id);
           const played = await startLocal(id, 0, true, t);
@@ -1069,8 +1103,8 @@ export const usePlayer = create<PlayerStore>()(
         if (played) beginListen(ids[index]);
         preloadUpcoming(get().queue);
       },
-      add: async (ids, next) => {
-        await enqueueQueueOp(() => appendToQueue(ids, next));
+      add: async (ids, next, hints) => {
+        await enqueueQueueOp(() => appendToQueue(ids, next, hints));
       },
       control: async (action, extra) => {
         if (action === "pause") pauseAll();

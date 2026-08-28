@@ -180,7 +180,15 @@ func (s *Server) listTracks(w http.ResponseWriter, r *http.Request) {
 		         FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
 		         WHERE ta.track_id=t.id AND ta.role='primary'),'')
 		FROM tracks t LEFT JOIN albums al ON al.id=t.album_id
-		WHERE t.library_id = ANY($1) ORDER BY t.created_at DESC LIMIT 10000`, libs)
+		WHERE t.library_id = ANY($1)
+		  AND NOT (
+		    coalesce(t.acquisition,'') IN ('youtube','scapex')
+		    AND NOT EXISTS (
+		      SELECT 1 FROM track_files tf
+		      WHERE tf.track_id=t.id AND tf.deleted_at IS NULL
+		    )
+		  )
+		ORDER BY t.created_at DESC LIMIT 10000`, libs)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return
@@ -433,7 +441,15 @@ func (s *Server) mergeAlbums(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listArtists(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.Pool.Query(r.Context(), `SELECT id, name FROM artists ORDER BY name LIMIT 500`)
+	rows, err := s.Pool.Query(r.Context(), `
+		SELECT a.id, a.name FROM artists a
+		WHERE EXISTS (
+			SELECT 1 FROM track_artists ta
+			JOIN tracks t ON t.id=ta.track_id
+			JOIN track_files tf ON tf.track_id=t.id AND tf.deleted_at IS NULL
+			WHERE ta.artist_id=a.id
+		)
+		ORDER BY a.name LIMIT 500`)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return
@@ -456,7 +472,15 @@ func (s *Server) getArtist(w http.ResponseWriter, r *http.Request) {
 		SELECT t.id, t.title, t.duration_ms, coalesce(al.title,'')
 		FROM tracks t JOIN track_artists ta ON ta.track_id=t.id
 		LEFT JOIN albums al ON al.id=t.album_id
-		WHERE ta.artist_id=$1 ORDER BY t.created_at DESC LIMIT 20`, id)
+		WHERE ta.artist_id=$1
+		  AND NOT (
+		    coalesce(t.acquisition,'') IN ('youtube','scapex')
+		    AND NOT EXISTS (
+		      SELECT 1 FROM track_files tf
+		      WHERE tf.track_id=t.id AND tf.deleted_at IS NULL
+		    )
+		  )
+		ORDER BY t.created_at DESC LIMIT 20`, id)
 	defer trows.Close()
 	writeJSON(w, 200, map[string]any{
 		"id": id, "name": name, "albums": albums,

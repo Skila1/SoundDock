@@ -169,7 +169,8 @@ export function CommandSearch() {
 
   const queueHit = (h: SearchHit) => {
     remember(q);
-    add([h.id]).then(() => toast.success(h.type === "youtube" ? "Downloading and adding to queue" : "Added to queue"));
+    const hints = [{ id: h.id, title: h.title, artist: h.artist, duration_ms: h.duration_ms }];
+    add([h.id], false, hints).then(() => toast.success(h.type === "youtube" ? "Downloading and adding to queue" : "Added to queue"));
   };
 
   const recentRows: RecentRow[] = !q.trim()

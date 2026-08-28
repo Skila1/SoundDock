@@ -192,9 +192,20 @@ export function SearchPage() {
                 ...(chip ? { codec: chip } : {})
               };
             })}
-            onPlay={(i) => play([grouped.youtube[i].id])}
-            onQueue={(t) => add([t.id]).then(() => toast.success("Downloading and adding to queue"))}
-            onNext={(t) => add([t.id], true).then(() => toast.success("Downloading to play next"))}
+            onPlay={(i) => {
+              const h = grouped.youtube[i];
+              play([h.id], 0, [{ id: h.id, title: h.title, artist: h.artist, duration_ms: h.duration_ms }]);
+            }}
+            onQueue={(t) =>
+              add([t.id], false, [{ id: t.id, title: t.title, artist: t.artist, duration_ms: t.duration_ms }]).then(() =>
+                toast.success("Downloading and adding to queue")
+              )
+            }
+            onNext={(t) =>
+              add([t.id], true, [{ id: t.id, title: t.title, artist: t.artist, duration_ms: t.duration_ms }]).then(() =>
+                toast.success("Downloading to play next")
+              )
+            }
           />
         </section>
       )}

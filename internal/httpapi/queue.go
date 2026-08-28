@@ -151,23 +151,63 @@ func (s *Server) getQueue(w http.ResponseWriter, r *http.Request) {
 	s.respondQueueMedia(w, r, sid, q, "")
 }
 
+type queueTrackHint struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Artist     string `json:"artist"`
+	DurationMS int    `json:"duration_ms"`
+}
+
+func collectTrackHints(ids []string, hints []queueTrackHint) ([]string, map[string]scapex.TrackHint) {
+	out := map[string]scapex.TrackHint{}
+	for _, h := range hints {
+		id := strings.TrimSpace(h.ID)
+		if id == "" {
+			continue
+		}
+		hint := scapex.TrackHint{Title: h.Title, Artist: h.Artist, DurationMS: h.DurationMS}
+		out[id] = hint
+		if ref := scapex.CanonicalSourceRef(id); ref != "" {
+			out[ref] = hint
+		}
+		found := false
+		for _, existing := range ids {
+			if existing == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			ids = append(ids, id)
+		}
+	}
+	return ids, out
+}
+
+func (s *Server) acquirePlayCtx(r *http.Request, ids []string, hints []queueTrackHint) (context.Context, []string) {
+	ids, hintMap := collectTrackHints(ids, hints)
+	return withTrackHints(s.withAcquirePolicy(r.Context()), hintMap), ids
+}
+
 func (s *Server) putQueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TrackIDs                []string `json:"track_ids"`
-		Start                   int      `json:"start"`
-		DeviceID                string   `json:"device_id"`
-		Target                  string   `json:"target"`
-		ExpectedBindingRevision int64    `json:"expected_binding_revision"`
-		RendererID              string   `json:"renderer_id"`
-		RendererGeneration      int64    `json:"renderer_generation"`
-		CommandID               string   `json:"command_id"`
+		TrackIDs                []string         `json:"track_ids"`
+		Tracks                  []queueTrackHint `json:"tracks"`
+		Start                   int              `json:"start"`
+		DeviceID                string           `json:"device_id"`
+		Target                  string           `json:"target"`
+		ExpectedBindingRevision int64            `json:"expected_binding_revision"`
+		RendererID              string           `json:"renderer_id"`
+		RendererGeneration      int64            `json:"renderer_generation"`
+		CommandID               string           `json:"command_id"`
 	}
 	_ = decodeJSON(r, &body)
 	sid, err := s.playSession(r, bindExtra(nil, body.ExpectedBindingRevision, body.RendererID, body.RendererGeneration), body.Target, body.DeviceID)
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	ids, err := s.resolvePlayTracks(s.withAcquirePolicy(r.Context()), body.TrackIDs)
+	ctx, refs := s.acquirePlayCtx(r, body.TrackIDs, body.Tracks)
+	ids, err := s.resolvePlayTracks(ctx, refs)
 	if s.writeAcquireErr(w, err) {
 		return
 	}
@@ -213,20 +253,22 @@ func (s *Server) writeAcquireErr(w http.ResponseWriter, err error) bool {
 
 func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TrackIDs                []string `json:"track_ids"`
-		Next                    bool     `json:"next"`
-		DeviceID                string   `json:"device_id"`
-		Target                  string   `json:"target"`
-		ExpectedBindingRevision int64    `json:"expected_binding_revision"`
-		RendererID              string   `json:"renderer_id"`
-		RendererGeneration      int64    `json:"renderer_generation"`
+		TrackIDs                []string         `json:"track_ids"`
+		Tracks                  []queueTrackHint `json:"tracks"`
+		Next                    bool             `json:"next"`
+		DeviceID                string           `json:"device_id"`
+		Target                  string           `json:"target"`
+		ExpectedBindingRevision int64            `json:"expected_binding_revision"`
+		RendererID              string           `json:"renderer_id"`
+		RendererGeneration      int64            `json:"renderer_generation"`
 	}
 	_ = decodeJSON(r, &body)
 	sid, err := s.playSession(r, bindExtra(nil, body.ExpectedBindingRevision, body.RendererID, body.RendererGeneration), body.Target, body.DeviceID)
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	ids, err := s.resolvePlayTracks(s.withAcquirePolicy(r.Context()), body.TrackIDs)
+	ctx, refs := s.acquirePlayCtx(r, body.TrackIDs, body.Tracks)
+	ids, err := s.resolvePlayTracks(ctx, refs)
 	if s.writeAcquireErr(w, err) {
 		return
 	}
@@ -926,26 +968,16 @@ func (s *Server) ensureYouTubePlaceholder(ctx context.Context, lib uuid.UUID, ra
 		    WHERE tf.track_id=t.id AND tf.quality='original' AND tf.deleted_at IS NULL
 		  ) DESC, t.created_at DESC
 		LIMIT 1`, vid, watch, strings.TrimSpace(raw)).Scan(&existing)
-	if err == nil && existing != uuid.Nil {
-		return existing, nil
-	}
-	title := "Restoring"
-	if vid != "" {
-		title = "YouTube " + vid
-	}
 	ref := vid
 	if ref == "" {
 		ref = strings.TrimSpace(raw)
 	}
-	var id uuid.UUID
-	err = s.Pool.QueryRow(ctx, `
-		INSERT INTO tracks (library_id, title, duration_ms, acquisition, acquisition_ref)
-		VALUES ($1, $2, 0, 'youtube', $3)
-		RETURNING id`, lib, title, ref).Scan(&id)
-	if err != nil {
-		return uuid.Nil, err
+	hint := hintForRef(ctx, ref)
+	if err == nil && existing != uuid.Nil {
+		scapex.ApplyStubHint(ctx, s.Pool, existing, hint)
+		return existing, nil
 	}
-	return id, nil
+	return scapex.EnsureStubTrack(ctx, s.Pool, lib, ref, hint)
 }
 
 func youtubeWatchURL(raw string) string {

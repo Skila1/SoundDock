@@ -19,12 +19,25 @@ func TestEnsureStubTrack(t *testing.T) {
 	if len(ref) > 11 {
 		ref = ref[:11]
 	}
-	a, err := EnsureStubTrack(ctx, pool, lib, ref)
+	a, err := EnsureStubTrack(ctx, pool, lib, ref, TrackHint{Title: "Ring My Bell", Artist: "Anita Ward", DurationMS: 8000})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM tracks WHERE id=$1`, a) })
-	b, err := EnsureStubTrack(ctx, pool, lib, ref)
+	var title, artist string
+	if err := pool.QueryRow(ctx, `
+		SELECT t.title, coalesce((
+			SELECT string_agg(ar.name, ', ' ORDER BY ta.position)
+			FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
+			WHERE ta.track_id=t.id AND ta.role='primary'
+		),'')
+		FROM tracks t WHERE t.id=$1`, a).Scan(&title, &artist); err != nil {
+		t.Fatal(err)
+	}
+	if title != "Ring My Bell" || artist != "Anita Ward" {
+		t.Fatalf("stub meta %q / %q", title, artist)
+	}
+	b, err := EnsureStubTrack(ctx, pool, lib, ref, TrackHint{})
 	if err != nil {
 		t.Fatal(err)
 	}

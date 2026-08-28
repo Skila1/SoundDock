@@ -147,7 +147,7 @@ export type QueueState = {
   current_media_state?: MediaState;
   current_intent_id?: string | null;
   position_ms: number;
-  items: { id: string; position: number; track_id: string; origin?: string; media_state?: MediaState; intent_id?: string; requested_by?: RequestedBy }[];
+  items: { id: string; position: number; track_id: string; origin?: string; media_state?: MediaState; intent_id?: string; requested_by?: RequestedBy; title?: string; artist?: string; duration_ms?: number; youtube_id?: string }[];
   undo?: QueueUndo;
   undo_generation?: number;
   shuffle_mode?: string;

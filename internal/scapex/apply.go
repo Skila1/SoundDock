@@ -13,6 +13,7 @@ type Player interface {
 	Get(ctx context.Context, sid uuid.UUID) (map[string]any, error)
 	Replace(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, start int) error
 	Add(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, next bool) error
+	DropTracks(ctx context.Context, tracks []uuid.UUID) error
 }
 
 const (

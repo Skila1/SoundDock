@@ -184,7 +184,7 @@ func (s *Server) enqueueAcquisition(ctx context.Context, in scapex.IntentInput) 
 		}
 	}
 	if in.TrackID == uuid.Nil {
-		id, err := scapex.EnsureStubTrack(ctx, s.Pool, in.DestLibraryID, ref)
+		id, err := scapex.EnsureStubTrack(ctx, s.Pool, in.DestLibraryID, ref, hintForRef(ctx, ref))
 		if err != nil {
 			return uuid.Nil, err
 		}
@@ -211,10 +211,32 @@ func (s *Server) enqueueAcquisition(ctx context.Context, in scapex.IntentInput) 
 }
 
 type acquireKey struct{}
+type trackHintsKey struct{}
 
 // WithAcquisitionIntent lets W6-http attach play/queue snapshot fields.
 func WithAcquisitionIntent(ctx context.Context, in scapex.IntentInput) context.Context {
 	return context.WithValue(ctx, acquireKey{}, in)
+}
+
+func withTrackHints(ctx context.Context, hints map[string]scapex.TrackHint) context.Context {
+	if len(hints) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, trackHintsKey{}, hints)
+}
+
+func hintForRef(ctx context.Context, ref string) scapex.TrackHint {
+	m, _ := ctx.Value(trackHintsKey{}).(map[string]scapex.TrackHint)
+	if len(m) == 0 {
+		return scapex.TrackHint{}
+	}
+	if h, ok := m[ref]; ok {
+		return h
+	}
+	if h, ok := m[scapex.CanonicalSourceRef(ref)]; ok {
+		return h
+	}
+	return scapex.TrackHint{}
 }
 
 func (s *Server) intentFromCtx(ctx context.Context) scapex.IntentInput {

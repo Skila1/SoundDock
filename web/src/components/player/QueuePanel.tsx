@@ -172,11 +172,11 @@ export function QueuePanel({
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <div className="truncate text-sm">{t?.title || "Track"}</div>
+            <div className="truncate text-sm">{item.title || t?.title || "Track"}</div>
             {dup && <Badge tone="warning">Duplicate</Badge>}
           </div>
           <div className="truncate text-xs text-muted">
-            {t?.artists?.map((a) => a.name).join(", ") || t?.artist || (opts.nowPlaying ? "Now playing" : "Up next")}
+            {item.artist || t?.artists?.map((a) => a.name).join(", ") || t?.artist || (opts.nowPlaying ? "Now playing" : "Up next")}
           </div>
           {addedBy && <div className="truncate text-[11px] text-subtle">{addedBy}</div>}
         </div>

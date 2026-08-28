@@ -121,3 +121,4 @@ func (f *fakePlayer) Add(_ context.Context, _ uuid.UUID, _ []uuid.UUID, next boo
 	f.next = next
 	return nil
 }
+func (f *fakePlayer) DropTracks(context.Context, []uuid.UUID) error { return nil }

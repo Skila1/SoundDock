@@ -89,6 +89,7 @@ func (s *Server) jobScapeXFetch(ctx context.Context, job jobs.Job) error {
 	})
 	if err != nil {
 		_ = scapex.FailJobIntents(ctx, s.Pool, job.ID, err.Error())
+		scapex.DropFailedAcquire(ctx, s.Pool, s.Play, job.ID)
 		return err
 	}
 	if s.Jobs != nil {
