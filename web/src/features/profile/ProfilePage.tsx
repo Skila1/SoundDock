@@ -6,7 +6,9 @@ import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/misc";
-import { PageHeader } from "@/components/ui/empty";
+import { PageHeader, QueryError } from "@/components/ui/empty";
+import { Switch } from "@/components/ui/switch";
+import { usePrefs } from "@/stores/prefs";
 import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 import { relativeTime } from "@/lib/utils";
 import { toast } from "sonner";
@@ -36,6 +38,8 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
   const [rg, setRg] = useState(user.replaygain_mode || "off");
   const [xf, setXf] = useState(String(user.crossfade_seconds || 0));
   const [lufs, setLufs] = useState(String(user.target_lufs ?? -18));
+  const keysOn = usePrefs((s) => s.keyboardShortcuts);
+  const setKeys = usePrefs((s) => s.setKeyboardShortcuts);
 
   const sessions = useQuery({
     queryKey: ["me-sessions"],
@@ -89,6 +93,14 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
         </Field>
         <Button type="submit">Save</Button>
       </form>
+      <section className="mt-6 space-y-3 rounded-xl border border-border bg-surface-1 p-5">
+        <h2 className="font-semibold">Keyboard shortcuts</h2>
+        <p className="text-sm text-muted">Space, arrows, and media keys for the player. Off by default. Ctrl+K search stays available.</p>
+        <label className="flex items-center justify-between gap-3 text-sm">
+          Enable player shortcuts
+          <Switch checked={keysOn} onCheckedChange={setKeys} />
+        </label>
+      </section>
       <form
         className="mt-6 space-y-4 rounded-xl border border-border bg-surface-1 p-5"
         onSubmit={async (e) => {
@@ -111,7 +123,8 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
       <section className="mt-6 space-y-3 rounded-xl border border-border bg-surface-1 p-5">
         <h2 className="font-semibold">Sessions</h2>
         <p className="text-sm text-muted">Signed-in browsers and apps. Revoke one without logging everyone out.</p>
-        {sessionRows.length === 0 && !sessions.isLoading && <p className="text-sm text-subtle">No active sessions.</p>}
+        {sessions.isError && <QueryError message={sessions.error instanceof Error ? sessions.error.message : undefined} onRetry={() => sessions.refetch()} />}
+        {sessionRows.length === 0 && !sessions.isLoading && !sessions.isError && <p className="text-sm text-subtle">No active sessions.</p>}
         <ul className="space-y-2">
           {sessionRows.map((s) => (
             <li key={s.id} className="flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2">

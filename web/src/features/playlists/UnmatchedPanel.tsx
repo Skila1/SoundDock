@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/misc";
 import { toast } from "sonner";
-import type { SearchHit } from "@/types/api";
+import { hasPerm } from "@/lib/perms";
+import type { SearchHit, User } from "@/types/api";
 
 type UnmatchedItem = {
   id: string;
@@ -18,12 +19,14 @@ type UnmatchedItem = {
 };
 
 function confidenceLabel(n: number | null | undefined) {
-  if (n == null || Number.isNaN(Number(n))) return "—";
+  if (n == null || Number.isNaN(Number(n))) return "-";
   return Number(n).toFixed(2);
 }
 
 export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
   const qc = useQueryClient();
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
+  const canImport = hasPerm(me.data, "playlists.external_import");
   const q = useQuery({
     queryKey: ["unmatched", playlistId],
     queryFn: () => api.get<UnmatchedItem[]>(`/api/v1/playlists/${playlistId}/unmatched`)
@@ -46,13 +49,14 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
                   <span className="text-xs tabular-nums text-muted">match_confidence {confidenceLabel(it.match_confidence)}</span>
                 </div>
               </div>
+              {canImport && (
               <Button
                 size="sm"
                 variant="secondary"
                 onClick={async () => {
                   try {
                     await api.post(`/api/v1/playlists/${playlistId}/items/${it.id}/youtube`);
-                    toast.success("Downloaded from YouTube");
+                    toast.success("YouTube download queued");
                     qc.invalidateQueries({ queryKey: ["playlist", playlistId] });
                     qc.invalidateQueries({ queryKey: ["unmatched", playlistId] });
                     qc.invalidateQueries({ queryKey: ["sync-diff", playlistId] });
@@ -63,6 +67,7 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
               >
                 Get from YouTube
               </Button>
+              )}
             </div>
             <MatchSearch
               onPick={async (trackId) => {

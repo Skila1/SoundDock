@@ -359,11 +359,28 @@ func TestPlayheadSequenceMonotonicResetsOnNewInstance(t *testing.T) {
 		t.Fatal("checkpoint changed instance")
 	}
 	rev := revOf(q)
-	if err := e.Control(ctx, sid, "pause", nil); err != nil {
+	if err := e.Control(ctx, sid, "pause", map[string]any{"position_ms": 250}); err != nil {
 		t.Fatal(err)
+	}
+	q, err = e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seqOf(q) != 4 {
+		t.Fatalf("pause should bump playhead_sequence, got %d", seqOf(q))
+	}
+	if instanceOf(q) != inst {
+		t.Fatal("pause changed instance")
 	}
 	if err := e.Control(ctx, sid, "resume", nil); err != nil {
 		t.Fatal(err)
+	}
+	q, err = e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if seqOf(q) != 4 {
+		t.Fatalf("resume must not bump playhead_sequence, got %d", seqOf(q))
 	}
 	if err := e.Control(ctx, sid, "seek", map[string]any{"position_ms": 50}); err != nil {
 		t.Fatal(err)
@@ -375,8 +392,8 @@ func TestPlayheadSequenceMonotonicResetsOnNewInstance(t *testing.T) {
 	if instanceOf(q) != inst {
 		t.Fatal("pause/resume/seek changed instance")
 	}
-	if seqOf(q) != 3 {
-		t.Fatalf("pause/resume/seek changed sequence %d", seqOf(q))
+	if seqOf(q) != 5 {
+		t.Fatalf("seek should bump playhead_sequence, got %d", seqOf(q))
 	}
 	if revOf(q) <= rev {
 		t.Fatal("pause/resume/seek should bump state_revision")

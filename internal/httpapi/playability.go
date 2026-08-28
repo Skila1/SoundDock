@@ -13,10 +13,14 @@ import (
 const (
 	MediaStateReady           = "ready"
 	MediaStateRestoring       = "restoring"
+	MediaStateRetrying        = "retrying"
+	MediaStateFailed          = "failed"
+	MediaStateCancelled       = "cancelled"
 	MediaStateMissingExternal = "missing_external"
 
 	streamCodeUnavailable         = "media_unavailable"
 	streamCodeUnavailableExternal = "media_unavailable_external"
+	streamCodeUnavailableFailed   = "media_unavailable_failed"
 )
 
 // Playability is GET /tracks/{id}/playability. Browser recovery uses this, not stream 409.
@@ -27,11 +31,12 @@ type Playability struct {
 
 // mediaProbe is the DB-free input to classifyMediaState.
 type mediaProbe struct {
-	Found       bool
-	HasOriginal bool
-	Acquisition string
-	OpenIntent  bool
-	IntentID    *uuid.UUID
+	Found        bool
+	HasOriginal  bool
+	Acquisition  string
+	OpenIntent   bool
+	IntentStatus string
+	IntentID     *uuid.UUID
 }
 
 func managedAcquisition(acq string) bool {
@@ -47,11 +52,23 @@ func classifyMediaState(p mediaProbe) Playability {
 	if p.HasOriginal {
 		return Playability{State: MediaStateReady}
 	}
+	out := Playability{}
+	if p.IntentID != nil && *p.IntentID != uuid.Nil {
+		out.IntentID = p.IntentID
+	}
+	switch strings.ToLower(strings.TrimSpace(p.IntentStatus)) {
+	case "failed":
+		out.State = MediaStateFailed
+		return out
+	case "cancelled":
+		out.State = MediaStateCancelled
+		return out
+	case "retry", "retrying":
+		out.State = MediaStateRetrying
+		return out
+	}
 	if managedAcquisition(p.Acquisition) || p.OpenIntent {
-		out := Playability{State: MediaStateRestoring}
-		if p.IntentID != nil && *p.IntentID != uuid.Nil {
-			out.IntentID = p.IntentID
-		}
+		out.State = MediaStateRestoring
 		return out
 	}
 	return Playability{State: MediaStateMissingExternal}
@@ -60,8 +77,11 @@ func classifyMediaState(p mediaProbe) Playability {
 // streamMissingCodes is the defensive stream mapping. Managed youtube/scapex
 // stubs are 409 so HTMLAudio does not treat them as a mystery 404. NAS/local
 // holes without those acquisitions are 404. Does not start ScapeX.
-func streamMissingCodes(acq string) (status int, code, msg string) {
-	if managedAcquisition(acq) {
+func streamMissingCodes(acq, state string) (status int, code, msg string) {
+	if state == MediaStateFailed {
+		return http.StatusConflict, streamCodeUnavailableFailed, "media unavailable"
+	}
+	if managedAcquisition(acq) || state == MediaStateRestoring || state == MediaStateRetrying || state == MediaStateCancelled {
 		return http.StatusConflict, streamCodeUnavailable, "media is being restored"
 	}
 	return http.StatusNotFound, streamCodeUnavailableExternal, "media missing from storage"
@@ -75,6 +95,9 @@ func (s *Server) getTrackPlayability(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.Pool == nil {
 		writeErr(w, http.StatusServiceUnavailable, "unavailable", "database unavailable")
+		return
+	}
+	if !s.requireTrackLibrary(w, r, id, "read") {
 		return
 	}
 	p, err := s.lookupPlayability(r.Context(), id)
@@ -146,26 +169,26 @@ func (s *Server) mergeOpenIntents(ctx context.Context, ids []uuid.UUID, probes m
 		return
 	}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT track_id, id FROM acquisition_intents
+		SELECT DISTINCT ON (track_id) track_id, id, status FROM acquisition_intents
 		WHERE track_id = ANY($1)
-		  AND status IN ('open','queued','pending','running','retry')
-		ORDER BY created_at DESC`, ids)
+		ORDER BY track_id, created_at DESC`, ids)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
-	seen := map[uuid.UUID]bool{}
 	for rows.Next() {
 		var tid, iid uuid.UUID
-		if err := rows.Scan(&tid, &iid); err != nil {
+		var status string
+		if err := rows.Scan(&tid, &iid, &status); err != nil {
 			continue
 		}
-		if seen[tid] {
-			continue
-		}
-		seen[tid] = true
 		p := probes[tid]
-		p.OpenIntent = true
+		p.IntentStatus = status
+		switch strings.ToLower(strings.TrimSpace(status)) {
+		case "open", "queued", "pending", "running", "retry", "retrying",
+			"downloading", "processing", "scanning":
+			p.OpenIntent = true
+		}
 		if iid != uuid.Nil {
 			id := iid
 			p.IntentID = &id

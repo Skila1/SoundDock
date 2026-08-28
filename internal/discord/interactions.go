@@ -110,7 +110,7 @@ func (b *Bot) handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionC
 		}
 		name := h.Title
 		if h.Artist != "" {
-			name = h.Title + " — " + h.Artist
+			name = h.Title + " - " + h.Artist
 		}
 		if len(name) > 100 {
 			name = name[:100]
@@ -213,7 +213,7 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 			}
 			fmt.Fprintf(&bld, "%d. [%s] %s", n+1, h.Type, h.Title)
 			if h.Artist != "" {
-				fmt.Fprintf(&bld, " — %s", h.Artist)
+				fmt.Fprintf(&bld, " - %s", h.Artist)
 			}
 			bld.WriteByte('\n')
 		}
@@ -367,7 +367,7 @@ func trackTitle(ctx context.Context, b *Bot, id string) string {
 		return id
 	}
 	if artist != "" {
-		return title + " — " + artist
+		return title + " - " + artist
 	}
 	return title
 }

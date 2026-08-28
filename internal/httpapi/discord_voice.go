@@ -17,8 +17,6 @@ var (
 	errGuildDisabled = errors.New("this Discord server is disabled")
 )
 
-const pendingHTTPRendererID = "pending-http"
-
 // MountP7 registers Discord voice-output and scrobble routes on an authenticated /api/v1 router.
 func (s *Server) MountP7(r chi.Router) {
 	r.Get("/me/discord/voice-state", s.discordVoiceState)
@@ -172,20 +170,17 @@ func (s *Server) discordJoin(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) ensureDiscordJoin(r *http.Request, guildID, channelID string, sid uuid.UUID, expectedBindingRevision int64, rendererID string, generation int64) (playback.BindResult, error) {
+func (s *Server) ensureDiscordJoin(r *http.Request, guildID, channelID string, sid uuid.UUID, expectedBindingRevision int64, _ string, _ int64) (playback.BindResult, error) {
 	ctx := r.Context()
 	if !s.guildPlaybackEnabled(ctx, guildID) {
 		return playback.BindResult{}, errGuildDisabled
-	}
-	if rendererID == "" {
-		rendererID = pendingHTTPRendererID
 	}
 	if bot := discordx.Live(); bot != nil {
 		if err := bot.JoinChannel(ctx, guildID, channelID); err != nil {
 			return playback.BindResult{}, err
 		}
 	}
-	res, err := s.Play.BindDiscordRenderer(ctx, guildID, sid, channelID, expectedBindingRevision, rendererID, generation)
+	res, err := s.Play.BindGuildSession(ctx, guildID, sid, channelID, expectedBindingRevision)
 	if err != nil {
 		return playback.BindResult{}, err
 	}
@@ -264,10 +259,18 @@ func (s *Server) discordCompleteLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	u := currentUser(r)
+	var existing uuid.UUID
+	err = s.Pool.QueryRow(r.Context(), `
+		SELECT user_id FROM user_identities WHERE provider='discord' AND provider_user_id=$1`, did).Scan(&existing)
+	if err == nil && existing != u.ID {
+		writeErr(w, 409, "identity_taken", "this Discord account is already linked")
+		return
+	}
 	_, err = s.Pool.Exec(r.Context(), `
 		INSERT INTO user_identities (user_id, provider, provider_user_id, provider_username)
 		VALUES ($1,'discord',$2,$3)
-		ON CONFLICT (provider, provider_user_id) DO UPDATE SET user_id=EXCLUDED.user_id, provider_username=EXCLUDED.provider_username`,
+		ON CONFLICT (provider, provider_user_id) DO UPDATE SET provider_username=EXCLUDED.provider_username
+		WHERE user_identities.user_id=EXCLUDED.user_id`,
 		u.ID, did, uname)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())

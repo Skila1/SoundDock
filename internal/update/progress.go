@@ -41,7 +41,7 @@ func HelperActive() bool {
 		return false
 	}
 	switch f.Stage {
-	case "queued", "pulling", "restarting", "done":
+	case "queued", "pulling", "restarting", "done", "backing_up", "needs_recovery":
 		return true
 	default:
 		return false

@@ -32,6 +32,20 @@ function filterRows<T>(rows: T[] | undefined, gone: Set<string>): T[] | undefine
   });
 }
 
+function mapTrackCache(old: unknown, mapRows: (rows: unknown[]) => unknown[]): unknown {
+  if (Array.isArray(old)) return mapRows(old);
+  if (!old || typeof old !== "object") return old;
+  const data = old as { items?: unknown[]; pages?: { items?: unknown[] }[] };
+  if (Array.isArray(data.items)) return { ...data, items: mapRows(data.items) };
+  if (Array.isArray(data.pages)) {
+    return {
+      ...data,
+      pages: data.pages.map((p) => (p && Array.isArray(p.items) ? { ...p, items: mapRows(p.items) } : p))
+    };
+  }
+  return old;
+}
+
 function dropFromTrackList(old: unknown, gone: Set<string>) {
   if (!old || typeof old !== "object") return old;
   const data = old as { tracks?: unknown[] };
@@ -51,7 +65,7 @@ export function removeTracksFromCaches(qc: QueryClient, ids: string[]) {
       most_played: filterRows(data.most_played as unknown[], gone)
     };
   });
-  qc.setQueriesData({ queryKey: ["tracks"] }, (old: unknown) => (Array.isArray(old) ? filterRows(old, gone) : old));
+  qc.setQueriesData({ queryKey: ["tracks"] }, (old: unknown) => mapTrackCache(old, (rows) => filterRows(rows, gone) || []));
   qc.setQueriesData({ queryKey: ["search"] }, (old: unknown) => {
     if (!old || typeof old !== "object") return old;
     const data = old as { results?: unknown[] };
@@ -92,7 +106,7 @@ export function patchTracksInCaches(qc: QueryClient, ids: string[], patch: { gen
     if (!id || !want.has(id) || !row || typeof row !== "object") return row;
     return { ...(row as object), ...patch };
   };
-  qc.setQueriesData({ queryKey: ["tracks"] }, (old: unknown) => (Array.isArray(old) ? old.map(apply) : old));
+  qc.setQueriesData({ queryKey: ["tracks"] }, (old: unknown) => mapTrackCache(old, (rows) => rows.map(apply)));
   qc.setQueriesData({ queryKey: ["home"] }, (old: unknown) => {
     if (!old || typeof old !== "object") return old;
     const data = old as Record<string, unknown>;

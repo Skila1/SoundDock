@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -9,16 +10,41 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/auth"
+	"github.com/sounddock/sounddock/internal/mediabusy"
 	"github.com/sounddock/sounddock/internal/stream"
 )
 
 func (s *Server) streamTokens(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	if u == nil || rejectIfDisabled(w, u) {
+		if u == nil {
+			writeErr(w, 401, "unauthorized", "authentication required")
+		}
+		return
+	}
 	var body struct {
 		TrackID uuid.UUID `json:"track_id"`
 		Quality string    `json:"quality"`
 	}
 	_ = decodeJSON(r, &body)
-	tok := stream.Sign(s.SignKey, body.TrackID, 15*time.Minute, body.Quality)
+	if body.TrackID == uuid.Nil {
+		writeErr(w, 400, "invalid", "track_id required")
+		return
+	}
+	var libID uuid.UUID
+	if err := s.Pool.QueryRow(r.Context(), `SELECT library_id FROM tracks WHERE id=$1`, body.TrackID).Scan(&libID); err != nil {
+		writeErr(w, 404, "not_found", "track not found")
+		return
+	}
+	if !s.userHasLibraryAction(r.Context(), u, libID, "stream") {
+		writeErr(w, http.StatusForbidden, "library_grant", "library stream not granted")
+		return
+	}
+	tok := stream.Sign(s.SignKey, u.ID, body.TrackID, 15*time.Minute, body.Quality)
+	if tok == "" {
+		writeErr(w, 500, "token", "could not mint stream token")
+		return
+	}
 	writeJSON(w, 200, map[string]string{"token": tok, "url": "/api/v1/tracks/" + body.TrackID.String() + "/stream?token=" + tok})
 }
 
@@ -31,7 +57,7 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request) {
 		quality = "original"
 	}
 	authed := false
-	var offlineUser uuid.UUID
+	var offlineUser, tokenUser uuid.UUID
 	if offlineTok != "" {
 		claims, err := s.VerifyOfflineToken(r.Context(), offlineTok)
 		if err != nil || claims.TrackID != id {
@@ -43,27 +69,49 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request) {
 	}
 	if !authed && tok != "" {
 		t, err := stream.Verify(s.SignKey, tok)
-		if err == nil && t.TrackID == id {
-			authed = true
-			if t.Quality != "" {
-				quality = t.Quality
-			}
+		if err != nil || t.TrackID != id {
+			writeErr(w, 401, "unauthorized", "stream token required")
+			return
+		}
+		authed = true
+		tokenUser = t.UserID
+		if t.Quality != "" {
+			quality = t.Quality
 		}
 	}
 	if !authed {
-		if c, err := r.Cookie("sd_session"); err == nil {
-			if s.Auth != nil {
-				if _, _, err := s.Auth.SessionUser(r.Context(), c.Value); err == nil {
-					authed = true
+		if u := currentUser(r); u != nil {
+			if rejectIfDisabled(w, u) {
+				return
+			}
+			authed = true
+		}
+	}
+	if !authed {
+		if c, err := r.Cookie("sd_session"); err == nil && s.Auth != nil {
+			if u, _, err := s.Auth.SessionUser(r.Context(), c.Value); err == nil {
+				if rejectIfDisabled(w, u) {
+					return
 				}
+				authed = true
 			}
 		}
-		if b := bearer(r); b != "" {
-			if _, err := s.apiKeyUser(r.Context(), b); err == nil {
-				authed = true
-			} else if s.Auth != nil {
-				if _, _, err := s.Auth.SessionUser(r.Context(), b); err == nil {
-					authed = true
+		if !authed {
+			if b := bearer(r); b != "" {
+				if isAPIToken(b) {
+					if u, err := s.apiKeyUser(r.Context(), b); err == nil {
+						if rejectIfDisabled(w, u) {
+							return
+						}
+						authed = true
+					}
+				} else if s.Auth != nil {
+					if u, _, err := s.Auth.SessionUser(r.Context(), b); err == nil {
+						if rejectIfDisabled(w, u) {
+							return
+						}
+						authed = true
+					}
 				}
 			}
 		}
@@ -81,7 +129,20 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if u := s.streamPrincipal(r, offlineUser); u != nil {
+	u := s.streamPrincipal(r, offlineUser, tokenUser)
+	if tokenUser != uuid.Nil || offlineUser != uuid.Nil {
+		if u == nil {
+			writeErr(w, 403, "disabled", "account disabled")
+			return
+		}
+		if rejectIfDisabled(w, u) {
+			return
+		}
+	}
+	if u != nil {
+		if rejectIfDisabled(w, u) {
+			return
+		}
 		if !auth.HasPerm(u, "tracks.stream") {
 			writeErr(w, http.StatusForbidden, "forbidden", "tracks.stream not permitted")
 			return
@@ -90,6 +151,9 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusForbidden, "library_grant", "library stream not granted")
 			return
 		}
+	} else {
+		writeErr(w, 401, "unauthorized", "stream token required")
+		return
 	}
 
 	var fileID uuid.UUID
@@ -104,7 +168,11 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.ReleaseStreamSlot(r)
-	releaseBusy := s.MediaBusy.Hold(id)
+	kind := mediabusy.KindHTTPStream
+	if tokenUser != uuid.Nil {
+		kind = mediabusy.KindHMACStream
+	}
+	releaseBusy := s.MediaBusy.Acquire(r.Context(), id, kind, mediabusy.NewHolder(kind))
 	defer releaseBusy()
 	prov, _, _, err := s.ProviderFor(r.Context(), libID)
 	if err != nil {
@@ -142,40 +210,65 @@ func (s *Server) streamTrack(w http.ResponseWriter, r *http.Request) {
 }
 
 // streamPrincipal is the user whose library_grants apply to this stream GET.
-// Cookie / API-key / bearer session users are always enforced. HMAC-only
-// (HTMLAudio ?token= with no cookie) has no cheap user join and stays valid
-// for that track id. Offline tokens carry user_id so they are enforced.
-func (s *Server) streamPrincipal(r *http.Request, offlineUser uuid.UUID) *auth.User {
-	if u := currentUser(r); u != nil && !u.Disabled {
+// HMAC tokens embed user id (stream-v2). Disabled users are never a valid principal.
+func (s *Server) streamPrincipal(r *http.Request, offlineUser, tokenUser uuid.UUID) *auth.User {
+	if tokenUser != uuid.Nil {
+		return s.loadStreamUser(r.Context(), tokenUser)
+	}
+	if u := currentUser(r); u != nil {
+		if u.Disabled {
+			return u
+		}
 		return u
 	}
 	if s.Auth != nil {
 		if c, err := r.Cookie("sd_session"); err == nil && c.Value != "" {
-			if u, _, err := s.Auth.SessionUser(r.Context(), c.Value); err == nil && u != nil && !u.Disabled {
+			if u, _, err := s.Auth.SessionUser(r.Context(), c.Value); err == nil && u != nil {
 				return u
 			}
 		}
 	}
 	if b := bearer(r); b != "" {
 		if isAPIToken(b) && s.Pool != nil {
-			if u, err := s.apiKeyUser(r.Context(), b); err == nil && u != nil && !u.Disabled {
+			if u, err := s.apiKeyUser(r.Context(), b); err == nil && u != nil {
 				return u
 			}
 		} else if s.Auth != nil {
-			if u, _, err := s.Auth.SessionUser(r.Context(), b); err == nil && u != nil && !u.Disabled {
+			if u, _, err := s.Auth.SessionUser(r.Context(), b); err == nil && u != nil {
 				return u
 			}
 		}
 	}
 	if offlineUser != uuid.Nil {
-		if s.Auth != nil {
-			if u, err := s.Auth.GetUser(r.Context(), offlineUser); err == nil && u != nil && !u.Disabled {
-				return u
-			}
+		if u := s.loadStreamUser(r.Context(), offlineUser); u != nil {
+			return u
 		}
 		return &auth.User{ID: offlineUser, Permissions: []string{"tracks.stream"}}
 	}
 	return nil
+}
+
+func (s *Server) loadStreamUser(ctx context.Context, id uuid.UUID) *auth.User {
+	if s.Auth != nil {
+		if u, err := s.Auth.GetUser(ctx, id); err == nil && u != nil {
+			return u
+		}
+	}
+	if s.Pool == nil || id == uuid.Nil {
+		return nil
+	}
+	u := &auth.User{ID: id, Permissions: []string{"tracks.read", "tracks.stream"}}
+	if err := s.Pool.QueryRow(ctx, `SELECT username, disabled FROM users WHERE id=$1`, id).Scan(&u.Username, &u.Disabled); err != nil {
+		return nil
+	}
+	var admin bool
+	_ = s.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM user_roles ur JOIN roles ro ON ro.id=ur.role_id
+			WHERE ur.user_id=$1 AND ro.name='Administrator'
+		)`, id).Scan(&admin)
+	u.IsAdmin = admin
+	return u
 }
 
 // writeStreamMediaUnavailable maps a missing original to 409 (managed
@@ -187,7 +280,11 @@ func (s *Server) writeStreamMediaUnavailable(w http.ResponseWriter, r *http.Requ
 		writeErr(w, http.StatusNotFound, "not_found", "media missing")
 		return
 	}
-	status, code, msg := streamMissingCodes(acq)
+	state := ""
+	if p, err := s.lookupPlayability(r.Context(), id); err == nil {
+		state = p.State
+	}
+	status, code, msg := streamMissingCodes(acq, state)
 	writeErr(w, status, code, msg)
 }
 

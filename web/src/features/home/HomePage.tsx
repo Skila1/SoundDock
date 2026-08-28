@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import { MediaCard } from "@/components/media/MediaCard";
 import { TrackList } from "@/components/media/TrackList";
 import { LayoutToggle } from "@/components/media/LayoutToggle";
-import { EmptyState } from "@/components/ui/empty";
+import { EmptyState, QueryError } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
 import { usePlayer } from "@/stores/player";
@@ -23,7 +23,8 @@ function asTracks(rows: any[] | undefined): HomeTrack[] {
     artist: t.artist,
     album: t.album,
     album_id: t.album_id,
-    duration_ms: t.duration_ms
+    duration_ms: t.duration_ms,
+    count: t.count
   }));
 }
 
@@ -35,6 +36,8 @@ export function HomePage() {
   const home = useQuery({ queryKey: ["home"], queryFn: () => api.get<any>("/api/v1/home") });
 
   const recent = useMemo(() => asTracks(home.data?.continue).slice(0, 15), [home.data]);
+  const added = useMemo(() => asTracks(home.data?.recently_added).slice(0, 15), [home.data]);
+  const played = useMemo(() => asTracks(home.data?.most_played).slice(0, 15), [home.data]);
 
   if (home.isLoading) {
     return (
@@ -44,13 +47,17 @@ export function HomePage() {
     );
   }
 
-  if (!recent.length) {
+  if (home.isError) {
+    return <QueryError message={home.error instanceof Error ? home.error.message : undefined} onRetry={() => home.refetch()} />;
+  }
+
+  if (!recent.length && !added.length && !played.length) {
     return (
       <>
         <EmptyState
           icon={Disc3}
-          title="Nothing played yet."
-          description="Home only lists the last 15 tracks you actually played. Start from Search or Library."
+          title="Nothing here yet."
+          description="Home lists tracks you played, tracks added to libraries you can see, and your most played. Start from Search or Library."
           action={{ label: "Search", onClick: () => nav("/search") }}
         />
         <div className="mt-4 flex justify-center gap-2">
@@ -63,20 +70,34 @@ export function HomePage() {
   const playNext = (t: HomeTrack) => add([t.id], true).then(() => toast.success("Playing next"));
 
   return (
-    <div>
-      <div className="mb-6 flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-baseline gap-3">
-          <h1 className="text-3xl font-semibold">Recently played</h1>
-          <Link to="/history" className="text-sm text-muted hover:underline">See all</Link>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="secondary" onClick={() => nav("/playlists")}>
-            <Plus className="h-4 w-4" /> Create playlist
-          </Button>
-          <LayoutToggle />
-        </div>
+    <div className="space-y-10">
+      <div className="flex items-center justify-end gap-2">
+        <Button size="sm" variant="secondary" onClick={() => nav("/playlists")}>
+          <Plus className="h-4 w-4" /> Create playlist
+        </Button>
+        <LayoutToggle />
       </div>
-      <TrackSection tracks={recent} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
+      {!!recent.length && (
+        <section>
+          <div className="mb-6 flex min-w-0 items-baseline gap-3">
+            <h1 className="text-3xl font-semibold">Recently played</h1>
+            <Link to="/history" className="text-sm text-muted hover:underline">See all</Link>
+          </div>
+          <TrackSection tracks={recent} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
+        </section>
+      )}
+      {!!added.length && (
+        <section>
+          <h2 className="mb-6 text-2xl font-semibold">Recently added</h2>
+          <TrackSection tracks={added} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
+        </section>
+      )}
+      {!!played.length && (
+        <section>
+          <h2 className="mb-6 text-2xl font-semibold">Most played</h2>
+          <TrackSection tracks={played} layout={layout} onPlay={play} onQueue={add} onNext={playNext} countLabel />
+        </section>
+      )}
     </div>
   );
 }
@@ -86,13 +107,15 @@ function TrackSection({
   layout,
   onPlay,
   onQueue,
-  onNext
+  onNext,
+  countLabel
 }: {
   tracks: HomeTrack[];
   layout: "grid" | "list";
   onPlay: (ids: string[], i?: number) => void;
   onQueue: (ids: string[]) => Promise<void>;
   onNext: (t: HomeTrack) => void;
+  countLabel?: boolean;
 }) {
   const ids = tracks.map((t) => t.id);
   if (layout === "list") {
@@ -114,7 +137,7 @@ function TrackSection({
           to={t.album_id ? `/albums/${t.album_id}` : "/library"}
           id={t.id}
           title={t.title}
-          subtitle={t.artist || t.album || "Unknown artist"}
+          subtitle={countLabel && t.count ? `${t.count} plays` : t.artist || t.album || "Unknown artist"}
           kind="track"
           onPlay={() => onPlay([ids[i]])}
         />

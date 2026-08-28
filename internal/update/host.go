@@ -49,6 +49,53 @@ func AppliedDigest() string {
 	return s
 }
 
+func AppliedHealthy() bool {
+	b, err := os.ReadFile(filepath.Join(RequestDir(), "healthy"))
+	if err != nil {
+		return false
+	}
+	s := strings.ToLower(strings.TrimSpace(string(b)))
+	return s == "1" || s == "ok" || s == "true"
+}
+
+type RecoveryFile struct {
+	Status string `json:"status"`
+	Backup string `json:"backup"`
+	Detail string `json:"detail"`
+}
+
+func ReadRecovery() RecoveryFile {
+	var out RecoveryFile
+	b, err := os.ReadFile(filepath.Join(RequestDir(), "needs_recovery"))
+	if err != nil || len(b) == 0 {
+		return out
+	}
+	if json.Unmarshal(b, &out) != nil {
+		out.Status = "needs_recovery"
+		out.Detail = strings.TrimSpace(string(b))
+	}
+	if out.Status == "" {
+		out.Status = "needs_recovery"
+	}
+	return out
+}
+
+func WriteRecovery(status, backup, detail string) {
+	ensureUpdateDir()
+	b, _ := json.Marshal(RecoveryFile{Status: status, Backup: backup, Detail: detail})
+	_ = os.WriteFile(filepath.Join(RequestDir(), "needs_recovery"), append(b, '\n'), 0o660)
+	writeProgress(0, "needs_recovery", detail)
+}
+
+func ensureUpdateDir() error {
+	dir := RequestDir()
+	if err := os.MkdirAll(dir, 0o770); err != nil {
+		return err
+	}
+	_ = os.Chmod(dir, 0o2770)
+	return nil
+}
+
 func RequestPending() bool {
 	st, err := os.Stat(filepath.Join(RequestDir(), "request"))
 	if err != nil {
@@ -67,20 +114,18 @@ func ClearRequest() {
 }
 
 func WriteHostRunner() error {
-	dir := RequestDir()
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := ensureUpdateDir(); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "run.sh"), hostUpdateScript, 0o755)
+	return os.WriteFile(filepath.Join(RequestDir(), "run.sh"), hostUpdateScript, 0o755)
 }
 
 func writeProgress(percent int, stage, detail string) {
-	dir := RequestDir()
-	_ = os.MkdirAll(dir, 0o777)
+	_ = ensureUpdateDir()
 	b, _ := json.Marshal(hostProgressFile{Percent: percent, Stage: stage, Detail: detail})
-	tmp := filepath.Join(dir, "progress.json.tmp")
-	dst := filepath.Join(dir, "progress.json")
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o644); err != nil {
+	tmp := filepath.Join(RequestDir(), "progress.json.tmp")
+	dst := filepath.Join(RequestDir(), "progress.json")
+	if err := os.WriteFile(tmp, append(b, '\n'), 0o660); err != nil {
 		return
 	}
 	_ = os.Rename(tmp, dst)
@@ -102,7 +147,7 @@ func RequestUpdate(by string) error {
 	// Remove first so systemd PathExists sees a create. Overlay/bind-mount
 	// inotify often misses container writes; the timer + docker socket cover that.
 	_ = os.Remove(dst)
-	if err := os.WriteFile(tmp, payload, 0o666); err != nil {
+	if err := os.WriteFile(tmp, payload, 0o660); err != nil {
 		return err
 	}
 	if err := os.Rename(tmp, dst); err != nil {

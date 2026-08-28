@@ -365,11 +365,19 @@ func TestQueueSSEFanoutStateWithoutDBPerSub(t *testing.T) {
 }
 
 func TestDiscordAvatarURL(t *testing.T) {
-	if discordAvatarURL("") != "" {
+	if discordAvatarURL("", "") != "" {
 		t.Fatal("empty")
 	}
-	if !strings.Contains(discordAvatarURL("123"), "cdn.discordapp.com/embed/avatars/") {
-		t.Fatal(discordAvatarURL("123"))
+	if !strings.Contains(discordAvatarURL("123", ""), "cdn.discordapp.com/embed/avatars/") {
+		t.Fatal(discordAvatarURL("123", ""))
+	}
+	got := discordAvatarURL("123456789012345678", "abc123def")
+	if !strings.Contains(got, "/avatars/123456789012345678/abc123def.png") {
+		t.Fatal(got)
+	}
+	anim := discordAvatarURL("123456789012345678", "a_deadbeef")
+	if !strings.Contains(anim, "/avatars/123456789012345678/a_deadbeef.gif") {
+		t.Fatal(anim)
 	}
 }
 

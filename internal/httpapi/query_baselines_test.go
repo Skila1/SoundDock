@@ -76,6 +76,9 @@ func TestQueryBaselinesExplain(t *testing.T) {
 	}{
 		{"home_continue_history", homeContinueSQL(false), []any{uid}},
 		{"home_continue_events", homeContinueSQL(true), []any{uid}},
+		{"home_recently_added", homeRecentlyAddedSQL(), []any{[]uuid.UUID{lib}}},
+		{"home_most_played", homeMostPlayedSQL(), []any{uid, []uuid.UUID{lib}}},
+		{"list_tracks_page", listTracksSQL(), []any{[]uuid.UUID{lib}, nil, uuid.Nil, 101}},
 		{"listen_totals_history", listenTotalsSQL(false), []any{uid, []string{"web", "discord"}, nil, time.Now().Add(time.Hour)}},
 		{"queue_snapshot", `
 			SELECT s.id, s.status, s.renderer_kind, s.renderer_id, s.state_revision, s.playhead_sequence
@@ -85,9 +88,9 @@ func TestQueryBaselinesExplain(t *testing.T) {
 			WHERE q.session_id=$1 ORDER BY q.position`, []any{sess}},
 		{"stats_rebuild_source", `
 			SELECT user_id, track_id,
-				(count(*) FILTER (WHERE qualified_play = true))::int,
+				(count(*) FILTER (WHERE kind = 'qualify'))::int,
 				(count(*) FILTER (WHERE kind = 'skip'))::int,
-				max(started_at) FILTER (WHERE qualified_play = true)
+				max(started_at) FILTER (WHERE kind = 'qualify')
 			FROM listen_events
 			GROUP BY user_id, track_id`, nil},
 		{"acquisition_intent_coalesce", `

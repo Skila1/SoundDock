@@ -17,7 +17,7 @@ var (
 )
 
 // NormalizeProviderURL accepts empty (disabled) or https://lrclib.net.
-// Unknown hosts are rejected. Default off is empty — no implied network.
+// Unknown hosts are rejected. Default off is empty - no implied network.
 func NormalizeProviderURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

@@ -233,6 +233,27 @@ func TestRefreshSingleflightPerAccount(t *testing.T) {
 	}
 }
 
+func TestScopesFromTokenResponse(t *testing.T) {
+	raw := map[string]any{"access_token": "a", "scope": "playlist-read-private playlist-read-collaborative"}
+	tok := tokenFromRaw(raw)
+	if len(tok.Scopes) != 2 || tok.Scopes[0] != "playlist-read-private" || tok.Scopes[1] != "playlist-read-collaborative" {
+		t.Fatalf("%v", tok.Scopes)
+	}
+	if got := scopesFromRaw(map[string]any{"scope": []any{"a", "b"}}); len(got) != 2 || got[0] != "a" {
+		t.Fatalf("%v", got)
+	}
+}
+
+func TestHTTPStatusTyped(t *testing.T) {
+	err := &HTTPStatusError{Status: 404, Body: "gone"}
+	if httpStatus(err) != 404 {
+		t.Fatal(httpStatus(err))
+	}
+	if httpStatus(nil) != 0 {
+		t.Fatal("nil")
+	}
+}
+
 func TestReconnectVsTemporaryMessages(t *testing.T) {
 	if reconnectMessage("spotify") == temporaryMessage("spotify") {
 		t.Fatal("reconnect and temporary copy must differ")

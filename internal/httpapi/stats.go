@@ -129,7 +129,7 @@ func listenReadFor(events bool) listenRead {
 			table:    "listen_events",
 			timeCol:  "started_at",
 			durExpr:  "coalesce(h.listened_ms, h.track_duration_ms)",
-			qualPred: " AND h.qualified_play = true",
+			qualPred: " AND h.kind = 'qualify'",
 			events:   true,
 		}
 	}
@@ -192,7 +192,7 @@ func queryListenPlayCountsSeparate(ctx context.Context, pool *pgxpool.Pool) (his
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM listen_history`).Scan(&historyPlays); err != nil {
 		return 0, 0, err
 	}
-	if err = pool.QueryRow(ctx, `SELECT count(*) FROM listen_events WHERE qualified_play = true`).Scan(&eventsQualified); err != nil {
+	if err = pool.QueryRow(ctx, `SELECT count(*) FROM listen_events WHERE kind = 'qualify'`).Scan(&eventsQualified); err != nil {
 		return historyPlays, 0, err
 	}
 	return historyPlays, eventsQualified, nil

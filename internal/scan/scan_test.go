@@ -12,6 +12,18 @@ func TestSkipScanKey(t *testing.T) {
 	if SkipScanKey("uploads/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.flac") {
 		t.Fatal("hash original must be scanned")
 	}
+	if !SkipScanKey("inbox/jobs/00000000-0000-4000-8000-000000000001/dQw4w9WgXcQ.m4a") {
+		t.Fatal("job-scoped inbox must be skipped by generic scan")
+	}
+}
+
+func TestWeakIncomingTitle(t *testing.T) {
+	if !WeakIncomingTitle("dQw4w9WgXcQ.m4a", "dQw4w9WgXcQ") {
+		t.Fatal("tagless")
+	}
+	if WeakIncomingTitle("Numb", "dQw4w9WgXcQ") {
+		t.Fatal("strong")
+	}
 }
 
 func TestProgressPct(t *testing.T) {

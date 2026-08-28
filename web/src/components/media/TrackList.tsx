@@ -17,6 +17,7 @@ import { patchTracksInCaches, refreshCatalogue, removeTracksFromCaches } from "@
 import { api } from "@/lib/api";
 import type { Favourite, Playlist, Track, User } from "@/types/api";
 import { toast } from "sonner";
+import { saveTracksOffline } from "@/lib/offlineFill";
 
 export const TRACK_DND_MIME = "application/x-sounddock-tracks";
 
@@ -332,6 +333,7 @@ export function TrackList({
                 {onQueue && <DropdownMenuItem onSelect={() => onQueue(t)}>Add to queue</DropdownMenuItem>}
                 <DropdownMenuItem onSelect={() => doFav(t)}>{favSet.has(t.id) ? "Unfavourite" : "Favourite"}</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => openPlaylist(t)}>Add to playlist</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => saveTracksOffline(targetIds(t))}>Save offline</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => navigate(`/tracks/${t.id}`)}>Go to track info</DropdownMenuItem>
                 {admin && t.source !== "youtube" && (
                   <DropdownMenuItem
@@ -364,6 +366,7 @@ export function TrackList({
         {onQueue && <ContextMenuItem onSelect={() => onQueue(t)}>Add to queue</ContextMenuItem>}
         <ContextMenuItem onSelect={() => doFav(t)}>{favSet.has(t.id) ? "Unfavourite" : "Favourite"}</ContextMenuItem>
         <ContextMenuItem onSelect={() => openPlaylist(t)}>Add to playlist</ContextMenuItem>
+        <ContextMenuItem onSelect={() => saveTracksOffline(targetIds(t))}>Save offline</ContextMenuItem>
         <ContextMenuItem onSelect={() => navigate(`/tracks/${t.id}`)}>Go to track info</ContextMenuItem>
         {admin && t.source !== "youtube" && (
           <ContextMenuItem
@@ -396,6 +399,9 @@ export function TrackList({
           <span className="text-muted">{selected.size} selected</span>
           <Button size="sm" variant="secondary" onClick={() => { setPendingIds([...selected]); setPlOpen(true); }}>
             Add to playlist
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => saveTracksOffline([...selected])}>
+            Save offline
           </Button>
           <Button size="sm" variant="secondary" onClick={() => selected.forEach((id) => { const t = tracks.find((x) => x.id === id); if (t) downloadTrack(t); })}>
             Download

@@ -78,6 +78,9 @@ func SkipScanKey(key string) bool {
 	if strings.HasPrefix(k, "compressed/") || strings.Contains(k, "/compressed/") {
 		return true
 	}
+	if strings.HasPrefix(k, "inbox/jobs/") || strings.Contains(k, "/inbox/jobs/") {
+		return true
+	}
 	return false
 }
 

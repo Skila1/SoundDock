@@ -5,7 +5,7 @@ import { relativeTime } from "@/lib/utils";
 import type { SyncDiff } from "./types";
 
 function confidenceLabel(n: number | null | undefined) {
-  if (n == null || Number.isNaN(Number(n))) return "—";
+  if (n == null || Number.isNaN(Number(n))) return "-";
   return Number(n).toFixed(2);
 }
 

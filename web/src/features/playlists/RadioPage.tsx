@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Radio as RadioIcon } from "lucide-react";
@@ -7,9 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
-import { EmptyState, PageHeader } from "@/components/ui/empty";
+import { EmptyState, PageHeader, QueryError } from "@/components/ui/empty";
 import { usePlayer } from "@/stores/player";
 import { toast } from "sonner";
+import type { SearchHit } from "@/types/api";
 import type { RadioKind, RadioResponse, RadioSeeds } from "./types";
 
 const kinds: { value: RadioKind; label: string }[] = [
@@ -43,23 +44,14 @@ export function RadioPage() {
   const [busy, setBusy] = useState(false);
 
   const seeds = useQuery({ queryKey: ["radio-seeds"], queryFn: () => api.get<RadioSeeds>("/api/v1/radio/seeds") });
-  const artists = useQuery({ queryKey: ["artists"], queryFn: () => api.get<{ id: string; name: string }[]>("/api/v1/artists"), enabled: kind === "artist" });
-  const albums = useQuery({ queryKey: ["albums"], queryFn: () => api.get<{ id: string; title: string }[]>("/api/v1/albums"), enabled: kind === "album" });
-  const tracks = useQuery({
-    queryKey: ["tracks-radio"],
-    queryFn: () => api.get<{ id: string; title: string }[]>("/api/v1/tracks"),
-    enabled: kind === "track"
-  });
+  const typeaheadKinds = kind === "artist" || kind === "album" || kind === "track";
 
   const seedOptions = useMemo(() => {
     if (kind === "library") return (seeds.data?.libraries || []).map((x) => ({ value: x.id, label: x.name }));
-    if (kind === "artist") return (artists.data || []).slice(0, 200).map((x) => ({ value: x.id, label: x.name }));
-    if (kind === "album") return (albums.data || []).slice(0, 200).map((x) => ({ value: x.id, label: x.title }));
-    if (kind === "track") return (tracks.data || []).slice(0, 200).map((x) => ({ value: x.id, label: x.title }));
     if (kind === "genre") return (seeds.data?.genres || []).map((x) => ({ value: x.id || x.name, label: x.name }));
     if (kind === "decade") return (seeds.data?.decades || []).map((d) => ({ value: String(d), label: `${d}s` }));
     return [];
-  }, [kind, seeds.data, artists.data, albums.data, tracks.data]);
+  }, [kind, seeds.data]);
 
   const load = async () => {
     setBusy(true);
@@ -87,7 +79,7 @@ export function RadioPage() {
     <div>
       <PageHeader
         title="Radio"
-        description="Station picks from your library. Enqueue uses your queue — SoundDock never writes playback sessions from this page."
+        description="Station picks from your library. Enqueue uses your queue - SoundDock never writes playback sessions from this page."
         actions={
           <Button variant="secondary" onClick={() => nav("/playlists")}>Playlists</Button>
         }
@@ -98,7 +90,9 @@ export function RadioPage() {
         </Field>
         {kind !== "quick_mix" && kind !== "decade" && (
           <Field label="Seed">
-            {seedOptions.length ? (
+            {typeaheadKinds ? (
+              <SeedTypeahead kind={kind} value={seed} onChange={setSeed} />
+            ) : seedOptions.length ? (
               <Select value={seed || "_none"} onValueChange={(v) => setSeed(v === "_none" ? "" : v)} options={[{ value: "_none", label: "Choose…" }, ...seedOptions]} />
             ) : (
               <Input value={seed} onChange={(e) => setSeed(e.target.value)} placeholder="Seed id" />
@@ -139,7 +133,8 @@ export function RadioPage() {
           Refresh job
         </Button>
       </div>
-      {!ids.length && (
+      {seeds.isError && <QueryError message={seeds.error instanceof Error ? seeds.error.message : undefined} onRetry={() => seeds.refetch()} />}
+      {!ids.length && !seeds.isError && (
         <EmptyState
           icon={RadioIcon}
           title={kind === "quick_mix" ? "Start a Quick Mix from your library." : "Pick a seed and get a station."}
@@ -149,6 +144,58 @@ export function RadioPage() {
       )}
       {!!ids.length && (
         <p className="text-sm text-muted">{ids.length} track ids selected. Play or add to queue to start listening.</p>
+      )}
+    </div>
+  );
+}
+
+function SeedTypeahead({ kind, value, onChange }: { kind: RadioKind; value: string; onChange: (id: string) => void }) {
+  const [q, setQ] = useState("");
+  const [picked, setPicked] = useState("");
+  const search = useQuery({
+    queryKey: ["radio-typeahead", kind, q],
+    enabled: q.trim().length > 1,
+    queryFn: () => api.get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(q)}&type=${kind}&limit=12`)
+  });
+  const hits = (search.data?.results || []).filter((h) => h.type === kind);
+
+  useEffect(() => {
+    if (!value) {
+      setPicked("");
+      setQ("");
+    }
+  }, [value]);
+
+  return (
+    <div className="relative">
+      <Input
+        value={picked || q}
+        onChange={(e) => {
+          setPicked("");
+          onChange("");
+          setQ(e.target.value);
+        }}
+        placeholder={kind === "track" ? "Search tracks" : kind === "album" ? "Search albums" : "Search artists"}
+      />
+      {!!hits.length && !picked && (
+        <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-md border border-border bg-surface-1 py-1 shadow-lg">
+          {hits.map((h) => (
+            <li key={h.id}>
+              <button
+                type="button"
+                className="block w-full px-3 py-1.5 text-left text-sm hover:bg-surface-2"
+                onClick={() => {
+                  onChange(h.id);
+                  setPicked(h.title);
+                  setQ("");
+                }}
+              >
+                <span className="block truncate">{h.title}</span>
+                {h.artist && <span className="block truncate text-xs text-muted">{h.artist}</span>}
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );

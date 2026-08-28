@@ -16,7 +16,15 @@ import (
 
 const dockerSock = "/var/run/docker.sock"
 
+func AllowDockerSock() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("SD_ALLOW_DOCKER_SOCK")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
 func SocketOK() bool {
+	if !AllowDockerSock() {
+		return false
+	}
 	if _, err := os.Stat(dockerSock); err != nil {
 		return false
 	}
@@ -74,9 +82,13 @@ type containerSummary struct {
 }
 
 type swapJob struct {
-	Old  string `json:"old"`
-	New  string `json:"new"`
-	Name string `json:"name"`
+	Old            string `json:"old"`
+	New            string `json:"new"`
+	Name           string `json:"name"`
+	SchemaForward  bool   `json:"schema_forward"`
+	SchemaBefore   int64  `json:"schema_before"`
+	OldImageHead   int64  `json:"old_image_head"`
+	PreviousDigest string `json:"previous_digest"`
 }
 
 func skipUpdate(c containerSummary) bool {
@@ -208,12 +220,30 @@ func pullImage(ctx context.Context, ref string) error {
 	return nil
 }
 
-func PullAndSwap(ctx context.Context, image, project string) error {
+type RollbackPolicy struct {
+	SchemaBefore   int64
+	OldImageHead   int64
+	PreviousDigest string
+	ExpectedDigest string
+}
+
+func PullAndSwap(ctx context.Context, image, project string, policy RollbackPolicy) error {
 	if !SocketOK() {
 		return fmt.Errorf("docker socket is not available")
 	}
 	if err := pullImage(ctx, image); err != nil {
 		return fmt.Errorf("pull %s: %w", image, err)
+	}
+	newDigest, _ := imageRepoDigest(ctx, image)
+	if policy.ExpectedDigest != "" && newDigest != "" && !digestEqual(newDigest, policy.ExpectedDigest) {
+		return fmt.Errorf("pulled digest does not match the expected digest")
+	}
+	head := imageSchemaHead(ctx, image)
+	kind := Classify(policy.SchemaBefore, InferTargetHead(policy.SchemaBefore, head, head > 0))
+	if kind == KindSchemaForward {
+		if _, err := DumpSQL(ctx, os.Getenv("SD_DATABASE_URL"), ""); err != nil {
+			return fmt.Errorf("SQL backup failed; schema-forward update refused: %w", err)
+		}
 	}
 	list, err := listProject(ctx, project)
 	if err != nil {
@@ -228,12 +258,56 @@ func PullAndSwap(ctx context.Context, image, project string) error {
 		if err != nil {
 			return fmt.Errorf("prepare %s: %w", c.ID[:12], err)
 		}
+		job.SchemaForward = kind == KindSchemaForward
+		job.SchemaBefore = policy.SchemaBefore
+		job.OldImageHead = policy.OldImageHead
+		job.PreviousDigest = policy.PreviousDigest
 		jobs = append(jobs, job)
 	}
 	if len(jobs) == 0 {
 		return fmt.Errorf("no SoundDock containers to update")
 	}
 	return spawnSwapper(ctx, jobs)
+}
+
+func imageRepoDigest(ctx context.Context, ref string) (string, error) {
+	res, err := dockerDo(ctx, http.MethodGet, "/v1.41/images/"+url.PathEscape(ref)+"/json", nil)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return "", fmt.Errorf("inspect image %s", res.Status)
+	}
+	var img struct {
+		RepoDigests []string `json:"RepoDigests"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&img); err != nil {
+		return "", err
+	}
+	for _, d := range img.RepoDigests {
+		if i := strings.Index(d, "@"); i >= 0 {
+			return d[i+1:], nil
+		}
+	}
+	return "", nil
+}
+
+func imageSchemaHead(ctx context.Context, ref string) int64 {
+	res, err := dockerDo(ctx, http.MethodGet, "/v1.41/images/"+url.PathEscape(ref)+"/json", nil)
+	if err != nil {
+		return 0
+	}
+	defer res.Body.Close()
+	var img struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"Config"`
+	}
+	if json.NewDecoder(res.Body).Decode(&img) != nil {
+		return 0
+	}
+	return parseSchemaHead(img.Config.Labels[schemaHeadLabel])
 }
 
 func prepareNext(ctx context.Context, id, image string) (swapJob, error) {
@@ -382,8 +456,29 @@ func RunSwap() error {
 	for _, j := range jobs {
 		_ = dockerDoDiscard(ctx, http.MethodPost, "/v1.41/containers/"+j.Old+"/stop?t=20", nil)
 		if err := dockerDoDiscard(ctx, http.MethodPost, "/v1.41/containers/"+j.New+"/start", nil); err != nil {
-			_ = dockerDoDiscard(ctx, http.MethodPost, "/v1.41/containers/"+j.Old+"/start", nil)
+			dec := DecideAfterFailure(j.SchemaBefore, j.SchemaBefore, j.OldImageHead)
+			if j.SchemaForward {
+				dec = DecideAfterFailure(j.SchemaBefore, j.SchemaBefore+1, j.OldImageHead)
+			}
+			if dec.StartOldImage {
+				_ = dockerDoDiscard(ctx, http.MethodPost, "/v1.41/containers/"+j.Old+"/start", nil)
+			} else {
+				WriteRecovery("needs_recovery", "", "New container failed to start after a schema-forward apply. The previous image was not started.")
+			}
 			return fmt.Errorf("start new %s: %w", j.Name, err)
+		}
+		if !waitContainerHealthy(ctx, j.New) {
+			dec := DecideAfterFailure(j.SchemaBefore, j.SchemaBefore, j.OldImageHead)
+			if j.SchemaForward {
+				dec = DecideAfterFailure(j.SchemaBefore, j.SchemaBefore+1, j.OldImageHead)
+			}
+			if dec.StartOldImage {
+				_ = dockerDoDiscard(ctx, http.MethodPost, "/v1.41/containers/"+j.New+"/stop?t=10", nil)
+				_ = dockerDoDiscard(ctx, http.MethodPost, "/v1.41/containers/"+j.Old+"/start", nil)
+				return fmt.Errorf("new %s failed health; rolled back", j.Name)
+			}
+			WriteRecovery("needs_recovery", "", "New container failed health after a schema-forward apply. The previous image was not started.")
+			return fmt.Errorf("start new %s: health failed", j.Name)
 		}
 		_ = dockerDoDiscard(ctx, http.MethodDelete, "/v1.41/containers/"+j.Old+"?force=1", nil)
 		if err := dockerDoDiscard(ctx, http.MethodPost, "/v1.41/containers/"+j.New+"/rename?name="+url.QueryEscape(j.Name), nil); err != nil {
@@ -391,4 +486,37 @@ func RunSwap() error {
 		}
 	}
 	return nil
+}
+
+func waitContainerHealthy(ctx context.Context, id string) bool {
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		res, err := dockerDo(ctx, http.MethodGet, "/v1.41/containers/"+id+"/json", nil)
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		var info struct {
+			State struct {
+				Running bool `json:"Running"`
+				Health  struct {
+					Status string `json:"Status"`
+				} `json:"Health"`
+			} `json:"State"`
+		}
+		_ = json.NewDecoder(res.Body).Decode(&info)
+		res.Body.Close()
+		if info.State.Health.Status == "healthy" {
+			return true
+		}
+		if info.State.Running && info.State.Health.Status == "" {
+			time.Sleep(3 * time.Second)
+			return true
+		}
+		if !info.State.Running {
+			return false
+		}
+		time.Sleep(2 * time.Second)
+	}
+	return false
 }

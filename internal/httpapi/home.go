@@ -48,9 +48,30 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	writeJSON(w, 200, map[string]any{
 		"continue":       s.homeContinue(r, u),
-		"recently_added": []any{},
-		"most_played":    []any{},
+		"recently_added": s.homeRecentlyAdded(r, u),
+		"most_played":    s.homeMostPlayed(r, u),
 	})
+}
+
+func homeRecentlyAddedSQL() string {
+	return `SELECT t.id, t.title, t.duration_ms, t.album_id, coalesce(al.title,'') AS album, ` + listenArtistSQL + ` AS artist
+		FROM tracks t
+		LEFT JOIN albums al ON al.id=t.album_id
+		WHERE t.library_id = ANY($1)
+		  AND ` + trackPlayablePred + `
+		ORDER BY t.created_at DESC
+		LIMIT 15`
+}
+
+func homeMostPlayedSQL() string {
+	return `SELECT t.id, t.title, t.duration_ms, t.album_id, coalesce(al.title,'') AS album, ` + listenArtistSQL + ` AS artist, pc.count
+		FROM play_counts pc
+		JOIN tracks t ON t.id = pc.track_id
+		LEFT JOIN albums al ON al.id=t.album_id
+		WHERE pc.user_id=$1 AND pc.count > 0 AND t.library_id = ANY($2)
+		  AND ` + trackPlayablePred + `
+		ORDER BY pc.count DESC, pc.last_played_at DESC NULLS LAST
+		LIMIT 15`
 }
 
 func (s *Server) homeContinue(r *http.Request, u *auth.User) []map[string]any {
@@ -61,6 +82,34 @@ func (s *Server) homeContinue(r *http.Request, u *auth.User) []map[string]any {
 	}
 	defer hist.Close()
 	out := scanMaps(hist, "id", "title", "duration_ms", "album_id", "album", "artist")
+	if out == nil {
+		out = []map[string]any{}
+	}
+	return out
+}
+
+func (s *Server) homeRecentlyAdded(r *http.Request, u *auth.User) []map[string]any {
+	libs := s.libraryIDs(r.Context(), u)
+	rows, err := s.Pool.Query(r.Context(), homeRecentlyAddedSQL(), libs)
+	if err != nil {
+		return []map[string]any{}
+	}
+	defer rows.Close()
+	out := scanMaps(rows, "id", "title", "duration_ms", "album_id", "album", "artist")
+	if out == nil {
+		out = []map[string]any{}
+	}
+	return out
+}
+
+func (s *Server) homeMostPlayed(r *http.Request, u *auth.User) []map[string]any {
+	libs := s.libraryIDs(r.Context(), u)
+	rows, err := s.Pool.Query(r.Context(), homeMostPlayedSQL(), u.ID, libs)
+	if err != nil {
+		return []map[string]any{}
+	}
+	defer rows.Close()
+	out := scanMaps(rows, "id", "title", "duration_ms", "album_id", "album", "artist", "count")
 	if out == nil {
 		out = []map[string]any{}
 	}

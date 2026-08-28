@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { PageHeader } from "@/components/ui/empty";
+import { PageHeader, QueryError } from "@/components/ui/empty";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { LyricsProviderConfig } from "@/types/api";
@@ -19,17 +19,18 @@ export function AdminLyrics() {
     queryKey: ["admin-lyrics"],
     queryFn: () => api.get<LyricsProviderConfig>("/api/v1/admin/lyrics")
   });
-  const enabled = !!q.data?.enabled;
+  const localOn = q.data?.local_enabled !== false;
+  const externalOn = !!(q.data?.external_enabled || q.data?.enabled);
   const url = q.data?.provider_url || "";
 
   async function save(next: LyricsProviderConfig) {
     setSaving(true);
     try {
       await api.put<LyricsProviderConfig>("/api/v1/admin/lyrics", next);
-      toast.success("Lyrics provider saved");
+      toast.success("Lyrics settings saved");
       await qc.invalidateQueries({ queryKey: ["admin-lyrics"] });
     } catch (e) {
-      toast.error((e as Error).message || "Could not save lyrics provider");
+      toast.error((e as Error).message || "Could not save lyrics settings");
     } finally {
       setSaving(false);
     }
@@ -39,24 +40,41 @@ export function AdminLyrics() {
     <div>
       <PageHeader
         title="Lyrics"
-        description="Optional LRCLIB lookup for tracks without embedded or manual lyrics. Off by default. Genius and Musixmatch are not used."
+        description="Local lyrics (embedded tags and files under data/lyrics) are the default. LRCLIB is optional and off until you turn it on."
       />
-      <article className="max-w-lg rounded-xl border border-border bg-surface-1 p-4 text-sm">
+      {q.isError && <QueryError message={q.error instanceof Error ? q.error.message : undefined} onRetry={() => q.refetch()} />}
+      <article className="mb-4 max-w-lg rounded-xl border border-border bg-surface-1 p-4 text-sm">
         <div className="mb-3 flex items-center gap-2 font-medium">
           <Mic2 className="h-4 w-4 text-muted" />
-          Provider
+          Local lyrics
         </div>
-        <div className="mb-4 flex items-center gap-3">
+        <div className="flex items-center gap-3">
           <Switch
-            checked={enabled}
+            checked={localOn}
             onCheckedChange={(v) => {
               if (saving || q.isLoading) return;
-              save({ enabled: v, provider_url: v ? url || lrclibURL : "" });
+              save({ local_enabled: v, external_enabled: externalOn, enabled: externalOn, provider_url: externalOn ? url || lrclibURL : "" });
             }}
           />
           <div>
-            <div className="font-medium">{enabled ? "Enabled" : "Disabled"}</div>
-            <div className="text-xs text-subtle">Empty URL means no network requests.</div>
+            <div className="font-medium">{localOn ? "On" : "Off"}</div>
+            <div className="text-xs text-subtle">Reads embedded tags first, then data/lyrics/artist/title.lrc (or .txt). Manual edits always win.</div>
+          </div>
+        </div>
+      </article>
+      <article className="max-w-lg rounded-xl border border-border bg-surface-1 p-4 text-sm">
+        <div className="mb-3 font-medium">External provider (optional)</div>
+        <div className="mb-4 flex items-center gap-3">
+          <Switch
+            checked={externalOn}
+            onCheckedChange={(v) => {
+              if (saving || q.isLoading) return;
+              save({ local_enabled: localOn, external_enabled: v, enabled: v, provider_url: v ? url || lrclibURL : "" });
+            }}
+          />
+          <div>
+            <div className="font-medium">{externalOn ? "LRCLIB on" : "LRCLIB off"}</div>
+            <div className="text-xs text-subtle">Used only when local lyrics are missing. Cached LRCLIB lyrics are not shown while this is off. Genius and Musixmatch are not used.</div>
           </div>
         </div>
         <Field
@@ -66,10 +84,12 @@ export function AdminLyrics() {
           <Input
             value={url}
             placeholder={lrclibURL}
-            disabled={saving || q.isLoading}
+            disabled={saving || q.isLoading || !externalOn}
             onChange={(e) => {
               qc.setQueryData<LyricsProviderConfig>(["admin-lyrics"], {
-                enabled,
+                local_enabled: localOn,
+                external_enabled: externalOn,
+                enabled: externalOn,
                 provider_url: e.target.value
               });
             }}
@@ -80,7 +100,7 @@ export function AdminLyrics() {
           className="mt-4"
           type="button"
           disabled={saving || q.isLoading}
-          onClick={() => save({ enabled, provider_url: enabled ? url || lrclibURL : "" })}
+          onClick={() => save({ local_enabled: localOn, external_enabled: externalOn, enabled: externalOn, provider_url: externalOn ? url || lrclibURL : "" })}
         >
           Save
         </Button>

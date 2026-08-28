@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sounddock/sounddock/internal/oplog"
 )
 
 var (
@@ -20,6 +21,8 @@ var (
 	ErrPoolDisabled = errors.New("workload pool is disabled")
 	ErrJobFailed    = errors.New("job failed")
 	ErrNotRetryable = errors.New("job cannot be retried")
+	ErrTerminal     = errors.New("terminal job failure")
+	ErrCancelled    = errors.New("job cancelled")
 )
 
 type Handler func(ctx context.Context, job Job) error
@@ -144,7 +147,20 @@ func (r *Runner) Load(ctx context.Context) {
 		if err := r.db.QueryRow(ctx, `SELECT value FROM server_settings WHERE key=$1`, SettingKey).Scan(&raw); err == nil && len(raw) > 0 {
 			overlay := Configs{}
 			if json.Unmarshal(raw, &overlay) == nil {
+				bumped := false
+				if got, ok := overlay[PoolSync]; ok && got.QueueLimit > 0 && got.QueueLimit <= 16 {
+					got.QueueLimit = 256
+					overlay[PoolSync] = got
+					bumped = true
+				}
 				cfg = Sanitize(Merge(cfg, overlay))
+				if bumped {
+					if b, err := json.Marshal(cfg); err == nil {
+						_, _ = r.db.Exec(ctx, `
+							INSERT INTO server_settings (key, value) VALUES ($1, $2::jsonb)
+							ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`, SettingKey, b)
+					}
+				}
 			}
 		}
 	}
@@ -589,26 +605,28 @@ func (rt *poolRuntime) runJob(parent context.Context, job Job, cfg PoolConfig) {
 	h := r.handlers[job.Type]
 	if h == nil {
 		_, _ = r.db.Exec(parent, `UPDATE jobs SET status='failed', last_error='no handler', finished_at=now(), locked_until=NULL, updated_at=now() WHERE id=$1`, job.ID)
+		jid := job.ID
+		_ = oplog.Write(parent, r.db, oplog.Entry{Level: "error", Category: "job", Message: "no handler", JobID: &jid, Details: map[string]any{"type": job.Type}})
 		return
 	}
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	err := h(ctx, job)
-	if r.Cancelled(parent, job.ID) || errors.Is(err, context.Canceled) {
+	if err == nil {
+		_, _ = r.db.Exec(parent, `
+			UPDATE jobs SET status='completed', progress=100, finished_at=now(), locked_until=NULL, updated_at=now()
+			WHERE id=$1 AND status='running'`, job.ID)
+		return
+	}
+	if errors.Is(err, ErrCancelled) || errors.Is(err, context.Canceled) {
 		_, _ = r.db.Exec(parent, `
 			UPDATE jobs SET status='cancelled', last_error=$2, finished_at=now(), locked_until=NULL, updated_at=now()
 			WHERE id=$1 AND status='running' AND locked_by LIKE $3`, job.ID, errString(err), r.workerID+"%")
 		return
 	}
-	if err != nil {
-		r.log.Error("job failed", "type", job.Type, "id", job.ID, "pool", rt.id, "err", err)
-		r.fail(parent, job, err, cfg)
-		return
-	}
-	_, _ = r.db.Exec(parent, `
-		UPDATE jobs SET status='completed', progress=100, finished_at=now(), locked_until=NULL, updated_at=now()
-		WHERE id=$1 AND status='running'`, job.ID)
+	r.log.Error("job failed", "type", job.Type, "id", job.ID, "pool", rt.id, "err", err)
+	r.fail(parent, job, err, cfg)
 }
 
 func (r *Runner) fail(ctx context.Context, job Job, err error, cfg PoolConfig) {
@@ -616,11 +634,34 @@ func (r *Runner) fail(ctx context.Context, job Job, err error, cfg PoolConfig) {
 	if errors.Is(err, context.DeadlineExceeded) {
 		msg = fmt.Sprintf("timed out after %ds", cfg.TimeoutSeconds)
 	}
+	if errors.Is(err, ErrTerminal) {
+		_, _ = r.db.Exec(ctx, `
+			UPDATE jobs SET status='failed', last_error=$2, finished_at=now(), locked_until=NULL, updated_at=now()
+			WHERE id=$1 AND status='running'`, job.ID, msg)
+		writeJobLog(ctx, r.db, job, msg)
+		return
+	}
 	_, _ = r.db.Exec(ctx, `
 		UPDATE jobs SET status=CASE WHEN attempts>=max_attempts THEN 'failed' ELSE 'retry' END,
 			last_error=$2, run_after=now()+interval '15 seconds', locked_until=NULL,
 			finished_at=CASE WHEN attempts>=max_attempts THEN now() ELSE NULL END, updated_at=now()
 		WHERE id=$1 AND status='running'`, job.ID, msg)
+	var status string
+	_ = r.db.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, job.ID).Scan(&status)
+	if status == "failed" {
+		writeJobLog(ctx, r.db, job, msg)
+	}
+}
+
+func writeJobLog(ctx context.Context, pool *pgxpool.Pool, job Job, msg string) {
+	jid := job.ID
+	_ = oplog.Write(ctx, pool, oplog.Entry{
+		Level:    "error",
+		Category: "job",
+		Message:  msg,
+		JobID:    &jid,
+		Details:  map[string]any{"type": job.Type},
+	})
 }
 
 func errString(err error) string {
@@ -671,17 +712,17 @@ type PoolStatus struct {
 }
 
 type JobRow struct {
-	ID           uuid.UUID  `json:"id"`
-	Type         string     `json:"type"`
-	Pool         string     `json:"pool"`
-	Status       string     `json:"status"`
-	Progress     int        `json:"progress"`
-	Attempts     int        `json:"attempts"`
-	LastError    *string    `json:"last_error"`
-	CreatedAt    time.Time  `json:"created_at"`
-	StartedAt    *time.Time `json:"started_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	Cancellable  bool       `json:"cancellable"`
+	ID          uuid.UUID  `json:"id"`
+	Type        string     `json:"type"`
+	Pool        string     `json:"pool"`
+	Status      string     `json:"status"`
+	Progress    int        `json:"progress"`
+	Attempts    int        `json:"attempts"`
+	LastError   *string    `json:"last_error"`
+	CreatedAt   time.Time  `json:"created_at"`
+	StartedAt   *time.Time `json:"started_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	Cancellable bool       `json:"cancellable"`
 }
 
 func (r *Runner) Status(ctx context.Context) []PoolStatus {

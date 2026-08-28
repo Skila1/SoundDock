@@ -11,9 +11,17 @@ import (
 )
 
 func ListPlaylists(ctx context.Context, provider, token, extraKey string) ([]Playlist, error) {
+	return listPlaylists(ctx, provider, &accessToken{value: token}, extraKey)
+}
+
+func ListPlaylistsRefresh(ctx context.Context, provider, token, extraKey string, refresh func(context.Context) (string, error)) ([]Playlist, error) {
+	return listPlaylists(ctx, provider, &accessToken{value: token, refresh: refresh}, extraKey)
+}
+
+func listPlaylists(ctx context.Context, provider string, tok *accessToken, extraKey string) ([]Playlist, error) {
 	switch provider {
 	case "spotify":
-		next := "https://api.spotify.com/v1/me/playlists?limit=50"
+		next := spotifyAPIBase + "/me/playlists?limit=50"
 		out := []Playlist{}
 		for next != "" {
 			var raw struct {
@@ -25,14 +33,18 @@ func ListPlaylists(ctx context.Context, provider, token, extraKey string) ([]Pla
 					Owner                 struct {
 						DisplayName string `json:"display_name"`
 					}
-					Tracks struct{ Total int }
+					Tracks json.RawMessage `json:"tracks"`
+					Items  json.RawMessage `json:"items"`
 				}
 			}
-			if err := httpJSON(ctx, "GET", next, token, nil, &raw); err != nil {
+			if err := httpJSONAuth(ctx, "GET", next, tok, nil, &raw); err != nil {
 				return nil, err
 			}
 			for _, it := range raw.Items {
-				p := Playlist{ID: it.ID, Name: it.Name, Description: it.Description, Owner: it.Owner.DisplayName, TrackCount: it.Tracks.Total, Snapshot: it.SnapshotID}
+				p := Playlist{
+					ID: it.ID, Name: it.Name, Description: it.Description, Owner: it.Owner.DisplayName,
+					TrackCount: spotifyItemCount(it.Tracks, it.Items), Snapshot: it.SnapshotID,
+				}
 				if len(it.Images) > 0 {
 					p.Artwork = it.Images[0].URL
 				}
@@ -55,7 +67,7 @@ func ListPlaylists(ctx context.Context, provider, token, extraKey string) ([]Pla
 			}
 		}
 		u := "https://www.googleapis.com/youtube/v3/playlists?part=snippet,contentDetails&mine=true&maxResults=50"
-		if err := httpJSON(ctx, "GET", u, token, nil, &raw); err != nil {
+		if err := httpJSON(ctx, "GET", u, tok.value, nil, &raw); err != nil {
 			return nil, err
 		}
 		out := make([]Playlist, 0, len(raw.Items))
@@ -69,7 +81,7 @@ func ListPlaylists(ctx context.Context, provider, token, extraKey string) ([]Pla
 		return out, nil
 	case "soundcloud":
 		var items []map[string]any
-		if err := httpJSON(ctx, "GET", "https://api.soundcloud.com/me/playlists", token, nil, &items); err != nil {
+		if err := httpJSON(ctx, "GET", "https://api.soundcloud.com/me/playlists", tok.value, nil, &items); err != nil {
 			return nil, err
 		}
 		out := []Playlist{}
@@ -91,7 +103,7 @@ func ListPlaylists(ctx context.Context, provider, token, extraKey string) ([]Pla
 		}
 		reqURL := "https://api.music.apple.com/v1/me/library/playlists"
 		// Apple uses Music-User-Token header; pass as extra via special prefix
-		if err := appleJSON(ctx, reqURL, extraKey, token, &raw); err != nil {
+		if err := appleJSON(ctx, reqURL, extraKey, tok.value, &raw); err != nil {
 			return nil, err
 		}
 		out := []Playlist{}
@@ -105,6 +117,14 @@ func ListPlaylists(ctx context.Context, provider, token, extraKey string) ([]Pla
 }
 
 func GetPlaylistItems(ctx context.Context, provider, token, extra, playlistID string) (Playlist, []Track, error) {
+	return getPlaylistItems(ctx, provider, &accessToken{value: token}, extra, playlistID)
+}
+
+func GetPlaylistItemsRefresh(ctx context.Context, provider, token, extra, playlistID string, refresh func(context.Context) (string, error)) (Playlist, []Track, error) {
+	return getPlaylistItems(ctx, provider, &accessToken{value: token, refresh: refresh}, extra, playlistID)
+}
+
+func getPlaylistItems(ctx context.Context, provider string, tok *accessToken, extra, playlistID string) (Playlist, []Track, error) {
 	var meta Playlist
 	meta.ID = playlistID
 	var tracks []Track
@@ -117,55 +137,22 @@ func GetPlaylistItems(ctx context.Context, provider, token, extra, playlistID st
 				DisplayName string `json:"display_name"`
 			}
 		}
-		if err := httpJSON(ctx, "GET", "https://api.spotify.com/v1/playlists/"+url.PathEscape(playlistID), token, nil, &pl); err != nil {
-			return meta, nil, err
+		if err := httpJSONAuth(ctx, "GET", spotifyAPIBase+"/playlists/"+url.PathEscape(playlistID), tok, nil, &pl); err != nil {
+			if httpStatus(err) != http.StatusForbidden {
+				return meta, nil, err
+			}
+		} else {
+			meta.Name, meta.Description, meta.Snapshot, meta.Owner = pl.Name, pl.Description, pl.SnapshotID, pl.Owner.DisplayName
+			if len(pl.Images) > 0 {
+				meta.Artwork = pl.Images[0].URL
+			}
 		}
-		meta.Name, meta.Description, meta.Snapshot, meta.Owner = pl.Name, pl.Description, pl.SnapshotID, pl.Owner.DisplayName
-		if len(pl.Images) > 0 {
-			meta.Artwork = pl.Images[0].URL
+		if meta.Name == "" {
+			meta.Name = playlistID
 		}
-		next := "https://api.spotify.com/v1/playlists/" + url.PathEscape(playlistID) + "/tracks?limit=100"
-		for next != "" {
-			var page struct {
-				Next  string
-				Items []struct {
-					Track struct {
-						ID, Name, ISRC string
-						DurationMS     int `json:"duration_ms"`
-						Explicit       bool
-						ExternalIDs    struct{ ISRC string }
-						Artists        []struct{ Name string }
-						Album          struct {
-							Name   string
-							Images []struct{ URL string }
-						}
-						ExternalURLs struct{ Spotify string }
-					}
-				}
-			}
-			if err := httpJSON(ctx, "GET", next, token, nil, &page); err != nil {
-				return meta, tracks, err
-			}
-			for _, it := range page.Items {
-				tr := it.Track
-				if tr.ID == "" || tr.Name == "" {
-					continue
-				}
-				isrc := tr.ExternalIDs.ISRC
-				if isrc == "" {
-					isrc = tr.ISRC
-				}
-				arts := []string{}
-				for _, a := range tr.Artists {
-					arts = append(arts, a.Name)
-				}
-				art := ""
-				if len(tr.Album.Images) > 0 {
-					art = tr.Album.Images[0].URL
-				}
-				tracks = append(tracks, Track{Provider: "spotify", ID: tr.ID, Title: tr.Name, Artists: arts, Album: tr.Album.Name, DurationMS: tr.DurationMS, ISRC: isrc, Artwork: art, Explicit: tr.Explicit, SourceURL: tr.ExternalURLs.Spotify})
-			}
-			next = page.Next
+		tracks, err := fetchSpotifyPlaylistItems(ctx, tok, playlistID)
+		if err != nil {
+			return meta, tracks, err
 		}
 		meta.TrackCount = len(tracks)
 		return meta, tracks, nil
@@ -173,7 +160,7 @@ func GetPlaylistItems(ctx context.Context, provider, token, extra, playlistID st
 		next := ""
 		for {
 			u := "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet,contentDetails&maxResults=50&playlistId=" + url.QueryEscape(playlistID)
-			if extra != "" && token == "" {
+			if extra != "" && tok.value == "" {
 				u += "&key=" + url.QueryEscape(extra)
 			}
 			if next != "" {
@@ -194,7 +181,7 @@ func GetPlaylistItems(ctx context.Context, provider, token, extra, playlistID st
 					}
 				}
 			}
-			bearer := token
+			bearer := tok.value
 			if err := httpJSON(ctx, "GET", u, bearer, nil, &page); err != nil {
 				return meta, tracks, err
 			}
@@ -231,7 +218,7 @@ func GetPlaylistItems(ctx context.Context, provider, token, extra, playlistID st
 		} else {
 			path = "resolve?url=" + url.QueryEscape("https://soundcloud.com/"+playlistID)
 		}
-		if err := httpJSON(ctx, "GET", "https://api.soundcloud.com/"+path, token, nil, &pl); err != nil {
+		if err := httpJSON(ctx, "GET", "https://api.soundcloud.com/"+path, tok.value, nil, &pl); err != nil {
 			return meta, nil, err
 		}
 		meta.Name = str(pl["title"])
@@ -263,10 +250,10 @@ func GetPlaylistItems(ctx context.Context, provider, token, extra, playlistID st
 			}
 		}
 		u := "https://api.music.apple.com/v1/me/library/playlists/" + url.PathEscape(playlistID) + "/tracks"
-		if strings.HasPrefix(playlistID, "pl.") && token == "" {
+		if strings.HasPrefix(playlistID, "pl.") && tok.value == "" {
 			u = "https://api.music.apple.com/v1/catalog/us/playlists/" + url.PathEscape(playlistID) + "/tracks"
 		}
-		if err := appleJSON(ctx, u, extra, token, &raw); err != nil {
+		if err := appleJSON(ctx, u, extra, tok.value, &raw); err != nil {
 			return meta, nil, err
 		}
 		for _, it := range raw.Data {

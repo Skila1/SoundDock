@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { queryClient } from "@/app/providers";
 import { api } from "@/lib/api";
 import { isLibraryTrackId } from "@/lib/utils";
 import { toast } from "sonner";
@@ -192,6 +193,13 @@ function idsOf(q: PlayerQueue | null | undefined) {
   return q?.items?.map((i) => i.track_id) || [];
 }
 
+function idsOfSavable(q: PlayerQueue | null | undefined) {
+  const keep = new Set(["ready", "restoring", "retrying", undefined, ""]);
+  return (q?.items || [])
+    .filter((i) => keep.has(i.media_state || ""))
+    .map((i) => i.track_id);
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v);
 }
@@ -218,7 +226,14 @@ function asQueueItem(raw: unknown): PlayerQueueItem | null {
   const position = numOrUndef(raw.position) ?? 0;
   const item: PlayerQueueItem = { id: id || track_id, position, track_id: track_id || id };
   if (typeof raw.origin === "string") item.origin = raw.origin;
-  if (raw.media_state === "ready" || raw.media_state === "restoring" || raw.media_state === "missing_external") {
+  if (
+    raw.media_state === "ready" ||
+    raw.media_state === "restoring" ||
+    raw.media_state === "retrying" ||
+    raw.media_state === "failed" ||
+    raw.media_state === "cancelled" ||
+    raw.media_state === "missing_external"
+  ) {
     item.media_state = raw.media_state;
   }
   if (typeof raw.intent_id === "string") item.intent_id = raw.intent_id;
@@ -330,6 +345,10 @@ function mediaBecameReady(
   return !isMediaReady(itemMediaState({ items: prevItems }, trackId)) && isMediaReady(itemMediaState(q, trackId));
 }
 
+function sameTrackId(a: string | null | undefined, b: string | null | undefined): boolean {
+  return String(a || "") === String(b || "");
+}
+
 function queueNeedsLocalBind(
   prevId: string | null | undefined,
   prevItems: PlayerQueueItem[] | undefined,
@@ -337,8 +356,21 @@ function queueNeedsLocalBind(
 ): boolean {
   const id = q.current_track_id;
   if (!id) return false;
-  if (id !== prevId) return true;
+  if (!sameTrackId(id, prevId)) return true;
   return mediaBecameReady(prevItems, q, id);
+}
+
+/** Add / reorder / similar: items changed, current track and transport did not. */
+function isQueueStructureUpdate(prev: PlayerQueue | null | undefined, next: PlayerQueue): boolean {
+  if (!prev) return false;
+  if (!sameTrackId(prev.current_track_id, next.current_track_id)) return false;
+  if ((prev.current_index ?? 0) !== (next.current_index ?? 0)) return false;
+  if ((prev.status || "") !== (next.status || "")) return false;
+  if ((prev.playback_instance_id || "") !== (next.playback_instance_id || "")) return false;
+  if (prev.output_pref && next.output_pref && prev.output_pref !== next.output_pref) return false;
+  if (prev.renderer_kind && next.renderer_kind && prev.renderer_kind !== next.renderer_kind) return false;
+  if (prev.renderer_id && next.renderer_id && prev.renderer_id !== next.renderer_id) return false;
+  return true;
 }
 
 function preloadUpcoming(q: { items?: PlayerQueueItem[]; current_index?: number } | null | undefined) {
@@ -503,7 +535,11 @@ function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kin
   const prevId = prev.queue?.current_track_id;
   const prevItems = prev.queue?.items;
   const view = ingestQueue(snap, opts);
+  const q = session.queue as PlayerQueue;
   const own = !usingDiscord() && tabOwnsBrowserLease(session.queue, tabId());
+  const structureOnly = opts?.kind !== "playhead" && isQueueStructureUpdate(prev.queue, q);
+  const mediaReady = mediaBecameReady(prevItems, q, q.current_track_id);
+  const keepTransport = structureOnly && !view.stopAudio && !mediaReady;
 
   if (opts?.kind === "playhead" && own) {
     usePlayer.setState({
@@ -512,11 +548,15 @@ function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kin
     });
   } else {
     const jump = Math.abs(view.playhead.positionMs - prev.position) > 1500;
-    const position = view.stopAudio || usingDiscord() || !own || jump ? view.playhead.positionMs : prev.position;
-    usePlayer.setState({ ...patchFromSession(view), position });
+    const position =
+      keepTransport || !(view.stopAudio || usingDiscord() || !own || jump) ? prev.position : view.playhead.positionMs;
+    usePlayer.setState({
+      ...patchFromSession(view, keepTransport ? { playing: prev.playing } : {}),
+      position
+    });
   }
 
-  if (view.stopAudio || shouldStopHtmlAudio(session.queue, tabId())) pauseAll();
+  if (!keepTransport && (view.stopAudio || shouldStopHtmlAudio(session.queue, tabId()))) pauseAll();
 
   if (opts?.kind === "playhead") {
     if (!own) {
@@ -526,13 +566,14 @@ function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kin
     return;
   }
 
-  const q = session.queue as PlayerQueue;
-  if (q.status === "paused" || q.status === "stopped" || view.stopAudio) {
+  const becamePaused =
+    (q.status === "paused" || q.status === "stopped") && (prev.queue?.status === "playing" || prev.playing);
+  if (!keepTransport && (view.stopAudio || becamePaused)) {
     pauseAll();
     usePlayer.setState({ playing: false });
   }
 
-  if (own && queueNeedsLocalBind(prevId, prevItems, q) && q.current_track_id) {
+  if (!keepTransport && own && queueNeedsLocalBind(prevId, prevItems, q) && q.current_track_id) {
     const id = q.current_track_id;
     void usePlayer
       .getState()
@@ -573,6 +614,12 @@ function ensureQueueSse(): QueueSseClient {
     onPresence: (event) => {
       usePlayer.setState({ listeners: mergePresence(usePlayer.getState().listeners, event) });
     },
+    onInvalidate: (event) => {
+      for (const key of event.keys || []) {
+        void queryClient.invalidateQueries({ queryKey: [key] });
+      }
+    },
+    onJobProgress: () => undefined,
     onAuthLost: () => {
       queueSse?.stop();
     }
@@ -657,6 +704,7 @@ async function startLocal(id: string, positionMsValue: number, shouldPlay: boole
   if (a.readyState >= 1) applyPos();
   else a.onloadedmetadata = () => applyPos();
   if (!shouldPlay) {
+    if (a.dataset.trackId === id && a.src && !a.paused) return true;
     try {
       a.pause();
     } catch {
@@ -709,22 +757,34 @@ async function appendToQueue(ids: string[], next?: boolean, hints?: QueueTrackHi
       return false;
     }
   }
+  const prev = usePlayer.getState();
+  lastQueueMutAt = Date.now();
   const q = await api.post<PlayerQueue>("/api/v1/me/queue/add", {
     track_ids: ids,
     tracks: hintPayload(ids, hints),
     next,
-    device_id: getDeviceId()
+    device_id: getDeviceId(),
+    command_id: newCommandId()
   });
   lastQueueMutAt = Date.now();
+  const applyAdded = (snap: PlayerQueue) => {
+    ingestQueue(snap);
+    const same = sameTrackId(session.queue.current_track_id, prev.queue?.current_track_id);
+    usePlayer.setState(
+      patchFromSession(session, {
+        playing: same ? prev.playing || session.queue.status === "playing" : session.queue.status === "playing",
+        ...(same ? { position: prev.position } : {})
+      })
+    );
+  };
   if (q && Array.isArray(q.items)) {
-    ingestQueue(q);
-    usePlayer.setState(patchFromSession(session));
+    applyAdded(q);
     return true;
   }
   try {
     const { queue: fresh, clock } = await fetchQueue();
-    ingestQueue(fresh, { clock });
-    usePlayer.setState(patchFromSession(session));
+    lastClock = clock;
+    applyAdded(fresh);
   } catch {
     /* keep local queue */
   }
@@ -1086,7 +1146,7 @@ export const usePlayer = create<PlayerStore>()(
           await get().control("index", { index });
           jumped = get().queue?.current_track_id === ids[index];
         } catch {
-          /* P1 may not have index yet — still jump locally, never PUT-replace */
+          /* P1 may not have index yet - still jump locally, never PUT-replace */
         }
         if (jumped) return;
         const latest = get().queue;
@@ -1107,7 +1167,10 @@ export const usePlayer = create<PlayerStore>()(
         await enqueueQueueOp(() => appendToQueue(ids, next, hints));
       },
       control: async (action, extra) => {
-        if (action === "pause") pauseAll();
+        if (action === "pause") {
+          pauseAll();
+          extra = { ...extra, position_ms: Math.round(get().position) };
+        }
         const localRemoved =
           action === "remove" || action === "clear" ? snapshotRemovedItems(action, extra, get().queue) : [];
         let q: PlayerQueue | null = null;
@@ -1273,14 +1336,19 @@ export const usePlayer = create<PlayerStore>()(
             }
             session = next;
             pauseAll();
-            set(patchFromSession(session, { output: "discord", playing: session.queue.status === "playing" || wasPlaying }));
             try {
-              const { queue: fresh, clock } = await fetchQueue();
-              ingestQueue(fresh, { clock });
-              set(patchFromSession(session, { output: "discord" }));
+              const switched = (await commands.control(
+                "output_pref",
+                { output_pref: "discord" },
+                getDeviceId()
+              )) as PlayerQueue | null;
+              if (switched) {
+                ingestQueue(switched);
+              }
             } catch {
-              /* keep bind result */
+              /* bind succeeded; worker claims when output_pref is discord */
             }
+            set(patchFromSession(session, { output: "discord", playing: session.queue.status === "playing" || wasPlaying }));
           } catch (e) {
             session = applyJoinFailure(session);
             setManualOutput("browser");
@@ -1413,7 +1481,7 @@ export const usePlayer = create<PlayerStore>()(
         await applySink(id);
       },
       saveQueueAsPlaylist: async (name) => {
-        const ids = idsOf(get().queue);
+        const ids = idsOfSavable(get().queue);
         if (!ids.length) return;
         const created = await api.post<{ id: string }>("/api/v1/playlists", { name: name || "Queue" });
         if (created?.id) await api.post(`/api/v1/playlists/${created.id}/tracks`, { track_ids: ids });

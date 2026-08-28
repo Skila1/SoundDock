@@ -63,6 +63,13 @@ func extraUUIDs(extra map[string]any, key string) []uuid.UUID {
 	switch t := raw.(type) {
 	case []uuid.UUID:
 		return t
+	case []string:
+		for _, s := range t {
+			if id, err := uuid.Parse(s); err == nil {
+				out = append(out, id)
+			}
+		}
+		return out
 	case []any:
 		for _, v := range t {
 			switch x := v.(type) {

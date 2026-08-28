@@ -131,6 +131,14 @@ describe("output switch", () => {
       if (String(url).includes("/discord/join")) {
         return { ok: true, guild_id: "g1", binding_revision: 4, session_id: "sess-1" };
       }
+      if (String(url).includes("queue/control")) {
+        return queue({
+          output_pref: "discord",
+          renderer_kind: "none",
+          binding_revision: 4,
+          playback_instance_id: "inst-1"
+        });
+      }
       throw new Error(`unexpected POST ${url}`);
     });
     vi.mocked(api.get).mockResolvedValue(

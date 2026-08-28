@@ -1,8 +1,12 @@
 import { NavLink, Outlet, Link, useLocation } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Globe, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/ui/empty";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
+import { hasPerm } from "@/lib/perms";
+import type { User } from "@/types/api";
 
 const tabs = [
   { to: "/library", label: "Tracks", end: true },
@@ -12,18 +16,26 @@ const tabs = [
 ];
 
 function AddActions() {
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
+  const canAdd = hasPerm(me.data, "library.upload");
+  const canImport = hasPerm(me.data, "library.import_url") || hasPerm(me.data, "library.upload");
+  if (!canAdd && !canImport) return null;
   return (
     <div className="flex flex-wrap gap-2">
-      <Button asChild size="sm" variant="secondary">
-        <Link to="/library/add">
-          <Upload className="h-4 w-4" /> Add music
-        </Link>
-      </Button>
-      <Button asChild size="sm" variant="secondary">
-        <Link to="/library/import">
-          <Globe className="h-4 w-4" /> Import
-        </Link>
-      </Button>
+      {canAdd && (
+        <Button asChild size="sm" variant="secondary">
+          <Link to="/library/add">
+            <Upload className="h-4 w-4" /> Add music
+          </Link>
+        </Button>
+      )}
+      {canImport && (
+        <Button asChild size="sm" variant="secondary">
+          <Link to="/library/import">
+            <Globe className="h-4 w-4" /> Import
+          </Link>
+        </Button>
+      )}
     </div>
   );
 }

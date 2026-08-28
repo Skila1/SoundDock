@@ -33,6 +33,7 @@ import (
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/mediabusy"
+	"github.com/sounddock/sounddock/internal/oplog"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/retention"
 	"github.com/sounddock/sounddock/internal/scapex"
@@ -107,6 +108,13 @@ func (s *Server) Router() http.Handler {
 		r.Get("/openapi.json", s.openapi)
 		r.Get("/setup/status", s.setupStatus)
 		r.With(s.limit(ratelimit.ClassAuth)).Post("/setup", s.setup)
+		r.Group(func(r chi.Router) {
+			r.Use(s.requireSetupNeeded)
+			r.Get("/setup/backups/settings", s.adminBackupSettingsGet)
+			r.Put("/setup/backups/settings", s.adminBackupSettingsPut)
+			r.Get("/setup/backups/remote", s.adminBackupRemote)
+			r.Post("/setup/backups/import-remote", s.adminBackupImportRemote)
+		})
 		r.With(s.limit(ratelimit.ClassAuth)).Post("/auth/login", s.login)
 		r.Get("/auth/discord", s.discordLogin)
 		r.Get("/auth/discord/callback", s.discordLoginCallback)
@@ -124,8 +132,6 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/me/sessions/{id}", s.deleteSession)
 			r.Get("/me/export", s.exportMe)
 			r.Get("/me/identities", s.identities)
-			r.Post("/me/identities/discord", s.startDiscordLink)
-			r.Post("/link/discord", s.confirmDiscordLink)
 			r.Get("/me/tokens", s.listTokens)
 			r.Post("/me/tokens", s.createToken)
 			r.Delete("/me/tokens/{id}", s.revokeToken)
@@ -246,7 +252,7 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/uploads/{id}", s.patchUpload)
 			r.Post("/uploads/{id}/complete", s.completeUpload)
 
-			r.Get("/duplicates", s.duplicates)
+			r.With(s.requireAdmin).Get("/duplicates", s.duplicates)
 
 			r.Group(func(r chi.Router) {
 				r.Use(s.requireAdmin)
@@ -279,6 +285,8 @@ func (s *Server) Router() http.Handler {
 					r.Post("/libraries/{id}/grants", s.adminLibraryGrantAdd)
 					r.Patch("/libraries/{id}/grants/{grantID}", s.adminLibraryGrantPatch)
 					r.Delete("/libraries/{id}/grants/{grantID}", s.adminLibraryGrantDelete)
+					r.Get("/library-grants-strict", s.adminLibraryGrantsStrictGet)
+					r.Put("/library-grants-strict", s.adminLibraryGrantsStrictPut)
 					r.Get("/diagnostics", s.adminDiagnostics)
 					r.Get("/demo", s.adminDemoGet)
 					r.Post("/demo", s.adminDemoSeed)
@@ -298,6 +306,8 @@ func (s *Server) Router() http.Handler {
 					r.Delete("/users/{id}", s.adminDeleteUser)
 					r.Get("/storage", s.adminStorage)
 					r.Post("/storage", s.adminCreateStorage)
+					r.Patch("/storage/{id}", s.adminPatchStorage)
+					r.Delete("/storage/{id}", s.adminDeleteStorage)
 					r.Post("/libraries", s.adminCreateLibrary)
 					r.Post("/libraries/{id}/scan", s.adminScan)
 					r.Post("/libraries/{id}/migrate", s.adminMigrate)
@@ -320,6 +330,15 @@ func (s *Server) Router() http.Handler {
 					r.Post("/roles/sync-discord", s.adminSyncDiscordRoles)
 					r.Get("/transcode", s.adminTranscode)
 					r.Delete("/transcode/cache", s.adminClearCache)
+					r.Get("/backups/settings", s.adminBackupSettingsGet)
+					r.Put("/backups/settings", s.adminBackupSettingsPut)
+					r.Post("/backups/passphrase", s.adminBackupPassphrase)
+					r.Get("/backups/reminder", s.adminBackupReminderGet)
+					r.Post("/backups/reminder/dismiss", s.adminBackupReminderDismiss)
+					r.Get("/backups/restore-requirements", s.adminBackupRequirements)
+					r.Post("/backups/restore-requirements/dismiss", s.adminBackupRequirementsDismiss)
+					r.Get("/backups/remote", s.adminBackupRemote)
+					r.Post("/backups/import-remote", s.adminBackupImportRemote)
 					r.Get("/backups", s.adminBackups)
 					r.Post("/backups", s.adminBackup)
 					r.Get("/backups/{id}/preview", s.adminBackupPreview)
@@ -382,7 +401,26 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, code, msg string) {
+	if status >= 500 {
+		writeInternal(w, status, code, msg)
+		return
+	}
 	writeJSON(w, status, map[string]any{"code": code, "message": msg})
+}
+
+func writeInternal(w http.ResponseWriter, status int, code, msg string) {
+	writeJSON(w, status, map[string]any{"code": code, "message": sanitizeInternal(msg)})
+}
+
+func sanitizeInternal(msg string) string {
+	s := oplog.Redact(msg)
+	low := strings.ToLower(s)
+	for _, needle := range []string{"pq:", "sqlstate", "password", "secret", "master_key", "postgres://"} {
+		if strings.Contains(low, needle) {
+			return "An internal error occurred"
+		}
+	}
+	return s
 }
 
 func (s *Server) proxyHeaders(next http.Handler) http.Handler {
@@ -522,6 +560,9 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				writeErr(w, 401, "unauthorized", "invalid token")
 				return
 			}
+			if rejectIfDisabled(w, u) {
+				return
+			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, u)))
 			return
 		}
@@ -536,6 +577,14 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, u)))
 	})
+}
+
+func rejectIfDisabled(w http.ResponseWriter, u *auth.User) bool {
+	if u != nil && u.Disabled {
+		writeErr(w, 403, "disabled", "account disabled")
+		return true
+	}
+	return false
 }
 
 func isAPIToken(tok string) bool {
@@ -621,6 +670,30 @@ func (s *Server) libraryGrantsStrict(ctx context.Context) bool {
 	var on bool
 	s.settingJSON(ctx, settingLibraryGrantsStrict, &on)
 	return on
+}
+
+func (s *Server) adminLibraryGrantsStrictGet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]bool{"library_grants_strict": s.libraryGrantsStrict(r.Context())})
+}
+
+func (s *Server) adminLibraryGrantsStrictPut(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		LibraryGrantsStrict *bool `json:"library_grants_strict"`
+	}
+	if err := decodeJSON(r, &body); err != nil || body.LibraryGrantsStrict == nil {
+		writeErr(w, 400, "invalid", "library_grants_strict required")
+		return
+	}
+	if err := s.putSetting(r.Context(), settingLibraryGrantsStrict, *body.LibraryGrantsStrict); err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	if s.Audit != nil {
+		s.Audit.Event(r.Context(), &currentUser(r).ID, "library_grants_strict.update", "", r.RemoteAddr, map[string]any{
+			"library_grants_strict": *body.LibraryGrantsStrict,
+		})
+	}
+	writeJSON(w, 200, map[string]bool{"library_grants_strict": *body.LibraryGrantsStrict})
 }
 
 // grantActionsAllow reports whether a grant row covers want.
@@ -715,20 +788,50 @@ func (s *Server) userHasLibraryAction(ctx context.Context, u *auth.User, libID u
 }
 
 func (s *Server) requireLibraryWrite(w http.ResponseWriter, r *http.Request, libID uuid.UUID) bool {
+	return s.requireLibraryAction(w, r, libID, "write", "not found")
+}
+
+// denyLibraryAction writes 404 for catalogue read (no existence leak) and
+// 403 library_grant for stream/write of a hidden resource.
+func denyLibraryAction(w http.ResponseWriter, action, notFoundMsg string) {
+	if action == "read" {
+		writeErr(w, http.StatusNotFound, "not_found", notFoundMsg)
+		return
+	}
+	msg := "library write not granted"
+	if action == "stream" {
+		msg = "library stream not granted"
+	}
+	writeErr(w, http.StatusForbidden, "library_grant", msg)
+}
+
+func (s *Server) requireLibraryAction(w http.ResponseWriter, r *http.Request, libID uuid.UUID, action, notFoundMsg string) bool {
 	u := currentUser(r)
 	if u != nil && u.IsAdmin {
 		return true
 	}
-	if !s.userHasLibraryAction(r.Context(), u, libID, "write") {
-		writeErr(w, http.StatusForbidden, "library_grant", "library write not granted")
+	if libID == uuid.Nil || !s.userHasLibraryAction(r.Context(), u, libID, action) {
+		denyLibraryAction(w, action, notFoundMsg)
 		return false
 	}
 	return true
 }
 
 func (s *Server) requireTrackLibraryWrite(w http.ResponseWriter, r *http.Request, trackID uuid.UUID) bool {
-	if trackID == uuid.Nil || s.Pool == nil {
+	return s.requireTrackLibrary(w, r, trackID, "write")
+}
+
+func (s *Server) requireTrackLibrary(w http.ResponseWriter, r *http.Request, trackID uuid.UUID, action string) bool {
+	if trackID == uuid.Nil {
 		writeErr(w, 400, "invalid", "track id")
+		return false
+	}
+	if s.Pool == nil {
+		if action == "read" {
+			writeErr(w, http.StatusNotFound, "not_found", "track not found")
+			return false
+		}
+		writeErr(w, http.StatusServiceUnavailable, "unavailable", "database unavailable")
 		return false
 	}
 	var libID uuid.UUID
@@ -736,7 +839,122 @@ func (s *Server) requireTrackLibraryWrite(w http.ResponseWriter, r *http.Request
 		writeErr(w, 404, "not_found", "track not found")
 		return false
 	}
-	return s.requireLibraryWrite(w, r, libID)
+	return s.requireLibraryAction(w, r, libID, action, "track not found")
+}
+
+func (s *Server) requireAlbumLibrary(w http.ResponseWriter, r *http.Request, albumID uuid.UUID, action string) bool {
+	if albumID == uuid.Nil {
+		writeErr(w, 400, "invalid", "album id")
+		return false
+	}
+	if s.Pool == nil {
+		if action == "read" {
+			writeErr(w, http.StatusNotFound, "not_found", "album not found")
+			return false
+		}
+		writeErr(w, http.StatusServiceUnavailable, "unavailable", "database unavailable")
+		return false
+	}
+	var libID *uuid.UUID
+	if err := s.Pool.QueryRow(r.Context(), `SELECT library_id FROM albums WHERE id=$1`, albumID).Scan(&libID); err != nil {
+		writeErr(w, 404, "not_found", "album not found")
+		return false
+	}
+	id := uuid.Nil
+	if libID != nil {
+		id = *libID
+	}
+	return s.requireLibraryAction(w, r, id, action, "album not found")
+}
+
+func (s *Server) requireArtistLibrary(w http.ResponseWriter, r *http.Request, artistID uuid.UUID, action string) bool {
+	if artistID == uuid.Nil {
+		writeErr(w, 400, "invalid", "artist id")
+		return false
+	}
+	if s.Pool == nil {
+		if action == "read" {
+			writeErr(w, http.StatusNotFound, "not_found", "artist not found")
+			return false
+		}
+		writeErr(w, http.StatusServiceUnavailable, "unavailable", "database unavailable")
+		return false
+	}
+	var name string
+	if err := s.Pool.QueryRow(r.Context(), `SELECT name FROM artists WHERE id=$1`, artistID).Scan(&name); err != nil {
+		writeErr(w, 404, "not_found", "artist not found")
+		return false
+	}
+	u := currentUser(r)
+	if u != nil && u.IsAdmin {
+		return true
+	}
+	libs := s.artistLibraryIDs(r.Context(), artistID)
+	if action == "read" {
+		for _, id := range libs {
+			if s.userHasLibraryAction(r.Context(), u, id, "read") {
+				return true
+			}
+		}
+		writeErr(w, 404, "not_found", "artist not found")
+		return false
+	}
+	if len(libs) == 0 {
+		denyLibraryAction(w, action, "artist not found")
+		return false
+	}
+	for _, id := range libs {
+		if !s.userHasLibraryAction(r.Context(), u, id, action) {
+			denyLibraryAction(w, action, "artist not found")
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) artistLibraryIDs(ctx context.Context, artistID uuid.UUID) []uuid.UUID {
+	if s == nil || s.Pool == nil || artistID == uuid.Nil {
+		return nil
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT DISTINCT lib FROM (
+			SELECT t.library_id AS lib
+			FROM track_artists ta
+			JOIN tracks t ON t.id = ta.track_id
+			WHERE ta.artist_id = $1 AND t.library_id IS NOT NULL
+			UNION
+			SELECT a.library_id AS lib
+			FROM album_artists aa
+			JOIN albums a ON a.id = aa.album_id
+			WHERE aa.artist_id = $1 AND a.library_id IS NOT NULL
+		) x`, artistID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func (s *Server) userCanStreamTrack(ctx context.Context, u *auth.User, trackID uuid.UUID) bool {
+	if u != nil && u.IsAdmin {
+		return true
+	}
+	if s == nil || s.Pool == nil || trackID == uuid.Nil {
+		return false
+	}
+	var libID uuid.UUID
+	if err := s.Pool.QueryRow(ctx, `SELECT library_id FROM tracks WHERE id=$1`, trackID).Scan(&libID); err != nil {
+		return false
+	}
+	return s.userHasLibraryAction(ctx, u, libID, "stream")
 }
 
 func (s *Server) ProviderFor(ctx context.Context, lib uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error) {

@@ -69,14 +69,14 @@ func (e *Engine) dropTracksFromSession(ctx context.Context, sid uuid.UUID, track
 	if len(ids) == 0 {
 		if _, err := tx.Exec(ctx, `
 			UPDATE playback_sessions
-			SET current_index=0, current_track_id=NULL, status='stopped', position_ms=0, updated_at=now()
+			SET `+sqlEmptySession+`, updated_at=now()
 			WHERE id=$1`, sid); err != nil {
 			return err
 		}
 		if err := bumpRevision(ctx, tx, sid); err != nil {
 			return err
 		}
-		return tx.Commit(ctx)
+		return e.commitSession(ctx, tx, sid, "session.state")
 	}
 	keep := uuid.Nil
 	if curTrack != nil {
@@ -107,25 +107,35 @@ func (e *Engine) dropTracksFromSession(ctx context.Context, sid uuid.UUID, track
 			if err == pgx.ErrNoRows {
 				if _, err := tx.Exec(ctx, `
 					UPDATE playback_sessions
-					SET current_index=0, current_track_id=NULL, status='stopped', position_ms=0, updated_at=now()
+					SET `+sqlEmptySession+`, updated_at=now()
 					WHERE id=$1`, sid); err != nil {
 					return err
 				}
 				if err := bumpRevision(ctx, tx, sid); err != nil {
 					return err
 				}
-				return tx.Commit(ctx)
+				return e.commitSession(ctx, tx, sid, "session.state")
 			}
 			return err
 		}
 	}
-	if _, err := tx.Exec(ctx, `UPDATE playback_sessions SET current_index=$2, current_track_id=$3, updated_at=now() WHERE id=$1`, sid, newIdx, newTrack); err != nil {
+	if keep == uuid.Nil {
+		if _, err := tx.Exec(ctx, `
+			UPDATE playback_sessions
+			SET current_index=$2, current_track_id=$3,
+				`+sqlNewInstance+`,
+				duration_ms=COALESCE((SELECT t.duration_ms FROM tracks t WHERE t.id=$3), 0),
+				updated_at=now()
+			WHERE id=$1`, sid, newIdx, newTrack); err != nil {
+			return err
+		}
+	} else if _, err := tx.Exec(ctx, `UPDATE playback_sessions SET current_index=$2, current_track_id=$3, updated_at=now() WHERE id=$1`, sid, newIdx, newTrack); err != nil {
 		return err
 	}
 	if err := bumpRevision(ctx, tx, sid); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return e.commitSession(ctx, tx, sid, "session.state")
 }
 
 func listQueueItemIDs(ctx context.Context, q db, sid uuid.UUID) ([]uuid.UUID, error) {

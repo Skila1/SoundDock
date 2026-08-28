@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/radio"
+	"github.com/sounddock/sounddock/internal/scapex"
 )
 
 type playlistACL struct {
@@ -251,7 +252,19 @@ func (s *Server) updatePlaylist(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deletePlaylist(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	rows, _ := s.Pool.Query(r.Context(), `SELECT track_id FROM playlist_entries WHERE playlist_id=$1`, id)
+	var tids []uuid.UUID
+	if rows != nil {
+		for rows.Next() {
+			var tid uuid.UUID
+			if rows.Scan(&tid) == nil {
+				tids = append(tids, tid)
+			}
+		}
+		rows.Close()
+	}
 	_, _ = s.Pool.Exec(r.Context(), `DELETE FROM playlists WHERE id=$1 AND user_id=$2`, id, currentUser(r).ID)
+	scapex.GCUnreferencedStubs(r.Context(), s.Pool, s.Play, tids)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -278,7 +291,12 @@ func (s *Server) removePlaylistTrack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	eid, _ := uuid.Parse(chi.URLParam(r, "entryID"))
+	var tid uuid.UUID
+	_ = s.Pool.QueryRow(r.Context(), `SELECT track_id FROM playlist_entries WHERE playlist_id=$1 AND id=$2`, pid, eid).Scan(&tid)
 	_, _ = s.Pool.Exec(r.Context(), `DELETE FROM playlist_entries WHERE playlist_id=$1 AND id=$2`, pid, eid)
+	if tid != uuid.Nil {
+		scapex.GCUnreferencedStubs(r.Context(), s.Pool, s.Play, []uuid.UUID{tid})
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

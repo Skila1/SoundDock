@@ -144,18 +144,41 @@ export function SetupPage({ onDone, discordConfigured }: { onDone: () => void; d
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [localErr, setLocalErr] = useState("");
+  const [mode, setMode] = useState<"create" | "restore">("create");
+  const [r2, setR2] = useState({ endpoint: "", bucket: "", access_key: "", secret_key: "", prefix: "", region: "auto" });
+  const [remote, setRemote] = useState<{ key: string; name?: string }[]>([]);
+  const [passphrase, setPassphrase] = useState("");
+  const [reqItems, setReqItems] = useState<{ key: string; class: string; note?: string; recovered?: boolean }[]>([]);
   return (
     <div className="flex min-h-dvh items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-surface-1 p-8 shadow-card">
+      <div className="w-full max-w-md space-y-4 rounded-2xl border border-border bg-surface-1 p-8 shadow-card">
         <div className="mb-2 text-center">
           <div className="mx-auto mb-4 flex w-max items-center justify-center rounded-xl bg-black p-3">
             <Logo className="h-28 w-auto" />
           </div>
           <h1 className="text-xl font-semibold">First setup</h1>
-          <p className="text-sm text-muted">Create a local administrator. You can enable Discord later under Admin. The first Discord sign-in links to this administrator.</p>
+          <p className="text-sm text-muted">
+            {mode === "create"
+              ? "Create a local administrator. You can enable Discord later under Admin. The first Discord sign-in links to this administrator."
+              : "Restore from an encrypted R2 archive. You need the recovery passphrase. This host still needs its own URL and NAS mounts."}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button type="button" size="sm" variant={mode === "create" ? "default" : "secondary"} className="flex-1" onClick={() => setMode("create")}>Create admin</Button>
+          <Button type="button" size="sm" variant={mode === "restore" ? "default" : "secondary"} className="flex-1" onClick={() => setMode("restore")}>Restore backup</Button>
         </div>
         {localErr && <p className="rounded-lg bg-destructive/15 px-3 py-2 text-sm text-destructive">{localErr}</p>}
-        {discordConfigured && (
+        {reqItems.length > 0 && (
+          <div className="rounded-lg border border-border p-3 text-left text-sm">
+            <div className="mb-2 font-medium">Restore requirements</div>
+            <ul className="space-y-1 text-xs text-muted">
+              {reqItems.map((it) => (
+                <li key={it.key}>{it.key}: {it.class}{it.note ? ` (${it.note})` : ""}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {mode === "create" && discordConfigured && (
           <a
             href="/api/v1/auth/discord"
             className="flex h-10 w-full items-center justify-center rounded-full bg-[#5865F2] text-sm font-semibold text-white hover:opacity-90"
@@ -163,6 +186,7 @@ export function SetupPage({ onDone, discordConfigured }: { onDone: () => void; d
             Continue with Discord
           </a>
         )}
+        {mode === "create" ? (
         <form
           className="space-y-3"
           onSubmit={async (e) => {
@@ -183,6 +207,52 @@ export function SetupPage({ onDone, discordConfigured }: { onDone: () => void; d
           <Field label="Password"><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required /></Field>
           <Button type="submit" className="w-full" disabled={busy}>{busy ? "Creating..." : "Create admin"}</Button>
         </form>
+        ) : (
+        <div className="space-y-3">
+          <Field label="R2 endpoint"><Input value={r2.endpoint} onChange={(e) => setR2({ ...r2, endpoint: e.target.value })} /></Field>
+          <Field label="Bucket"><Input value={r2.bucket} onChange={(e) => setR2({ ...r2, bucket: e.target.value })} /></Field>
+          <Field label="Access key"><Input value={r2.access_key} onChange={(e) => setR2({ ...r2, access_key: e.target.value })} /></Field>
+          <Field label="Secret key"><Input type="password" value={r2.secret_key} onChange={(e) => setR2({ ...r2, secret_key: e.target.value })} /></Field>
+          <Field label="Prefix"><Input value={r2.prefix} onChange={(e) => setR2({ ...r2, prefix: e.target.value })} /></Field>
+          <Button type="button" className="w-full" disabled={busy} onClick={async () => {
+            setBusy(true);
+            setLocalErr("");
+            try {
+              await api.put("/api/v1/setup/backups/settings", { ...r2, r2_enabled: true, use_ssl: true, local_enabled: true, include_media: true });
+              const list = await api.get<{ key: string; name?: string }[]>("/api/v1/setup/backups/remote");
+              setRemote(list || []);
+            } catch (e: any) {
+              setLocalErr(e?.message || "Could not list R2 archives.");
+            } finally {
+              setBusy(false);
+            }
+          }}>Save and list archives</Button>
+          <Field label="Recovery passphrase"><Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} autoComplete="off" /></Field>
+          <ul className="space-y-2">
+            {remote.map((o) => (
+              <li key={o.key} className="flex items-center justify-between gap-2 text-sm">
+                <span className="truncate">{o.name || o.key}</span>
+                <Button size="sm" disabled={busy} onClick={async () => {
+                  if (!window.confirm("Restore this archive onto this empty host? This wipes the current database.")) return;
+                  setBusy(true);
+                  setLocalErr("");
+                  try {
+                    const out = await api.post<{ requirements?: { items?: typeof reqItems } }>("/api/v1/setup/backups/import-remote", {
+                      key: o.key, restore: true, confirm: true, passphrase
+                    });
+                    setReqItems(out?.requirements?.items || []);
+                    onDone();
+                  } catch (e: any) {
+                    setLocalErr(e?.message || "Restore failed.");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}>Restore</Button>
+              </li>
+            ))}
+          </ul>
+        </div>
+        )}
         <div className="flex justify-center gap-2 pt-1">
           <HelpButton />
           <DiscordServerButton variant="ghost" />

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/auth"
 	"github.com/sounddock/sounddock/internal/listen"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/scapex"
@@ -243,7 +244,7 @@ func (s *Server) writeAcquireErr(w http.ResponseWriter, err error) bool {
 	if err == nil {
 		return false
 	}
-	if strings.Contains(err.Error(), "library write not granted") {
+	if strings.Contains(err.Error(), "library write not granted") || strings.Contains(err.Error(), "library stream not granted") {
 		writeErr(w, 403, "library_grant", err.Error())
 		return true
 	}
@@ -261,6 +262,7 @@ func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 		ExpectedBindingRevision int64            `json:"expected_binding_revision"`
 		RendererID              string           `json:"renderer_id"`
 		RendererGeneration      int64            `json:"renderer_generation"`
+		CommandID               string           `json:"command_id"`
 	}
 	_ = decodeJSON(r, &body)
 	sid, err := s.playSession(r, bindExtra(nil, body.ExpectedBindingRevision, body.RendererID, body.RendererGeneration), body.Target, body.DeviceID)
@@ -272,9 +274,22 @@ func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 	if s.writeAcquireErr(w, err) {
 		return
 	}
-	if err := s.Play.Add(s.withQueueRequester(r), sid, ids, body.Next); err != nil {
-		writeErr(w, 400, "queue", err.Error())
-		return
+	cmdID := strings.TrimSpace(body.CommandID)
+	if cmdID == "" {
+		if err := s.Play.Add(s.withQueueRequester(r), sid, ids, body.Next); err != nil {
+			writeErr(w, 400, "queue", err.Error())
+			return
+		}
+	} else {
+		extra := map[string]any{"track_ids": ids, "next": body.Next, "command_id": cmdID}
+		if err := s.Play.Control(s.withQueueRequester(r), sid, "add", extra); err != nil {
+			if errors.Is(err, playback.ErrCommandConflict) {
+				writeErr(w, 409, "command_conflict", err.Error())
+				return
+			}
+			writeErr(w, 400, "queue", err.Error())
+			return
+		}
 	}
 	q, _ := s.Play.Get(r.Context(), sid)
 	s.respondQueueMedia(w, r, sid, q, "state")
@@ -868,6 +883,9 @@ func (s *Server) withAcquirePolicy(ctx context.Context) context.Context {
 // placeholder is inserted and 200 is returned instead of 502 after a long fetch.
 func (s *Server) resolvePlayTracks(ctx context.Context, refs []string) ([]uuid.UUID, error) {
 	tracks, youtube := scapex.ParseTrackRefs(refs)
+	if err := s.requireStreamGrantOnTracks(ctx, tracks); err != nil {
+		return nil, err
+	}
 	var out []uuid.UUID
 	if len(tracks) > 0 {
 		if s.ScapeX != nil && !s.jobsAcquireReady() {
@@ -935,18 +953,61 @@ func (s *Server) ensureRestoringPlaceholders(ctx context.Context, youtube []stri
 	return out, nil
 }
 
+func (s *Server) requireStreamGrantOnTracks(ctx context.Context, ids []uuid.UUID) error {
+	if s == nil || s.Pool == nil || len(ids) == 0 {
+		return nil
+	}
+	u, _ := ctx.Value(userKey).(*auth.User)
+	if u == nil || u.IsAdmin {
+		return nil
+	}
+	rows, err := s.Pool.Query(ctx, `SELECT id, library_id FROM tracks WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, libID uuid.UUID
+		if err := rows.Scan(&id, &libID); err != nil {
+			continue
+		}
+		if !s.userHasLibraryAction(ctx, u, libID, "stream") {
+			return errString("library stream not granted")
+		}
+	}
+	return rows.Err()
+}
+
 func (s *Server) writableAcquireLibrary(ctx context.Context) (uuid.UUID, error) {
-	var id uuid.UUID
-	err := s.Pool.QueryRow(ctx, `
+	u, _ := ctx.Value(userKey).(*auth.User)
+	var allowed []uuid.UUID
+	if u != nil && !u.IsAdmin {
+		allowed = s.libraryIDsFor(ctx, u, "write")
+		if len(allowed) == 0 {
+			return uuid.Nil, errString("library write not granted")
+		}
+	}
+	q := `
 		SELECT l.id
 		FROM libraries l
 		JOIN storage_providers sp ON sp.id = l.storage_provider_id
-		WHERE l.read_only = false AND sp.type IN ('managed', 'local')
+		WHERE l.read_only = false AND sp.type IN ('managed', 'local')`
+	args := []any{}
+	if len(allowed) > 0 {
+		q += ` AND l.id = ANY($1)`
+		args = append(args, allowed)
+	}
+	q += `
 		ORDER BY CASE WHEN l.is_default THEN 0 ELSE 1 END,
 		         CASE WHEN lower(l.name) = 'music' THEN 0 ELSE 1 END,
 		         l.created_at
-		LIMIT 1`).Scan(&id)
+		LIMIT 1`
+	var id uuid.UUID
+	err := s.Pool.QueryRow(ctx, q, args...).Scan(&id)
 	if err != nil {
+		if u != nil && !u.IsAdmin {
+			return uuid.Nil, errString("library write not granted")
+		}
 		return uuid.Nil, errString("no writable library for acquisition")
 	}
 	return id, nil

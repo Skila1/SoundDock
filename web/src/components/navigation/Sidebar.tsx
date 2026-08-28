@@ -1,10 +1,11 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { Home, Library, Link2, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Search, Shield } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/stores/ui";
+import { adminNavGroups, adminPath } from "@/features/admin/adminNav";
 import type { User } from "@/types/api";
 
 const primary = [
@@ -25,7 +26,9 @@ const listening = [
 
 export function Sidebar({ user, collapsed, className, collapsible = false }: { user: User; collapsed?: boolean; className?: string; collapsible?: boolean }) {
   const ui = useUi();
+  const loc = useLocation();
   const compact = collapsed ?? ui.navCollapsed;
+  const adminOpen = !!user.is_admin && loc.pathname.startsWith("/admin");
   return (
     <aside className={cn("h-full min-h-0 flex-col overflow-hidden border-r border-border bg-surface-1/80", className || "hidden md:flex", compact ? "w-[72px]" : "w-[232px]")}>
       <div className="flex items-center bg-black">
@@ -41,55 +44,97 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
         )}
       </div>
       <nav className="flex-1 space-y-0.5 overflow-auto px-2 pt-2">
-        {primary.map((it) => (
-          <NavLink
-            key={it.to}
-            to={it.to}
-            end={it.end}
-            title={compact ? it.label : undefined}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
-                compact && "justify-center px-0",
-                isActive && "bg-surface-2 text-foreground"
-              )
-            }
-          >
-            <it.icon className="h-4 w-4 shrink-0" />
-            {!compact && it.label}
-          </NavLink>
-        ))}
-        {!compact && (
-          <div className="pt-4">
-            <div className="px-3 pb-1 text-[11px] text-subtle">Listening</div>
-            {listening.map((it) => (
+        {adminOpen ? (
+          <>
+            <NavLink
+              to="/"
+              title={compact ? "Back to app" : undefined}
+              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground"
+            >
+              <Home className="h-4 w-4 shrink-0" />
+              {!compact && "Back to app"}
+            </NavLink>
+            {adminNavGroups.map((g) => (
+              <div key={g.id} className={compact ? "pt-2" : "pt-3"}>
+                {!compact && (
+                  <div className="px-3 pb-1">
+                    <div className="text-[11px] font-semibold uppercase tracking-wide text-accent">{g.label}</div>
+                    <p className="text-[11px] text-accent/70">{g.hint}</p>
+                  </div>
+                )}
+                {g.links.map(([to, label]) => (
+                  <NavLink
+                    key={to}
+                    to={adminPath(to)}
+                    end={to === "."}
+                    title={compact ? label : undefined}
+                    className={({ isActive }) =>
+                      cn(
+                        "flex items-center gap-3 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
+                        compact && "justify-center px-0 text-xs",
+                        isActive && "bg-surface-2 text-foreground"
+                      )
+                    }
+                  >
+                    {compact ? label.slice(0, 2) : label}
+                  </NavLink>
+                ))}
+              </div>
+            ))}
+          </>
+        ) : (
+          <>
+            {primary.map((it) => (
               <NavLink
                 key={it.to}
                 to={it.to}
+                end={it.end}
+                title={compact ? it.label : undefined}
                 className={({ isActive }) =>
-                  cn("block rounded-lg px-3 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-foreground", isActive && "bg-surface-2 text-foreground")
+                  cn(
+                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
+                    compact && "justify-center px-0",
+                    isActive && "bg-surface-2 text-foreground"
+                  )
                 }
               >
-                {it.label}
+                <it.icon className="h-4 w-4 shrink-0" />
+                {!compact && it.label}
               </NavLink>
             ))}
-          </div>
-        )}
-        {user.is_admin && (
-          <NavLink
-            to="/admin"
-            title={compact ? "Administration" : undefined}
-            className={({ isActive }) =>
-              cn(
-                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
-                compact ? "justify-center px-0" : "mt-4",
-                isActive && "bg-surface-2 text-foreground"
-              )
-            }
-          >
-            <Shield className="h-4 w-4 shrink-0" />
-            {!compact && "Administration"}
-          </NavLink>
+            {!compact && (
+              <div className="pt-4">
+                <div className="px-3 pb-1 text-[11px] text-subtle">Listening</div>
+                {listening.map((it) => (
+                  <NavLink
+                    key={it.to}
+                    to={it.to}
+                    className={({ isActive }) =>
+                      cn("block rounded-lg px-3 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-foreground", isActive && "bg-surface-2 text-foreground")
+                    }
+                  >
+                    {it.label}
+                  </NavLink>
+                ))}
+              </div>
+            )}
+            {user.is_admin && (
+              <NavLink
+                to="/admin"
+                title={compact ? "Administration" : undefined}
+                className={({ isActive }) =>
+                  cn(
+                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
+                    compact ? "justify-center px-0" : "mt-4",
+                    isActive && "bg-surface-2 text-foreground"
+                  )
+                }
+              >
+                <Shield className="h-4 w-4 shrink-0" />
+                {!compact && "Administration"}
+              </NavLink>
+            )}
+          </>
         )}
       </nav>
       {collapsible && compact && (

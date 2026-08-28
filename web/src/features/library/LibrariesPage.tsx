@@ -82,7 +82,7 @@ export function LibrariesPage({ user }: { user: User }) {
             setMigrateFrom(null);
             qc.invalidateQueries({ queryKey: ["libraries"] });
           }}>
-            <p className="text-sm text-muted">Files are copied into the destination library. A destination is required — nothing is copied without one.</p>
+            <p className="text-sm text-muted">Files are copied into the destination library. A destination is required - nothing is copied without one.</p>
             <Field label="Destination library">
               <Select value={migrateDest} onValueChange={setMigrateDest} options={destOptions} placeholder="Select destination" />
             </Field>

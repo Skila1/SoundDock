@@ -269,7 +269,7 @@ func (e *Engine) Replace(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID,
 	if err := bumpRevision(ctx, tx, sid); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return e.commitSession(ctx, tx, sid, "session.state")
 }
 
 func replaceQueueTx(ctx context.Context, tx db, sid uuid.UUID, tracks []uuid.UUID, start int) error {
@@ -292,8 +292,7 @@ func replaceQueueTx(ctx context.Context, tx db, sid uuid.UUID, tracks []uuid.UUI
 	if len(tracks) == 0 {
 		_, err = tx.Exec(ctx, `
 			UPDATE playback_sessions
-			SET current_index=0, current_track_id=NULL, status='stopped', position_ms=0,
-				playback_instance_id=NULL, playhead_sequence=0, duration_ms=0, updated_at=now()
+			SET `+sqlEmptySession+`, updated_at=now()
 			WHERE id=$1`, sid)
 	} else {
 		_, err = tx.Exec(ctx, `
@@ -319,6 +318,19 @@ func (e *Engine) Add(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, nex
 	if err := lockSessionRow(ctx, tx, sid); err != nil {
 		return err
 	}
+	if err := addTracksTx(ctx, tx, sid, tracks, next); err != nil {
+		return err
+	}
+	if err := bumpRevision(ctx, tx, sid); err != nil {
+		return err
+	}
+	return e.commitSession(ctx, tx, sid, "session.state")
+}
+
+func addTracksTx(ctx context.Context, tx db, sid uuid.UUID, tracks []uuid.UUID, next bool) error {
+	if len(tracks) == 0 {
+		return nil
+	}
 	if next {
 		var cur int
 		if err := tx.QueryRow(ctx, `SELECT current_index FROM playback_sessions WHERE id=$1`, sid).Scan(&cur); err != nil {
@@ -332,28 +344,28 @@ func (e *Engine) Add(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, nex
 				return err
 			}
 		}
-	} else {
-		var max int
-		if err := tx.QueryRow(ctx, `SELECT coalesce(max(position),-1) FROM playback_queue_items WHERE session_id=$1`, sid).Scan(&max); err != nil {
-			return err
-		}
-		for i, t := range tracks {
-			if err := insertQueueTrack(ctx, tx, sid, max+1+i, t); err != nil {
-				return err
-			}
-		}
+		return nil
 	}
-	if _, err := tx.Exec(ctx, `UPDATE playback_sessions SET state_revision=state_revision+1, updated_at=now() WHERE id=$1`, sid); err != nil {
+	var max int
+	if err := tx.QueryRow(ctx, `SELECT coalesce(max(position),-1) FROM playback_queue_items WHERE session_id=$1`, sid).Scan(&max); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	for i, t := range tracks {
+		if err := insertQueueTrack(ctx, tx, sid, max+1+i, t); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (e *Engine) SetPosition(ctx context.Context, sid uuid.UUID, ms int) error {
 	if ms < 0 {
 		ms = 0
 	}
-	_, err := e.pool.Exec(ctx, `UPDATE playback_sessions SET position_ms=$2, updated_at=now() WHERE id=$1`, sid, ms)
+	// Listen must not overwrite a renderer owner's playhead.
+	_, err := e.pool.Exec(ctx, `
+		UPDATE playback_sessions SET position_ms=$2, updated_at=now()
+		WHERE id=$1 AND renderer_kind='none'`, sid, ms)
 	return err
 }
 

@@ -7,9 +7,11 @@ import { Button } from "@/components/ui/button";
 import { Input, Textarea } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Badge } from "@/components/ui/misc";
-import { PageHeader } from "@/components/ui/empty";
+import { PageHeader, QueryError } from "@/components/ui/empty";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import { hasPerm } from "@/lib/perms";
+import type { User } from "@/types/api";
 import { ensureDiscordPresence, setDiscordPresenceEnabled } from "@/features/settings/discordPresence";
 
 const labels: Record<string, string> = {
@@ -18,6 +20,14 @@ const labels: Record<string, string> = {
   soundcloud: "SoundCloud",
   apple_music: "Apple Music"
 };
+
+function providerBlurb(provider: string) {
+  if (provider === "spotify") return "Import playlists. SoundDock matches your library first. Unmatched tracks can be filled from YouTube only when ScapeX is enabled.";
+  if (provider === "youtube") return "Import YouTube playlists you own. This is not YouTube Music playback.";
+  if (provider === "soundcloud") return "Import playlists you own. SoundDock does not stream SoundCloud.";
+  if (provider === "apple_music") return "Import your playlists with a Music User Token. SoundDock does not play Apple Music streams.";
+  return "";
+}
 
 type ScrobbleState = {
   lastfm_username?: string;
@@ -31,8 +41,11 @@ type ScrobbleState = {
 export function ConnectedServicesPage() {
   const qc = useQueryClient();
   const [params] = useSearchParams();
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const q = useQuery({ queryKey: ["me-providers"], queryFn: () => api.get<any[]>("/api/v1/me/providers") });
   const sc = useQuery({ queryKey: ["me-scrobble"], queryFn: () => api.get<ScrobbleState>("/api/v1/me/scrobble") });
+  const canConnect = hasPerm(me.data, "providers.connect");
+  const canImport = hasPerm(me.data, "playlists.external_import");
   const [appleTok, setAppleTok] = useState("");
   const [lfUser, setLfUser] = useState("");
   const [lfPass, setLfPass] = useState("");
@@ -66,8 +79,9 @@ export function ConnectedServicesPage() {
     <div className="max-w-2xl">
       <PageHeader
         title="Connected Services"
-        description="Link Spotify to import playlists. SoundDock matches your library first, then downloads missing songs from YouTube."
+        description="Connect accounts your administrator has configured. Spotify can import playlists into SoundDock. YouTube, SoundCloud, and Apple Music import playlist metadata; they are not a substitute for those catalogues."
       />
+      {q.isError && <QueryError message={q.error instanceof Error ? q.error.message : undefined} onRetry={() => q.refetch()} />}
       <div className="space-y-3">
         {(q.data || []).map((p) => (
           <article key={p.provider} className="rounded-xl border border-border bg-surface-1 p-4">
@@ -76,15 +90,16 @@ export function ConnectedServicesPage() {
                 <div className="flex items-center gap-2">
                   <Link2 className="h-4 w-4 text-accent" />
                   <h2 className="font-semibold">{labels[p.provider] || p.provider}</h2>
-                  {p.connected ? <Badge tone="success">Connected</Badge> : <Badge>Not connected</Badge>}
+                  {p.status === "needs_reconnect" ? <Badge tone="warning">Needs reconnect</Badge> : p.connected ? <Badge tone="success">Connected</Badge> : <Badge>Not connected</Badge>}
                 </div>
                 {p.account_name && <p className="mt-1 text-sm text-muted">{p.account_name}</p>}
+                <p className="mt-1 text-xs text-subtle">{providerBlurb(p.provider)}</p>
                 {p.scopes?.length ? <p className="text-xs text-subtle">{p.scopes.join(", ")}</p> : null}
                 {p.last_error ? <p className="text-xs text-destructive">{p.last_error}</p> : null}
               </div>
               <div className="flex gap-2">
-                {p.provider === "apple_music" && p.enabled && p.users_may_connect && !p.connected && null}
-                {p.enabled && p.users_may_connect && p.provider !== "apple_music" && (
+                {p.provider === "apple_music" && p.enabled && p.users_may_connect && p.configured && canConnect && !p.connected && null}
+                {p.enabled && p.users_may_connect && p.configured && canConnect && p.provider !== "apple_music" && (
                   <Button
                     size="sm"
                     onClick={async () => {
@@ -92,16 +107,16 @@ export function ConnectedServicesPage() {
                       window.location.href = r.url;
                     }}
                   >
-                    {p.connected ? "Reconnect" : "Connect"}
+                    {p.connected || p.status === "needs_reconnect" ? "Reconnect" : "Connect"}
                   </Button>
                 )}
-                {p.connected && p.provider === "spotify" && (
+                {p.connected && p.provider === "spotify" && canImport && (
                   <Button
                     size="sm"
                     variant="secondary"
                     onClick={async () => {
                       const r = await api.post<{ count: number }>("/api/v1/providers/spotify/import-all", { mode: "once" });
-                      toast.success(`Queued ${r.count} playlists. Missing songs come from YouTube.`);
+                      toast.success(`Queued ${r.count} playlists. Matching your library first.`);
                     }}
                   >
                     Import playlists
@@ -122,7 +137,7 @@ export function ConnectedServicesPage() {
                 )}
               </div>
             </div>
-            {p.provider === "apple_music" && p.enabled && p.users_may_connect && (
+            {p.provider === "apple_music" && p.enabled && p.users_may_connect && p.configured && canConnect && (
               <form
                 className="mt-3 space-y-2"
                 onSubmit={async (e) => {
@@ -140,6 +155,10 @@ export function ConnectedServicesPage() {
               </form>
             )}
             {!p.enabled && <p className="mt-2 text-xs text-subtle">An administrator must enable this provider.</p>}
+            {p.enabled && !p.configured && <p className="mt-2 text-xs text-subtle">An administrator has not configured this provider.</p>}
+            {p.enabled && p.configured && !canConnect && !p.connected && (
+              <p className="mt-2 text-xs text-subtle">You do not have permission to connect providers.</p>
+            )}
           </article>
         ))}
 

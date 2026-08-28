@@ -280,7 +280,7 @@ func (s *Server) intentFromCtx(ctx context.Context) scapex.IntentInput {
 	return in
 }
 
-func (s *Server) similarYouTube(ctx context.Context, seed uuid.UUID, need int, have []uuid.UUID) []string {
+func (s *Server) similarYouTubeHits(ctx context.Context, seed uuid.UUID, need int, have []uuid.UUID) []scapex.Hit {
 	if need < 1 || s.ScapeX == nil {
 		return nil
 	}
@@ -300,7 +300,7 @@ func (s *Server) similarYouTube(ctx context.Context, seed uuid.UUID, need int, h
 	hits = scapex.RankHits(q, hits)
 	ids := append([]uuid.UUID{seed}, have...)
 	local := s.trackTitleArtist(ctx, ids)
-	var out []string
+	var out []scapex.Hit
 	seen := map[string]struct{}{}
 	for _, h := range hits {
 		if h.ID == "" {
@@ -316,7 +316,7 @@ func (s *Server) similarYouTube(ctx context.Context, seed uuid.UUID, need int, h
 			continue
 		}
 		seen[h.ID] = struct{}{}
-		out = append(out, h.ID)
+		out = append(out, h)
 		if len(out) >= need {
 			break
 		}

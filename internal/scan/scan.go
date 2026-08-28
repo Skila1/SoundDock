@@ -140,7 +140,7 @@ func (s *Scanner) reportScan(ctx context.Context, jobID, runID uuid.UUID, done, 
 		runID, done, added, failed, total)
 }
 
-// ProgressPct is 1–99 while work remains so the bar moves as soon as listing finishes.
+// ProgressPct is 1-99 while work remains so the bar moves as soon as listing finishes.
 func ProgressPct(done, total int) int {
 	if total <= 0 {
 		return 100

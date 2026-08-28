@@ -41,4 +41,4 @@ YouTube search and download run inside the SoundDock process. `SD_SCAPEX_URL` is
 
 Query review notes: [`docs/query-baselines.md`](query-baselines.md). Manual device checks: [`docs/device-matrix.md`](device-matrix.md).
 
-See the repository `internal/` layout.
+See the repository `internal/` layout. Encrypted backups and wipe-and-restore: [backup.md](backup.md).

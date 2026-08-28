@@ -200,6 +200,12 @@ func TestCommitReplaceLocalsDoesNotClobberOldObject(t *testing.T) {
 		_, _ = pool.Exec(c, `DELETE FROM storage_providers WHERE id=$1`, provID)
 	})
 
+	if _, err := pool.Exec(ctx, `INSERT INTO jobs (id, type, status, payload) VALUES ($1,'scapex.replace','running','{}')`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM jobs WHERE id=$1`, jobID)
+	})
 	s := &Server{Pool: pool, Cfg: config.Config{ManagedDir: root}}
 	retired, newKey, err := s.commitReplaceLocals(ctx, jobID, trackID, libID, "youtube", "dQw4w9WgXcQ", []scapex.LocalTrack{{
 		Path: src, VideoID: "dQw4w9WgXcQ", Title: "Numb", DurationMS: 180000,

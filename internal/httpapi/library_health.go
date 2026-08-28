@@ -44,6 +44,9 @@ func (s *Server) getTrackWaveform(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "invalid track id")
 		return
 	}
+	if !s.requireTrackLibrary(w, r, id, "read") {
+		return
+	}
 	var peaks []byte
 	err = s.Pool.QueryRow(r.Context(), `SELECT waveform_peaks FROM tracks WHERE id=$1`, id).Scan(&peaks)
 	if err != nil {

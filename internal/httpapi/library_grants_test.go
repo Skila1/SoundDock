@@ -49,6 +49,24 @@ func TestGrantActionsAllow(t *testing.T) {
 	}
 }
 
+func TestDuplicatesRouteRegistered(t *testing.T) {
+	h := (&Server{}).Router()
+	r, ok := h.(*chi.Mux)
+	if !ok {
+		t.Fatalf("router type %T", h)
+	}
+	got := map[string]bool{}
+	if err := chi.Walk(r, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		got[method+" "+route] = true
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !got["GET /api/v1/duplicates"] {
+		t.Fatal("unregistered GET /api/v1/duplicates")
+	}
+}
+
 func TestLibraryGrantRoutesRegistered(t *testing.T) {
 	h := (&Server{}).Router()
 	r, ok := h.(*chi.Mux)
@@ -201,13 +219,13 @@ func TestStreamDeniedWithoutStreamActionWhenUserPresent(t *testing.T) {
 		t.Fatalf("code %v want library_grant", body["code"])
 	}
 
-	tok := stream.Sign(s.SignKey, fix.trackID, time.Hour, "")
+	tok := stream.Sign(s.SignKey, fix.userID, fix.trackID, time.Hour, "")
 	hmac := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/"+fix.trackID.String()+"/stream?token="+tok, nil)
 	hmac = hmac.WithContext(context.WithValue(hmac.Context(), chi.RouteCtxKey, rctx))
 	hrec := httptest.NewRecorder()
 	s.streamTrack(hrec, hmac)
-	if hrec.Code != http.StatusConflict {
-		t.Fatalf("HMAC-only stub want 409, got %d %s", hrec.Code, hrec.Body.String())
+	if hrec.Code != http.StatusForbidden {
+		t.Fatalf("HMAC without stream grant want 403, got %d %s", hrec.Code, hrec.Body.String())
 	}
 }
 

@@ -272,6 +272,15 @@ func (s *Server) mintOfflineToken(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "track_id and device_id required")
 		return
 	}
+	var libID uuid.UUID
+	if err := s.Pool.QueryRow(r.Context(), `SELECT library_id FROM tracks WHERE id=$1`, body.TrackID).Scan(&libID); err != nil {
+		writeErr(w, 404, "not_found", "track not found")
+		return
+	}
+	if !s.userHasLibraryAction(r.Context(), u, libID, "stream") {
+		writeErr(w, http.StatusForbidden, "library_grant", "library stream not granted")
+		return
+	}
 	issued := time.Now()
 	exp := issued.Add(offlineTokenTTL)
 	tok, err := s.signOffline(u.ID, deviceID, body.TrackID, issued, exp)

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/matcher"
+	"github.com/sounddock/sounddock/internal/scapex"
 )
 
 var (
@@ -45,8 +46,9 @@ type Request struct {
 type Result struct {
 	Kind       string      `json:"kind"`
 	SeedID     uuid.UUID   `json:"seed_id"`
-	TrackIDs   []uuid.UUID `json:"track_ids"`
-	YoutubeIDs []string    `json:"youtube_ids,omitempty"`
+	TrackIDs   []uuid.UUID  `json:"track_ids"`
+	YoutubeIDs []string     `json:"youtube_ids,omitempty"`
+	Hits       []scapex.Hit `json:"hits,omitempty"`
 }
 
 type RefreshPayload struct {

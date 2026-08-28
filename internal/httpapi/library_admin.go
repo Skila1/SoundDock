@@ -10,6 +10,92 @@ import (
 	"github.com/sounddock/sounddock/internal/library/merge"
 )
 
+func (s *Server) snapshotManagedCleanup(ctx context.Context, jobID, lib uuid.UUID) error {
+	if s.Pool == nil || jobID == uuid.Nil || lib == uuid.Nil {
+		return nil
+	}
+	var providerID uuid.UUID
+	_ = s.Pool.QueryRow(ctx, `SELECT storage_provider_id FROM libraries WHERE id=$1`, lib).Scan(&providerID)
+	rows, err := s.Pool.Query(ctx, `
+		SELECT tf.storage_key, coalesce(tf.size_bytes,0), sp.type, sp.id
+		FROM track_files tf
+		JOIN libraries l ON l.id = tf.library_id
+		JOIN storage_providers sp ON sp.id = l.storage_provider_id
+		WHERE tf.library_id=$1 AND tf.deleted_at IS NULL`, lib)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key, typ string
+		var size int64
+		var pid uuid.UUID
+		if err := rows.Scan(&key, &size, &typ, &pid); err != nil {
+			continue
+		}
+		status := "pending"
+		if !managedStorage(typ) {
+			status = "skipped_not_managed"
+		}
+		_, _ = s.Pool.Exec(ctx, `
+			INSERT INTO managed_cleanup_items (job_id, library_id, provider_id, storage_key, size_bytes, status)
+			VALUES ($1,$2,$3,$4,$5,$6)`, jobID, lib, pid, key, size, status)
+	}
+	return rows.Err()
+}
+
+func (s *Server) runManagedCleanup(ctx context.Context, jobID uuid.UUID) error {
+	if s.Pool == nil || jobID == uuid.Nil {
+		return nil
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT id, library_id, provider_id, storage_key, status
+		FROM managed_cleanup_items WHERE job_id=$1 AND status IN ('pending','skipped_in_use')`, jobID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type item struct {
+		ID, Lib, Prov uuid.UUID
+		Key, Status   string
+	}
+	var items []item
+	for rows.Next() {
+		var it item
+		if rows.Scan(&it.ID, &it.Lib, &it.Prov, &it.Key, &it.Status) == nil {
+			items = append(items, it)
+		}
+	}
+	for _, it := range items {
+		var refs int
+		_ = s.Pool.QueryRow(ctx, `SELECT count(*) FROM track_files WHERE storage_key=$1 AND deleted_at IS NULL`, it.Key).Scan(&refs)
+		if refs > 0 {
+			_, _ = s.Pool.Exec(ctx, `UPDATE managed_cleanup_items SET status='skipped_in_use', updated_at=now() WHERE id=$1`, it.ID)
+			continue
+		}
+		var typ string
+		_ = s.Pool.QueryRow(ctx, `SELECT type FROM storage_providers WHERE id=$1`, it.Prov).Scan(&typ)
+		if !managedStorage(typ) {
+			_, _ = s.Pool.Exec(ctx, `UPDATE managed_cleanup_items SET status='skipped_not_managed', updated_at=now() WHERE id=$1`, it.ID)
+			continue
+		}
+		prov, _, _, err := s.ProviderFor(ctx, it.Lib)
+		if err != nil && it.Prov != uuid.Nil {
+			prov, _, _, err = s.ProviderFor(ctx, it.Lib)
+		}
+		if err != nil || prov == nil {
+			_, _ = s.Pool.Exec(ctx, `UPDATE managed_cleanup_items SET status='missing', updated_at=now() WHERE id=$1`, it.ID)
+			continue
+		}
+		if err := prov.Delete(ctx, it.Key); err != nil {
+			_, _ = s.Pool.Exec(ctx, `UPDATE managed_cleanup_items SET status='missing', updated_at=now() WHERE id=$1`, it.ID)
+			continue
+		}
+		_, _ = s.Pool.Exec(ctx, `UPDATE managed_cleanup_items SET status='done', updated_at=now() WHERE id=$1`, it.ID)
+	}
+	return nil
+}
+
 func (s *Server) libraryStorageType(ctx context.Context, lib uuid.UUID) string {
 	var typ string
 	_ = s.Pool.QueryRow(ctx, `
@@ -176,22 +262,28 @@ func (s *Server) adminDeleteLibrary(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "storage", "physical delete is only offered for SoundDock-managed libraries")
 		return
 	}
-	if s.Jobs == nil {
-		if err := s.deleteLibrary(r.Context(), id, body.DeleteFiles, currentUser(r).ID); err != nil {
+	cleanupID := uuid.New()
+	if body.DeleteFiles && managedStorage(typ) {
+		if err := s.snapshotManagedCleanup(r.Context(), cleanupID, id); err != nil {
 			writeErr(w, 500, "library", err.Error())
 			return
 		}
-		writeJSON(w, 200, map[string]any{"ok": true, "deleted_files": body.DeleteFiles && managedStorage(typ)})
+	}
+	if err := s.deleteLibrary(r.Context(), id, false, currentUser(r).ID); err != nil {
+		writeErr(w, 500, "library", err.Error())
 		return
 	}
-	jid, err := s.Jobs.Enqueue(r.Context(), "library.delete", libraryDeletePayload{
-		ID: id, DeleteFiles: body.DeleteFiles, ActorID: currentUser(r).ID,
-	})
-	if err != nil {
-		s.writeJobErr(w, err)
-		return
+	out := map[string]any{"ok": true, "deleted_files": false}
+	if body.DeleteFiles && managedStorage(typ) && s.Jobs != nil {
+		jid, err := s.Jobs.Enqueue(r.Context(), "library.cleanup_files", libraryCleanupPayload{JobID: cleanupID})
+		if err != nil {
+			s.writeJobErr(w, err)
+			return
+		}
+		out["cleanup_job_id"] = jid
+		out["deleted_files"] = true
 	}
-	writeJSON(w, 202, map[string]any{"ok": true, "queued": true, "job_id": jid, "deleted_files": body.DeleteFiles && managedStorage(typ)})
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) reassignDefault(ctx context.Context, except uuid.UUID) error {

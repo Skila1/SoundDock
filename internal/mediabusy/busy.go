@@ -4,14 +4,17 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Set is an in-process refcount of tracks that currently have an open HTTP
 // stream handler or Discord decoder. Retention uses this; HMAC tokens and
 // AcquireStreamSlot are not leases.
 type Set struct {
-	mu sync.Mutex
-	n  map[uuid.UUID]int
+	mu       sync.Mutex
+	n        map[uuid.UUID]int
+	pool     *pgxpool.Pool
+	instance string
 }
 
 func New() *Set {

@@ -53,6 +53,19 @@ export type AcquisitionStatusEvent = {
   [key: string]: unknown;
 };
 
+export type ResourceInvalidateEvent = {
+  scope?: string;
+  keys?: string[];
+  ids?: string[];
+  resync?: boolean;
+};
+
+export type JobProgressEvent = {
+  job_id?: string;
+  progress?: number;
+  keys?: string[];
+};
+
 export type SnapshotResult = {
   queue: QueueSnapshot;
   listeners?: PresenceParticipant[];
@@ -65,6 +78,8 @@ export type QueueSseHandlers = {
   onPlayhead: (event: SessionPlayheadEvent) => void;
   onPresence: (event: SessionPresenceEvent) => void;
   onAcquisition?: (event: AcquisitionStatusEvent) => void;
+  onInvalidate?: (event: ResourceInvalidateEvent) => void;
+  onJobProgress?: (event: JobProgressEvent) => void;
   onAuthLost?: () => void;
 };
 
@@ -322,6 +337,14 @@ export function createQueueSseClient(handlers: QueueSseHandlers): QueueSseClient
     bindEvent(source, "acquisition.status", (ev) => {
       const data = parseJson(ev.data);
       if (isRecord(data)) handlers.onAcquisition?.(data as AcquisitionStatusEvent);
+    });
+    bindEvent(source, "resource.invalidate", (ev) => {
+      const data = parseJson(ev.data);
+      if (isRecord(data)) handlers.onInvalidate?.(data as ResourceInvalidateEvent);
+    });
+    bindEvent(source, "job.progress", (ev) => {
+      const data = parseJson(ev.data);
+      if (isRecord(data)) handlers.onJobProgress?.(data as JobProgressEvent);
     });
     // Named ping if the server uses it; comment `: ping` is not visible to EventSource.
     bindEvent(source, "ping", () => undefined);

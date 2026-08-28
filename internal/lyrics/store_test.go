@@ -2,32 +2,15 @@ package lyrics
 
 import (
 	"context"
-	"os"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sounddock/sounddock/internal/testdb"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	dsn := os.Getenv("SD_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("SD_TEST_DATABASE_URL not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Skip(err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Skip(err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return testdb.Open(t)
 }
 
 func seedTrack(t *testing.T, pool *pgxpool.Pool) (trackID uuid.UUID) {
@@ -124,18 +107,18 @@ func TestStoreConfigRoundTrip(t *testing.T) {
 		}
 		_, _ = pool.Exec(c, `DELETE FROM server_settings WHERE key=$1`, SettingKey)
 	})
-	if err := StoreConfig(ctx, pool, Config{Enabled: true, ProviderURL: "https://lrclib.net"}); err != nil {
+	if err := StoreConfig(ctx, pool, Config{LocalEnabled: true, Enabled: true, ProviderURL: "https://lrclib.net"}); err != nil {
 		t.Fatal(err)
 	}
 	got := LoadConfig(ctx, pool)
-	if !got.Enabled || got.ProviderURL != "https://lrclib.net" {
+	if !got.Enabled || !got.ExternalEnabled || !got.LocalEnabled || got.ProviderURL != "https://lrclib.net" {
 		t.Fatalf("got %+v", got)
 	}
-	if err := StoreConfig(ctx, pool, Config{Enabled: false}); err != nil {
+	if err := StoreConfig(ctx, pool, Config{LocalEnabled: true, Enabled: false}); err != nil {
 		t.Fatal(err)
 	}
 	got = LoadConfig(ctx, pool)
-	if got.Enabled || got.ProviderURL != "" {
+	if got.Enabled || got.ExternalEnabled || got.ProviderURL != "" || !got.LocalEnabled {
 		t.Fatalf("disabled %+v", got)
 	}
 }

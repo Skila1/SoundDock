@@ -105,6 +105,23 @@ func IsPlaceholderTitle(s string) bool {
 	return s == "" || strings.EqualFold(s, "Restoring") || strings.HasPrefix(s, "YouTube ")
 }
 
+// IsWeakTaglessTitle is a yt-dlp filename used as a title (videoId or videoId.m4a).
+func IsWeakTaglessTitle(title, videoID string) bool {
+	title = strings.TrimSpace(title)
+	videoID = strings.TrimSpace(videoID)
+	if title == "" || videoID == "" {
+		return title == ""
+	}
+	base := title
+	if i := strings.LastIndex(base, "."); i > 0 {
+		ext := strings.ToLower(base[i:])
+		if ext == ".m4a" || ext == ".opus" || ext == ".webm" || ext == ".mp3" || ext == ".ogg" {
+			base = base[:i]
+		}
+	}
+	return strings.EqualFold(base, videoID)
+}
+
 func stubTitle(ref string, hint TrackHint) string {
 	if t := strings.TrimSpace(hint.Title); t != "" && !IsPlaceholderTitle(t) {
 		return t
@@ -271,9 +288,14 @@ func FailJobIntents(ctx context.Context, pool *pgxpool.Pool, jobID uuid.UUID, ms
 	return err
 }
 
-// DropFailedAcquire removes failed YouTube stubs from every queue and deletes
-// them from the catalogue if they never received a file.
+// DropFailedAcquire is the historical name for DropUncommitted.
 func DropFailedAcquire(ctx context.Context, pool *pgxpool.Pool, play Player, jobID uuid.UUID) {
+	DropUncommitted(ctx, pool, play, jobID)
+}
+
+// DropUncommitted removes failed/cancelled stubs that never received a file,
+// except playlist-held rows which stay as failed catalogue entries.
+func DropUncommitted(ctx context.Context, pool *pgxpool.Pool, play Player, jobID uuid.UUID) {
 	if pool == nil || jobID == uuid.Nil {
 		return
 	}
@@ -290,7 +312,25 @@ func DropFailedAcquire(ctx context.Context, pool *pgxpool.Pool, play Player, job
 		seen[in.TrackID] = true
 		ids = append(ids, in.TrackID)
 	}
-	if len(ids) == 0 {
+	GCUnreferencedStubs(ctx, pool, play, ids)
+}
+
+func playlistHeld(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) bool {
+	var n int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM playlist_entries WHERE track_id=$1`, id).Scan(&n)
+	return n > 0
+}
+
+func queueHeld(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID) bool {
+	var n int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM playback_queue_items WHERE track_id=$1`, id).Scan(&n)
+	return n > 0
+}
+
+// GCUnreferencedStubs deletes failed/cancelled stubs with no original, no
+// playlist row, and no queue occurrence. Playlist-held stubs stay.
+func GCUnreferencedStubs(ctx context.Context, pool *pgxpool.Pool, play Player, ids []uuid.UUID) {
+	if pool == nil || len(ids) == 0 {
 		return
 	}
 	var drop []uuid.UUID
@@ -298,6 +338,9 @@ func DropFailedAcquire(ctx context.Context, pool *pgxpool.Pool, play Player, job
 		var files int
 		_ = pool.QueryRow(ctx, `SELECT count(*) FROM track_files WHERE track_id=$1 AND deleted_at IS NULL`, id).Scan(&files)
 		if files > 0 {
+			continue
+		}
+		if playlistHeld(ctx, pool, id) {
 			continue
 		}
 		drop = append(drop, id)
@@ -311,6 +354,38 @@ func DropFailedAcquire(ctx context.Context, pool *pgxpool.Pool, play Player, job
 		_, _ = pool.Exec(ctx, `DELETE FROM playback_queue_items WHERE track_id = ANY($1)`, drop)
 	}
 	_, _ = pool.Exec(ctx, `DELETE FROM tracks WHERE id = ANY($1) AND acquisition IN ('youtube','scapex')`, drop)
+}
+
+// SweepUnreferencedFailedStubs GCs failed stubs older than 30 days that nothing references.
+func SweepUnreferencedFailedStubs(ctx context.Context, pool *pgxpool.Pool, play Player) {
+	if pool == nil {
+		return
+	}
+	rows, err := pool.Query(ctx, `
+		SELECT t.id FROM tracks t
+		WHERE t.acquisition IN ('youtube','scapex')
+		  AND t.created_at < now() - interval '30 days'
+		  AND NOT EXISTS (
+		    SELECT 1 FROM track_files tf WHERE tf.track_id=t.id AND tf.deleted_at IS NULL
+		  )
+		  AND NOT EXISTS (SELECT 1 FROM playlist_entries pe WHERE pe.track_id=t.id)
+		  AND NOT EXISTS (SELECT 1 FROM playback_queue_items q WHERE q.track_id=t.id)
+		  AND EXISTS (
+		    SELECT 1 FROM acquisition_intents i
+		    WHERE i.track_id=t.id AND i.status IN ('failed','cancelled')
+		  )`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	GCUnreferencedStubs(ctx, pool, play, ids)
 }
 
 func RecordTrackSource(ctx context.Context, pool *pgxpool.Pool, trackID uuid.UUID, provider, sourceRef string, jobID uuid.UUID) error {

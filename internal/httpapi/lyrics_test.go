@@ -154,7 +154,7 @@ func TestGetTrackLyricsEmbeddedDB(t *testing.T) {
 	})
 
 	s := &Server{Pool: pool}
-	u := &auth.User{ID: uuid.New(), Username: "u"}
+	u := &auth.User{ID: uuid.New(), Username: "u", IsAdmin: true}
 	rec := httptest.NewRecorder()
 	s.getTrackLyrics(rec, lyricsRequest(u, trackID))
 	if rec.Code != http.StatusOK {

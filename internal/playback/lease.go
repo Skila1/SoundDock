@@ -117,6 +117,78 @@ func casAcquireBrowser(ctx context.Context, q db, sessionID uuid.UUID, clientRen
 	return gen, nil
 }
 
+// ClaimDiscordRenderer CAS-grants the Discord renderer lease.
+// stealBrowser=false never takes a Browser holder (none or discord only).
+// stealBrowser=true is the explicit user output_pref=discord steal.
+// Already holding the same identity is a no-op (heartbeat only, no revision bump).
+func (e *Engine) ClaimDiscordRenderer(ctx context.Context, sessionID uuid.UUID, rendererID string, generation int64, stealBrowser bool) error {
+	unlock := e.lockSessions(sessionID)
+	defer unlock()
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if err := lockSessionRow(ctx, tx, sessionID); err != nil {
+		return err
+	}
+
+	var kind string
+	var heldID *string
+	var heldGen int64
+	if err := tx.QueryRow(ctx, `
+		SELECT renderer_kind, renderer_id, renderer_generation
+		FROM playback_sessions WHERE id=$1`, sessionID).Scan(&kind, &heldID, &heldGen); err != nil {
+		return err
+	}
+	curID := ""
+	if heldID != nil {
+		curID = *heldID
+	}
+	if kind == RendererDiscord && curID == rendererID && heldGen == generation {
+		_, err = tx.Exec(ctx, `
+			UPDATE playback_sessions SET renderer_heartbeat_at=now(), updated_at=now() WHERE id=$1`, sessionID)
+		if err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+
+	kinds := `'none','discord'`
+	if stealBrowser {
+		kinds = `'none','browser','discord'`
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE playback_sessions
+		SET renderer_kind=$2, renderer_id=$3, renderer_generation=$4,
+			renderer_heartbeat_at=now(), output_pref=$5, updated_at=now()
+		WHERE id=$1 AND renderer_kind IN (`+kinds+`)`,
+		sessionID, RendererDiscord, rendererID, generation, OutputDiscord)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrLeaseConflict
+	}
+	if err := bumpRevision(ctx, tx, sessionID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func casReleaseBrowserIfHeld(ctx context.Context, q db, sessionID uuid.UUID) (bool, error) {
+	tag, err := q.Exec(ctx, `
+		UPDATE playback_sessions
+		SET renderer_kind='none', renderer_id=NULL,
+			renderer_generation=renderer_generation+1,
+			renderer_heartbeat_at=NULL, updated_at=now()
+		WHERE id=$1 AND renderer_kind='browser'`, sessionID)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
 func casGrantDiscord(ctx context.Context, q db, sessionID uuid.UUID, rendererID string, generation int64) error {
 	tag, err := q.Exec(ctx, `
 		UPDATE playback_sessions

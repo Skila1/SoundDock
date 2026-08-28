@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/radio"
+	"github.com/sounddock/sounddock/internal/scapex"
 )
 
 func (s *Server) getRadio(w http.ResponseWriter, r *http.Request) {
@@ -61,17 +62,27 @@ func (s *Server) getRadio(w http.ResponseWriter, r *http.Request) {
 		need := limit - len(res.TrackIDs)
 		if need > 0 {
 			have := append(append([]uuid.UUID{}, res.TrackIDs...), req.Exclude...)
-			res.YoutubeIDs = s.youtubeFillIDs(r.Context(), seed, need, have)
+			hits := s.youtubeFillHits(r.Context(), seed, need, have)
+			res.Hits = hits
+			for _, h := range hits {
+				if h.ID != "" {
+					res.YoutubeIDs = append(res.YoutubeIDs, h.ID)
+				}
+			}
 		}
 	}
 	writeJSON(w, 200, res)
 }
 
-func (s *Server) youtubeFillIDs(ctx context.Context, seed uuid.UUID, need int, have []uuid.UUID) []string {
+func (s *Server) youtubeFillHits(ctx context.Context, seed uuid.UUID, need int, have []uuid.UUID) []scapex.Hit {
 	if s != nil && s.youtubeFillHook != nil {
-		return s.youtubeFillHook(ctx, seed, need, have)
+		var hits []scapex.Hit
+		for _, id := range s.youtubeFillHook(ctx, seed, need, have) {
+			hits = append(hits, scapex.Hit{Type: "youtube", ID: id})
+		}
+		return hits
 	}
-	return s.similarYouTube(ctx, seed, need, have)
+	return s.similarYouTubeHits(ctx, seed, need, have)
 }
 
 func (s *Server) hasAudioListener(r *http.Request) bool {

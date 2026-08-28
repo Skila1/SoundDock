@@ -71,6 +71,18 @@ func (s *Service) Preview(ctx context.Context, id uuid.UUID) (Preview, error) {
 	}
 	defer f.Close()
 	p.Readable = true
+	if isEncryptedArchive(rec.Path) {
+		p.RestoreKind = "full"
+		p.Logical = true
+		p.Header = "Encrypted SoundDock archive. Restore requires the recovery passphrase."
+		return p, nil
+	}
+	if isGzip(rec.Path) || rec.Kind == "full" || strings.HasSuffix(strings.ToLower(rec.Path), ".tar.gz") {
+		p.RestoreKind = "full"
+		p.Logical = true
+		p.Header = "Full SoundDock archive (database + media)"
+		return p, nil
+	}
 	info := parseSQLDump(io.LimitReader(f, 1<<20))
 	p.Header = info.header
 	p.Tables = info.tables

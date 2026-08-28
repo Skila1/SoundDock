@@ -1,11 +1,12 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,7 +30,7 @@ var (
 )
 
 // QueueListener is a presence row for GET /me/queue and session.presence.
-// Source is web, discord, or both. This is avatars only — not listen stats.
+// Source is web, discord, or both. This is avatars only - not listen stats.
 type QueueListener struct {
 	UserID      *string `json:"user_id"`
 	DisplayName string  `json:"display_name"`
@@ -299,16 +300,8 @@ func presenceDisplay(u *auth.User) string {
 	return u.Username
 }
 
-func discordAvatarURL(discordUserID string) string {
-	discordUserID = strings.TrimSpace(discordUserID)
-	if discordUserID == "" {
-		return ""
-	}
-	n, err := strconv.ParseUint(discordUserID, 10, 64)
-	if err != nil {
-		return "https://cdn.discordapp.com/embed/avatars/0.png"
-	}
-	return fmt.Sprintf("https://cdn.discordapp.com/embed/avatars/%d.png", (n>>22)%6)
+func discordAvatarURL(discordUserID, avatarHash string) string {
+	return auth.DiscordAvatarURL(discordUserID, avatarHash)
 }
 
 func (s *Server) presenceAvatar(r *http.Request, u *auth.User) string {
@@ -316,8 +309,57 @@ func (s *Server) presenceAvatar(r *http.Request, u *auth.User) string {
 		return ""
 	}
 	var did string
-	_ = s.Pool.QueryRow(r.Context(), `SELECT provider_user_id FROM user_identities WHERE user_id=$1 AND provider='discord' LIMIT 1`, u.ID).Scan(&did)
-	return discordAvatarURL(did)
+	var hash *string
+	_ = s.Pool.QueryRow(r.Context(), `
+		SELECT provider_user_id, avatar_hash
+		FROM user_identities WHERE user_id=$1 AND provider='discord' LIMIT 1`, u.ID).Scan(&did, &hash)
+	if did == "" {
+		return ""
+	}
+	if hash == nil {
+		got := s.refreshDiscordAvatarHash(r.Context(), did)
+		hash = &got
+	}
+	return discordAvatarURL(did, *hash)
+}
+
+func (s *Server) refreshDiscordAvatarHash(ctx context.Context, discordUserID string) string {
+	discordUserID = strings.TrimSpace(discordUserID)
+	if s == nil || s.Pool == nil || discordUserID == "" {
+		return ""
+	}
+	token := s.discordBotToken(ctx)
+	if token == "" {
+		return ""
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://discord.com/api/v10/users/"+discordUserID, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bot "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode >= 400 {
+		return ""
+	}
+	var body struct {
+		Avatar *string `json:"avatar"`
+	}
+	if json.Unmarshal(b, &body) != nil {
+		return ""
+	}
+	hash := ""
+	if body.Avatar != nil {
+		hash = strings.TrimSpace(*body.Avatar)
+	}
+	_, _ = s.Pool.Exec(ctx, `
+		UPDATE user_identities SET avatar_hash=$2
+		WHERE provider='discord' AND provider_user_id=$1`, discordUserID, hash)
+	return hash
 }
 
 func (s *Server) touchPresenceFromRequest(r *http.Request, sid uuid.UUID) bool {
@@ -468,7 +510,7 @@ func (s *Server) mergeDiscordListeners(r *http.Request, sid uuid.UUID, web []Que
 		return append([]QueueListener{}, web...)
 	}
 	rows, err := s.Pool.Query(r.Context(), `
-		SELECT v.discord_user_id, i.user_id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.provider_username, ''), v.discord_user_id)
+		SELECT v.discord_user_id, i.user_id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.provider_username, ''), v.discord_user_id), i.avatar_hash
 		FROM discord_voice_runtime r
 		JOIN discord_user_voice v ON v.guild_id = r.guild_id AND v.channel_id = r.voice_channel_id
 		LEFT JOIN user_identities i ON i.provider = 'discord' AND i.provider_user_id = v.discord_user_id
@@ -490,10 +532,17 @@ func (s *Server) mergeDiscordListeners(r *http.Request, sid uuid.UUID, web []Que
 		var did string
 		var uid *uuid.UUID
 		var display string
-		if err := rows.Scan(&did, &uid, &display); err != nil {
+		var hash *string
+		if err := rows.Scan(&did, &uid, &display, &hash); err != nil {
 			continue
 		}
-		av := discordAvatarURL(did)
+		hashVal := ""
+		if hash == nil && did != "" {
+			hashVal = s.refreshDiscordAvatarHash(r.Context(), did)
+		} else if hash != nil {
+			hashVal = *hash
+		}
+		av := discordAvatarURL(did, hashVal)
 		if uid != nil && *uid != uuid.Nil {
 			id := uid.String()
 			if existing, ok := byUser[id]; ok {

@@ -32,6 +32,11 @@ export type Track = {
   artwork_url?: string;
 };
 
+export type TrackPage = {
+  items: Track[];
+  next_cursor?: string | null;
+};
+
 export type Album = {
   id: string;
   title: string;
@@ -92,7 +97,7 @@ export type SearchHit = {
   artwork_url?: string;
 };
 
-export type MediaState = "ready" | "restoring" | "missing_external";
+export type MediaState = "ready" | "restoring" | "retrying" | "failed" | "cancelled" | "missing_external";
 
 export type Playability = {
   state: MediaState;
@@ -371,6 +376,8 @@ export type TrackLyrics = {
 };
 
 export type LyricsProviderConfig = {
+  local_enabled?: boolean;
+  external_enabled?: boolean;
   enabled: boolean;
   provider_url: string;
 };
@@ -387,7 +394,7 @@ export type LibraryGrant = {
   role?: string | null;
 };
 
-/** server_settings.library_grants_strict — missing key is false (empty actions still grant read+stream). */
+/** server_settings.library_grants_strict - missing key is false (empty actions still grant read+stream). */
 export type LibraryGrantsStrict = {
   library_grants_strict: boolean;
 };

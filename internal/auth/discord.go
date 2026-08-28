@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -150,6 +151,26 @@ func (c DiscordOAuthConfig) Ready() bool {
 	return c.LoginEnabled && c.ClientID != "" && c.Secret != ""
 }
 
+func DiscordAvatarURL(discordUserID, avatarHash string) string {
+	discordUserID = strings.TrimSpace(discordUserID)
+	if discordUserID == "" {
+		return ""
+	}
+	hash := strings.TrimSpace(avatarHash)
+	if hash != "" {
+		ext := "png"
+		if strings.HasPrefix(hash, "a_") {
+			ext = "gif"
+		}
+		return "https://cdn.discordapp.com/avatars/" + discordUserID + "/" + hash + "." + ext + "?size=80"
+	}
+	n, err := strconv.ParseUint(discordUserID, 10, 64)
+	if err != nil {
+		return "https://cdn.discordapp.com/embed/avatars/0.png"
+	}
+	return "https://cdn.discordapp.com/embed/avatars/" + strconv.FormatUint((n>>22)%6, 10) + ".png"
+}
+
 func DiscordDisplayName(p DiscordProfile) string {
 	if g := strings.TrimSpace(p.Global); g != "" {
 		return g
@@ -196,11 +217,11 @@ func (s *Service) firstAdminWithoutDiscord(ctx context.Context) (uuid.UUID, bool
 
 func (s *Service) attachDiscordIdentity(ctx context.Context, uid uuid.UUID, p DiscordProfile) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO user_identities (user_id, provider, provider_user_id, provider_username)
-		VALUES ($1,'discord',$2,$3)
+		INSERT INTO user_identities (user_id, provider, provider_user_id, provider_username, avatar_hash)
+		VALUES ($1,'discord',$2,$3,$4)
 		ON CONFLICT (provider, provider_user_id) DO UPDATE
-		SET user_id=EXCLUDED.user_id, provider_username=EXCLUDED.provider_username`,
-		uid, p.ID, strings.TrimSpace(p.Username))
+		SET user_id=EXCLUDED.user_id, provider_username=EXCLUDED.provider_username, avatar_hash=EXCLUDED.avatar_hash`,
+		uid, p.ID, strings.TrimSpace(p.Username), strings.TrimSpace(p.Avatar))
 	return err
 }
 
@@ -212,8 +233,8 @@ func (s *Service) mergeDiscordStubIntoAdmin(ctx context.Context, stub, admin uui
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `
 		UPDATE user_identities
-		SET user_id=$1, provider_username=$3
-		WHERE provider='discord' AND provider_user_id=$2`, admin, p.ID, strings.TrimSpace(p.Username)); err != nil {
+		SET user_id=$1, provider_username=$3, avatar_hash=$4
+		WHERE provider='discord' AND provider_user_id=$2`, admin, p.ID, strings.TrimSpace(p.Username), strings.TrimSpace(p.Avatar)); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM users WHERE id=$1`, stub); err != nil {
@@ -269,7 +290,7 @@ func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile) (*Use
 			}
 			uid = adminID
 		} else {
-			_, _ = s.pool.Exec(ctx, `UPDATE user_identities SET provider_username=$2 WHERE provider='discord' AND provider_user_id=$1`, p.ID, strings.TrimSpace(p.Username))
+			_, _ = s.pool.Exec(ctx, `UPDATE user_identities SET provider_username=$2, avatar_hash=$3 WHERE provider='discord' AND provider_user_id=$1`, p.ID, strings.TrimSpace(p.Username), strings.TrimSpace(p.Avatar))
 			if isDiscordStubUsername(existingName, p.ID) {
 				newName := DiscordAccountUsername(p)
 				if _, uerr := s.pool.Exec(ctx, `UPDATE users SET username=$2, display_name=$3, updated_at=now() WHERE id=$1`, uid, newName, display); uniqueViolation(uerr) {

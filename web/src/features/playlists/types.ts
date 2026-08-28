@@ -29,6 +29,28 @@ export type PlaylistListItem = {
   is_smart?: boolean;
 };
 
+export type ProviderCapabilities = {
+  oauth?: boolean;
+  manual_token?: boolean;
+  list_user_playlists?: boolean;
+  public_playlists?: boolean;
+  private_playlists?: boolean;
+  snapshot?: boolean;
+  isrc?: boolean;
+};
+
+export function capabilityBlurb(caps?: ProviderCapabilities | null): string {
+  if (!caps) return "";
+  const parts: string[] = [];
+  if (caps.list_user_playlists) parts.push("import your playlists");
+  if (caps.private_playlists) parts.push("including private lists");
+  if (caps.isrc) parts.push("ISRC matching");
+  if (caps.snapshot) parts.push("incremental sync");
+  if (caps.oauth) parts.push("OAuth connect");
+  if (caps.manual_token) parts.push("paste a user token");
+  return parts.join(". ");
+}
+
 export type ProviderPlaylist = {
   id: string;
   name: string;

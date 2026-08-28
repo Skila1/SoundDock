@@ -61,7 +61,7 @@ export function AdminStatsRebuild() {
     <div>
       <PageHeader
         title="Stats rebuild"
-        description="Queue a one-time cutover job. Production Home, Stats, and Wrapped keep reading listen_history until this rebuild finishes and flips the reader to listen_events. This page is rebuild plus current reader mode — not a merged listen total."
+        description="Queue a one-time cutover job. Production Home, Stats, and Wrapped keep reading listen_history until this rebuild finishes and flips the reader to listen_events. This page is rebuild plus current reader mode - not a merged listen total."
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -79,7 +79,7 @@ export function AdminStatsRebuild() {
           Listen events are written in the background today. Readers do not switch to{" "}
           <span className="font-medium text-foreground">listen_events</span> until a successful{" "}
           <span className="font-medium text-foreground">stats.rebuild</span> job completes. Until then, counts stay on{" "}
-          <span className="font-medium text-foreground">listen_history</span>. Cancel is hidden during the swap — let the
+          <span className="font-medium text-foreground">listen_history</span>. Cancel is hidden during the swap - let the
           job finish.
         </p>
         <p className="mt-2 text-muted">

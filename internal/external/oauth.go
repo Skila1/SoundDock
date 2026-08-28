@@ -28,6 +28,27 @@ const (
 	refreshSkew          = 2 * time.Minute
 )
 
+// HTTPStatusError is a provider HTTP failure with a typed status code.
+type HTTPStatusError struct {
+	Status int
+	Body   string
+}
+
+func (e *HTTPStatusError) Error() string {
+	if e == nil {
+		return "http status error"
+	}
+	return fmt.Sprintf("%d %s: %s", e.Status, http.StatusText(e.Status), e.Body)
+}
+
+func httpStatus(err error) int {
+	var he *HTTPStatusError
+	if errors.As(err, &he) && he != nil {
+		return he.Status
+	}
+	return 0
+}
+
 var (
 	ErrNeedsReconnect = errors.New("needs reconnect")
 	ErrTemporary      = errors.New("temporary error")
@@ -130,7 +151,7 @@ func httpJSON(ctx context.Context, method, rawURL, bearer string, form url.Value
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("%s: %s", resp.Status, truncate(string(b), 200))
+		return &HTTPStatusError{Status: resp.StatusCode, Body: truncate(string(b), 200)}
 	}
 	if out == nil {
 		return nil
@@ -143,6 +164,37 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func requestedScopes(provider string) []string {
+	switch provider {
+	case "spotify":
+		return []string{"playlist-read-private", "playlist-read-collaborative"}
+	case "youtube":
+		return []string{"https://www.googleapis.com/auth/youtube.readonly"}
+	default:
+		return nil
+	}
+}
+
+func scopesFromRaw(raw map[string]any) []string {
+	if raw == nil {
+		return nil
+	}
+	switch v := raw["scope"].(type) {
+	case string:
+		return strings.Fields(v)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			s := strings.TrimSpace(fmt.Sprint(item))
+			if s != "" && s != "<nil>" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func AuthURL(provider, clientID, redirect, state, challenge string) string {
@@ -182,37 +234,33 @@ func ExchangeCode(ctx context.Context, provider, clientID, secret, redirect, cod
 		if err := httpJSON(ctx, http.MethodPost, "https://accounts.spotify.com/api/token", "", form, &raw); err != nil {
 			return tok, err
 		}
-		tok.Access, _ = raw["access_token"].(string)
-		tok.Refresh, _ = raw["refresh_token"].(string)
-		if n, _ := raw["expires_in"].(float64); n > 0 {
-			tok.Expiry = time.Now().Add(time.Duration(n) * time.Second)
-		}
+		tok = tokenFromRaw(raw)
 		var me map[string]any
 		_ = httpJSON(ctx, http.MethodGet, "https://api.spotify.com/v1/me", tok.Access, nil, &me)
 		tok.AccountID, _ = me["id"].(string)
 		tok.Name, _ = me["display_name"].(string)
-		tok.Scopes = []string{"playlist-read-private"}
+		if len(tok.Scopes) == 0 {
+			tok.Scopes = requestedScopes("spotify")
+		}
 	case "youtube":
 		form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect}, "client_id": {clientID}, "client_secret": {secret}, "code_verifier": {verifier}}
 		var raw map[string]any
 		if err := httpJSON(ctx, http.MethodPost, "https://oauth2.googleapis.com/token", "", form, &raw); err != nil {
 			return tok, err
 		}
-		tok.Access, _ = raw["access_token"].(string)
-		tok.Refresh, _ = raw["refresh_token"].(string)
-		if n, _ := raw["expires_in"].(float64); n > 0 {
-			tok.Expiry = time.Now().Add(time.Duration(n) * time.Second)
-		}
+		tok = tokenFromRaw(raw)
 		tok.Name = "YouTube"
 		tok.AccountID = "youtube"
+		if len(tok.Scopes) == 0 {
+			tok.Scopes = requestedScopes("youtube")
+		}
 	case "soundcloud":
 		form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {redirect}, "client_id": {clientID}, "client_secret": {secret}}
 		var raw map[string]any
 		if err := httpJSON(ctx, http.MethodPost, "https://secure.soundcloud.com/oauth/token", "", form, &raw); err != nil {
 			return tok, err
 		}
-		tok.Access, _ = raw["access_token"].(string)
-		tok.Refresh, _ = raw["refresh_token"].(string)
+		tok = tokenFromRaw(raw)
 		tok.Name = "SoundCloud"
 	default:
 		return tok, fmt.Errorf("unsupported provider")
@@ -350,6 +398,7 @@ func tokenFromRaw(raw map[string]any) Token {
 	if n, _ := raw["expires_in"].(float64); n > 0 {
 		tok.Expiry = time.Now().Add(time.Duration(n) * time.Second)
 	}
+	tok.Scopes = scopesFromRaw(raw)
 	return tok
 }
 
@@ -462,6 +511,18 @@ func persistRotatedTokens(ctx context.Context, pool *pgxpool.Pool, box *cryptox.
 				return err
 			}
 		}
+	}
+	if len(tok.Scopes) > 0 {
+		_, err := pool.Exec(ctx, `
+			UPDATE external_provider_accounts SET
+				access_token_enc=$2,
+				refresh_token_enc=COALESCE($3, refresh_token_enc),
+				token_expiry=$4,
+				scopes=$5,
+				status='connected',
+				last_error=''
+			WHERE id=$1`, accountID, acc, ref, tok.Expiry, tok.Scopes)
+		return err
 	}
 	_, err := pool.Exec(ctx, `
 		UPDATE external_provider_accounts SET
@@ -576,4 +637,69 @@ func EnsureAccess(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box, use
 		return "", extra, fmt.Errorf("no access token")
 	}
 	return tok.Access, extra, nil
+}
+
+// ForceRefresh exchanges the stored refresh token even when the access token looks fresh.
+func ForceRefresh(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box, userID uuid.UUID, provider string, st Settings) (access, extra string, err error) {
+	extra = extraFrom(st)
+	var (
+		id     uuid.UUID
+		refEnc []byte
+		status string
+	)
+	err = pool.QueryRow(ctx, `
+		SELECT id, refresh_token_enc, status
+		FROM external_provider_accounts WHERE user_id=$1 AND provider=$2`, userID, provider).
+		Scan(&id, &refEnc, &status)
+	if err != nil {
+		return "", extra, err
+	}
+	if status == StatusNeedsReconnect {
+		return "", extra, fmt.Errorf("%w: %s", ErrNeedsReconnect, reconnectMessage(provider))
+	}
+	refresh := decryptString(box, refEnc)
+	if refresh == "" {
+		return "", extra, fmt.Errorf("no refresh token")
+	}
+	tok, err := refreshFlight.do(id.String()+"|force", func() (Token, error) {
+		return refreshAccount(ctx, pool, box, id, provider, st, refresh)
+	})
+	if err != nil {
+		return "", extra, err
+	}
+	if tok.Access == "" {
+		return "", extra, fmt.Errorf("no access token")
+	}
+	return tok.Access, extra, nil
+}
+
+type accessToken struct {
+	value   string
+	refresh func(context.Context) (string, error)
+	once    bool
+}
+
+func (a *accessToken) after401(ctx context.Context) bool {
+	if a == nil || a.refresh == nil || a.once {
+		return false
+	}
+	a.once = true
+	tok, err := a.refresh(ctx)
+	if err != nil || strings.TrimSpace(tok) == "" {
+		return false
+	}
+	a.value = tok
+	return true
+}
+
+func httpJSONAuth(ctx context.Context, method, rawURL string, tok *accessToken, form url.Values, out any) error {
+	bearer := ""
+	if tok != nil {
+		bearer = tok.value
+	}
+	err := httpJSON(ctx, method, rawURL, bearer, form, out)
+	if httpStatus(err) == http.StatusUnauthorized && tok.after401(ctx) {
+		return httpJSON(ctx, method, rawURL, tok.value, form, out)
+	}
+	return err
 }

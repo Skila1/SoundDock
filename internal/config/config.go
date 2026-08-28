@@ -3,6 +3,7 @@ package config
 import (
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ type Config struct {
 	CacheDir        string
 	BackupDir       string
 	ManagedDir      string
+	LibraryHost     string
 	UseSecureCookie bool
 	LogLevel        string
 	OpenSubsonic    bool
@@ -47,6 +49,7 @@ func Load() Config {
 	if role == "" {
 		role = RoleAll
 	}
+	dataDir := env("SD_DATA_DIR", "./data")
 	return Config{
 		Role:            role,
 		HTTPAddr:        env("SD_HTTP_ADDR", ":8080"),
@@ -54,11 +57,12 @@ func Load() Config {
 		InstanceName:    env("SD_INSTANCE_NAME", "SoundDock"),
 		TrustedProxies:  splitCSV(env("SD_TRUSTED_PROXIES", "127.0.0.1/32,::1/128,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")),
 		DatabaseURL:     env("SD_DATABASE_URL", "postgres://sounddock:sounddock@127.0.0.1:5432/sounddock?sslmode=disable"),
-		MasterKey:       env("SD_MASTER_KEY", ""),
-		DataDir:         env("SD_DATA_DIR", "./data"),
+		MasterKey:       loadMasterKey(dataDir),
+		DataDir:         dataDir,
 		CacheDir:        env("SD_CACHE_DIR", "./data/cache"),
 		BackupDir:       env("SD_BACKUP_DIR", "./data/backups"),
 		ManagedDir:      env("SD_MANAGED_DIR", "./data/managed"),
+		LibraryHost:     env("SD_LIBRARY_HOST", ""),
 		UseSecureCookie: envBool("SD_COOKIE_SECURE", false),
 		LogLevel:        env("SD_LOG_LEVEL", "info"),
 		OpenSubsonic:    envBool("SD_OPENSUBSONIC", false),
@@ -88,6 +92,23 @@ func (c Config) TrustedNets() []*net.IPNet {
 		}
 	}
 	return out
+}
+
+// MasterKeyPath is {dataDir}/master.key. The file wins over SD_MASTER_KEY.
+func MasterKeyPath(dataDir string) string {
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	return filepath.Join(dataDir, "master.key")
+}
+
+func loadMasterKey(dataDir string) string {
+	if b, err := os.ReadFile(MasterKeyPath(dataDir)); err == nil {
+		if s := strings.TrimSpace(string(b)); s != "" {
+			return s
+		}
+	}
+	return env("SD_MASTER_KEY", "")
 }
 
 func env(k, def string) string {

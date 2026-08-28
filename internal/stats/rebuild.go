@@ -82,9 +82,9 @@ func CutoverToEvents(ctx context.Context, pool *pgxpool.Pool) (Result, error) {
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO play_counts_rebuild (user_id, track_id, count, skip_count, last_played_at)
 		SELECT user_id, track_id,
-			(count(*) FILTER (WHERE qualified_play = true))::int,
+			(count(*) FILTER (WHERE kind = 'qualify'))::int,
 			(count(*) FILTER (WHERE kind = 'skip'))::int,
-			max(started_at) FILTER (WHERE qualified_play = true)
+			max(started_at) FILTER (WHERE kind = 'qualify')
 		FROM listen_events
 		GROUP BY user_id, track_id`); err != nil {
 		return Result{}, err

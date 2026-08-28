@@ -102,7 +102,7 @@ func trackInUse(ctx context.Context, q querier, loser uuid.UUID) (bool, error) {
 	err := q.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM playback_sessions
-			WHERE current_track_id=$1
+			WHERE current_track_id=$1::uuid
 			  AND (
 				status IN ('playing', 'paused', 'interrupted')
 				OR renderer_kind='discord'
@@ -118,7 +118,7 @@ func trackInUse(ctx context.Context, q querier, loser uuid.UUID) (bool, error) {
 		SELECT EXISTS (
 			SELECT 1 FROM discord_voice_runtime r
 			JOIN playback_sessions s ON s.id = r.session_id
-			WHERE s.current_track_id=$1
+			WHERE s.current_track_id=$1::uuid
 		)`, loser).Scan(&used)
 	if err != nil {
 		if missingTable(err) {
@@ -201,11 +201,11 @@ func remapListenHistory(ctx context.Context, q querier, winner, loser uuid.UUID)
 func remapListenEvents(ctx context.Context, q querier, winner, loser uuid.UUID) error {
 	if err := execOptional(ctx, q, `
 		DELETE FROM listen_events e
-		WHERE e.track_id=$2
+		WHERE e.track_id=$2::uuid
 		  AND e.playback_instance_id IS NOT NULL
 		  AND EXISTS (
 			SELECT 1 FROM listen_events w
-			WHERE w.track_id=$1
+			WHERE w.track_id=$1::uuid
 			  AND w.playback_instance_id = e.playback_instance_id
 			  AND w.user_id = e.user_id
 			  AND w.kind = e.kind
@@ -218,8 +218,8 @@ func remapListenEvents(ctx context.Context, q querier, winner, loser uuid.UUID) 
 func remapPlayCounts(ctx context.Context, q querier, winner, loser uuid.UUID) error {
 	if err := execRequired(ctx, q, `
 		INSERT INTO play_counts (user_id, track_id, count, skip_count, last_played_at)
-		SELECT user_id, $1, count, skip_count, last_played_at
-		FROM play_counts WHERE track_id=$2
+		SELECT user_id, $1::uuid, count, skip_count, last_played_at
+		FROM play_counts WHERE track_id=$2::uuid
 		ON CONFLICT (user_id, track_id) DO UPDATE SET
 			count = play_counts.count + EXCLUDED.count,
 			skip_count = play_counts.skip_count + EXCLUDED.skip_count,
@@ -236,10 +236,10 @@ func remapPlayCounts(ctx context.Context, q querier, winner, loser uuid.UUID) er
 func remapPlaylistEntries(ctx context.Context, q querier, winner, loser uuid.UUID) error {
 	if err := execRequired(ctx, q, `
 		DELETE FROM playlist_entries pe
-		WHERE pe.track_id=$2
+		WHERE pe.track_id=$2::uuid
 		  AND EXISTS (
 			SELECT 1 FROM playlist_entries x
-			WHERE x.playlist_id = pe.playlist_id AND x.track_id=$1
+			WHERE x.playlist_id = pe.playlist_id AND x.track_id=$1::uuid
 		  )`, winner, loser); err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func remapFavourites(ctx context.Context, q querier, winner, loser uuid.UUID) er
 		WHERE f.entity_type='track' AND f.entity_id=$2
 		  AND EXISTS (
 			SELECT 1 FROM favourites x
-			WHERE x.user_id = f.user_id AND x.entity_type='track' AND x.entity_id=$1
+			WHERE x.user_id = f.user_id AND x.entity_type='track' AND x.entity_id=$1::uuid
 		  )`, winner, loser); err != nil {
 		return err
 	}
@@ -266,7 +266,7 @@ func remapLyrics(ctx context.Context, q querier, winner, loser uuid.UUID) error 
 		DELETE FROM lyrics l
 		WHERE l.track_id=$2
 		  AND EXISTS (
-			SELECT 1 FROM lyrics w WHERE w.track_id=$1 AND w.source = l.source
+			SELECT 1 FROM lyrics w WHERE w.track_id=$1::uuid AND w.source = l.source
 		  )`, winner, loser); err != nil {
 		return err
 	}
@@ -306,10 +306,11 @@ func remapRetentionExclusions(ctx context.Context, q querier, winner, loser uuid
 func remapListenInstanceState(ctx context.Context, q querier, winner, loser uuid.UUID) error {
 	if err := execOptional(ctx, q, `
 		DELETE FROM listen_instance_state s
-		WHERE s.track_id=$2
+		WHERE s.track_id=$2::uuid
 		  AND EXISTS (
 			SELECT 1 FROM listen_instance_state w
 			WHERE w.playback_instance_id = s.playback_instance_id AND w.user_id = s.user_id
+			  AND w.track_id=$1::uuid
 		  )`, winner, loser); err != nil {
 		return err
 	}

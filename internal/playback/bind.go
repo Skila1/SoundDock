@@ -8,11 +8,102 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// BindResult is returned by BindDiscordRenderer / UnbindDiscordRenderer.
+// BindResult is returned by BindDiscordRenderer / UnbindDiscordRenderer / BindGuildSession.
 type BindResult struct {
 	BindingRevision int64     `json:"binding_revision"`
 	SessionID       uuid.UUID `json:"session_id"`
 	StateRevision   int64     `json:"state_revision"`
+}
+
+func sameVoiceChannel(prev *string, want string) bool {
+	if prev == nil {
+		return want == ""
+	}
+	return *prev == want
+}
+
+func sessionStateRevision(ctx context.Context, q db, sessionID uuid.UUID) int64 {
+	var rev int64
+	_ = q.QueryRow(ctx, `SELECT state_revision FROM playback_sessions WHERE id=$1`, sessionID).Scan(&rev)
+	return rev
+}
+
+// BindGuildSession binds a guild voice runtime row to sessionID and channel.
+// It does not grant a renderer lease. Same session+channel is a no-op and
+// does not bump binding_revision or state_revision.
+func (e *Engine) BindGuildSession(ctx context.Context, guildID string, sessionID uuid.UUID, voiceChannelID string, expectedBindingRevision int64) (BindResult, error) {
+	tx, err := e.pool.Begin(ctx)
+	if err != nil {
+		return BindResult{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx, `INSERT INTO discord_guilds (id) VALUES ($1) ON CONFLICT DO NOTHING`, guildID); err != nil {
+		return BindResult{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO discord_voice_runtime (guild_id)
+		VALUES ($1) ON CONFLICT (guild_id) DO NOTHING`, guildID); err != nil {
+		return BindResult{}, err
+	}
+
+	var curRev int64
+	var prevSession *uuid.UUID
+	var prevCh *string
+	err = tx.QueryRow(ctx, `
+		SELECT binding_revision, session_id, voice_channel_id
+		FROM discord_voice_runtime WHERE guild_id=$1 FOR UPDATE`, guildID).
+		Scan(&curRev, &prevSession, &prevCh)
+	if err != nil {
+		return BindResult{}, err
+	}
+	if expectedBindingRevision != 0 && expectedBindingRevision != curRev {
+		return BindResult{}, ErrBindConflict
+	}
+
+	sameSession := prevSession != nil && *prevSession == sessionID
+	if sameSession && sameVoiceChannel(prevCh, voiceChannelID) {
+		if err := tx.Commit(ctx); err != nil {
+			return BindResult{}, err
+		}
+		return BindResult{BindingRevision: curRev, SessionID: sessionID, StateRevision: sessionStateRevision(ctx, e.pool, sessionID)}, nil
+	}
+
+	oldID := uuid.Nil
+	if prevSession != nil {
+		oldID = *prevSession
+	}
+	unlock := e.lockSessions(sessionID, oldID)
+	defer unlock()
+	if err := lockSessionRows(ctx, tx, sessionID, oldID); err != nil {
+		return BindResult{}, err
+	}
+
+	newRev := curRev + 1
+	if _, err := tx.Exec(ctx, `
+		UPDATE discord_voice_runtime
+		SET binding_revision=$2, session_id=$3, voice_channel_id=$4
+		WHERE guild_id=$1`, guildID, newRev, sessionID, voiceChannelID); err != nil {
+		return BindResult{}, err
+	}
+
+	if oldID != uuid.Nil && oldID != sessionID {
+		released, err := casReleaseDiscordIfHeld(ctx, tx, oldID, true)
+		if err != nil {
+			return BindResult{}, err
+		}
+		if released {
+			if err := bumpRevision(ctx, tx, oldID); err != nil {
+				return BindResult{}, err
+			}
+		}
+	}
+
+	stateRev := sessionStateRevision(ctx, tx, sessionID)
+	if err := tx.Commit(ctx); err != nil {
+		return BindResult{}, err
+	}
+	return BindResult{BindingRevision: newRev, SessionID: sessionID, StateRevision: stateRev}, nil
 }
 
 // BindDiscordRenderer atomically binds a guild voice runtime row to sessionID

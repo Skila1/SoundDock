@@ -36,6 +36,57 @@ func TestGetLyricsReturnsEmbeddedWithoutNetwork(t *testing.T) {
 	}
 }
 
+func TestGetLyricsEnabledServesProviderCache(t *testing.T) {
+	var fetches atomic.Int32
+	s := &Service{
+		listFn: func(context.Context, uuid.UUID) ([]Result, error) {
+			return []Result{{Source: SourceLRCLIB, Body: "cached lrclib", Timed: true}}, nil
+		},
+		urlFn: func(context.Context) string { return "https://lrclib.net" },
+		fetchFn: func(context.Context, string, Meta) (string, bool, error) {
+			fetches.Add(1)
+			t.Fatal("cache hit must not fetch")
+			return "", false, nil
+		},
+	}
+	got := s.GetLyrics(context.Background(), Meta{Title: "Song", Artist: "A", TrackID: uuid.New()})
+	if fetches.Load() != 0 {
+		t.Fatalf("fetches %d", fetches.Load())
+	}
+	if got.Source != SourceLRCLIB || got.Body != "cached lrclib" {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestGetLyricsDisabledDoesNotServeProviderCache(t *testing.T) {
+	id := uuid.New()
+	var fetches atomic.Int32
+	var saves atomic.Int32
+	s := &Service{
+		listFn: func(context.Context, uuid.UUID) ([]Result, error) {
+			return []Result{{Source: SourceLRCLIB, Body: "cached lrclib", Timed: true}}, nil
+		},
+		urlFn: func(context.Context) string { return "" },
+		fetchFn: func(context.Context, string, Meta) (string, bool, error) {
+			fetches.Add(1)
+			t.Fatal("disabled provider must not HTTP")
+			return "from-network", false, nil
+		},
+		saveFn: func(context.Context, uuid.UUID, string, string, bool) error {
+			saves.Add(1)
+			t.Fatal("disabled provider must not write or delete cache")
+			return nil
+		},
+	}
+	got := s.GetLyrics(context.Background(), Meta{Title: "Song", Artist: "A", TrackID: id})
+	if fetches.Load() != 0 || saves.Load() != 0 {
+		t.Fatalf("disabled must not fetch or mutate cache fetches=%d saves=%d", fetches.Load(), saves.Load())
+	}
+	if got.Body != "" || got.Source != "" {
+		t.Fatalf("disabled must not serve provider cache, got %+v", got)
+	}
+}
+
 func TestGetLyricsProviderDisabledNoHTTP(t *testing.T) {
 	var fetches atomic.Int32
 	s := &Service{
@@ -52,6 +103,19 @@ func TestGetLyricsProviderDisabledNoHTTP(t *testing.T) {
 	}
 	if got.Body != "" || got.Source != "" {
 		t.Fatalf("want empty, got %+v", got)
+	}
+}
+
+func TestGetLyricsDoesNotServeProviderCacheWhenExternalOff(t *testing.T) {
+	s := &Service{
+		listFn: func(context.Context, uuid.UUID) ([]Result, error) {
+			return []Result{{Source: SourceLRCLIB, Body: "cached provider lines"}}, nil
+		},
+		urlFn: func(context.Context) string { return "" },
+	}
+	got := s.GetLyrics(context.Background(), Meta{Title: "Song", Artist: "A", TrackID: uuid.New()})
+	if got.Body != "" || got.Source == SourceLRCLIB {
+		t.Fatalf("external off must not serve provider cache: %+v", got)
 	}
 }
 

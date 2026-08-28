@@ -6,7 +6,7 @@ import { useEffect } from "react";
 import { useTheme } from "@/stores/theme";
 import { PrefsSync } from "@/stores/prefs";
 
-const client = new QueryClient({
+export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } }
 });
 
@@ -16,7 +16,7 @@ export function Providers({ children }: { children: ReactNode }) {
     useTheme.getState().setTheme(theme);
   }, [theme]);
   return (
-    <QueryClientProvider client={client}>
+    <QueryClientProvider client={queryClient}>
       <TooltipProvider delayDuration={300}>
         {children}
         <PrefsSync />

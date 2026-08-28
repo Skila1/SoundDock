@@ -12,11 +12,17 @@ import (
 func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
 	needed, _ := s.Auth.SetupNeeded(r.Context())
 	oauth := auth.LoadDiscordOAuth(r.Context(), s.Pool, s.Box)
-	writeJSON(w, 200, map[string]any{
+	out := map[string]any{
 		"needed":             needed,
 		"discord_enabled":    oauth.LoginEnabled,
 		"discord_configured": oauth.Ready(),
-	})
+	}
+	if s.Backup != nil {
+		if req, err := s.Backup.Requirements(); err == nil && len(req.Items) > 0 {
+			out["restore_requirements"] = req
+		}
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
@@ -148,6 +154,10 @@ func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
 	u, err := s.Auth.UpsertDiscordUser(r.Context(), prof)
 	if err != nil {
 		fail("account")
+		return
+	}
+	if u.Disabled {
+		fail("disabled")
 		return
 	}
 	tok, sess, err := s.Auth.CreateSession(r.Context(), u.ID, r.UserAgent(), r.RemoteAddr, 30*24*time.Hour)

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -153,10 +154,40 @@ func (s *Service) ScanUploads(ctx context.Context, lib uuid.UUID, getProv func(c
 }
 
 type MigratePayload struct {
-	Source uuid.UUID `json:"source_library_id"`
-	Dest   uuid.UUID `json:"dest_library_id"`
-	Mode   string    `json:"mode"` // copy|move
-	Dedupe bool      `json:"dedupe"`
+	Source         uuid.UUID `json:"source_library_id"`
+	Dest           uuid.UUID `json:"dest_library_id"`
+	Mode           string    `json:"mode"` // requested copy|move
+	RequestedMode  string    `json:"requested_mode,omitempty"`
+	EffectiveMode  string    `json:"effective_mode,omitempty"`
+	Reason         string    `json:"reason,omitempty"`
+	Dedupe         bool      `json:"dedupe"`
+}
+
+func (s *Service) libraryStorageType(ctx context.Context, libID uuid.UUID) string {
+	if s.pool == nil || libID == uuid.Nil {
+		return ""
+	}
+	var typ string
+	_ = s.pool.QueryRow(ctx, `
+		SELECT sp.type FROM libraries l
+		JOIN storage_providers sp ON sp.id=l.storage_provider_id
+		WHERE l.id=$1`, libID).Scan(&typ)
+	return typ
+}
+
+func (s *Service) ResolveMigrateModes(ctx context.Context, requested string, sourceLib uuid.UUID) (req, effective, reason string) {
+	req = strings.ToLower(strings.TrimSpace(requested))
+	if req == "" {
+		req = "copy"
+	}
+	srcType := s.libraryStorageType(ctx, sourceLib)
+	if req == "move" && srcType == "managed" {
+		return req, "move", "move_after_ingest"
+	}
+	if req == "move" {
+		return req, "copy", "source_not_managed"
+	}
+	return req, "copy", ""
 }
 
 func (s *Service) MigrateHandler(getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) jobs.Handler {
@@ -169,12 +200,29 @@ func (s *Service) MigrateHandler(getProv func(context.Context, uuid.UUID) (stora
 		if e != nil {
 			return e
 		}
+		srcType := s.libraryStorageType(ctx, p.Source)
+		requested := strings.ToLower(strings.TrimSpace(p.Mode))
+		if requested == "" {
+			requested = "copy"
+		}
+		effectiveMove := requested == "move" && srcType == "managed"
+		p.RequestedMode = requested
+		if effectiveMove {
+			p.EffectiveMode = "move"
+			p.Reason = "move_after_ingest"
+		} else {
+			p.EffectiveMode = "copy"
+			if requested == "move" && srcType != "managed" {
+				p.Reason = "source_not_managed"
+			}
+		}
 		it, e := src.List(ctx, prefix)
 		if e != nil {
 			return e
 		}
 		defer it.Close()
 		var copied []string
+		var srcKeys []string
 		defer func() {
 			if err == nil {
 				return
@@ -202,10 +250,8 @@ func (s *Service) MigrateHandler(getProv func(context.Context, uuid.UUID) (stora
 				return err
 			}
 			copied = append(copied, key)
+			srcKeys = append(srcKeys, entry.Key)
 			rc.Close()
-			if p.Mode == "move" {
-				_ = src.Delete(ctx, entry.Key)
-			}
 		}
 		dest, destID, _, e := getProv(ctx, p.Dest)
 		if e != nil {
@@ -213,6 +259,20 @@ func (s *Service) MigrateHandler(getProv func(context.Context, uuid.UUID) (stora
 			return err
 		}
 		err = s.scanner.ScanLibrary(ctx, destID, dest, "migrated", "migrate", job.ID)
-		return err
+		if err != nil {
+			return err
+		}
+		if effectiveMove {
+			for _, k := range srcKeys {
+				var n int
+				if s.pool != nil {
+					_ = s.pool.QueryRow(ctx, `SELECT count(*) FROM track_files WHERE storage_key=$1 AND deleted_at IS NULL`, k).Scan(&n)
+				}
+				if n == 0 {
+					_ = src.Delete(ctx, k)
+				}
+			}
+		}
+		return nil
 	}
 }

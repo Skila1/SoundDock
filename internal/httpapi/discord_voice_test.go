@@ -216,8 +216,8 @@ func TestDiscordJoinBindsAttachedSession(t *testing.T) {
 	if kind != "web_device" {
 		t.Fatalf("bound kind %s (must not be discord_guild)", kind)
 	}
-	if rendererID == nil || *rendererID != pendingHTTPRendererID {
-		t.Fatalf("renderer_id %v", rendererID)
+	if rendererID != nil && *rendererID != "" {
+		t.Fatalf("join must not grant a renderer, renderer_id=%v", rendererID)
 	}
 
 	stale := httptest.NewRecorder()
@@ -352,6 +352,14 @@ func TestAcquireBrowserLeaseConflictWhileDiscordHolds(t *testing.T) {
 	s.discordJoin(jrec, authedJSON(u, http.MethodPost, "/api/v1/me/discord/join", map[string]any{}))
 	if jrec.Code != 200 {
 		t.Fatalf("join %d %s", jrec.Code, jrec.Body.String())
+	}
+	sidStr, _ := decodeMap(t, jrec)["session_id"].(string)
+	sid, err := uuid.Parse(sidStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Play.ClaimDiscordRenderer(context.Background(), sid, "bot-1", 1, true); err != nil {
+		t.Fatal(err)
 	}
 	arec := httptest.NewRecorder()
 	s.queueRendererAcquire(arec, authedJSON(u, http.MethodPost, "/api/v1/me/queue/renderer/acquire", map[string]any{

@@ -7,11 +7,13 @@ import (
 	"io"
 	"math"
 	"os/exec"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/mediabusy"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/scrobble"
 	"github.com/sounddock/sounddock/internal/storage"
@@ -225,20 +227,16 @@ func (b *Bot) LeaveGuild(ctx context.Context, guildID string) error {
 		_ = b.play.Control(ctx, rt.SessionID, "stop", nil)
 		_ = b.play.Control(ctx, rt.SessionID, "clear", map[string]any{"all": true})
 	}
-	if b.play != nil {
+	if held && b.play != nil {
 		expected := rt.BindingRevision
-		known := false
 		if v, ok := b.lastBindRev.Load(guildID); ok {
 			if n, ok := v.(int64); ok {
 				expected = n
-				known = true
 			}
 		}
-		if known || held {
-			_, err := b.play.UnbindDiscordRenderer(ctx, guildID, expected, rid, gen)
-			if err != nil && !errors.Is(err, playback.ErrBindConflict) && !errors.Is(err, playback.ErrLeaseConflict) && b.log != nil {
-				b.log.Warn("discord unbind", "guild", guildID, "err", err)
-			}
+		_, err := b.play.UnbindDiscordRenderer(ctx, guildID, expected, rid, gen)
+		if err != nil && !errors.Is(err, playback.ErrBindConflict) && !errors.Is(err, playback.ErrLeaseConflict) && b.log != nil {
+			b.log.Warn("discord unbind", "guild", guildID, "err", err)
 		}
 	}
 	b.lastBindRev.Delete(guildID)
@@ -317,6 +315,12 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 			}
 			continue
 		}
+		rid, gen := b.rendererIdentity()
+		if !shouldEmitDiscordPCM(st, rid, gen) {
+			// Browser (or other) output: stay in VC, do not unbind, do not play.
+			stopTrack()
+			continue
+		}
 		if time.Since(lastHB) >= rendererHeartbeatEvery {
 			if err := b.heartbeatLease(ctx, sid); errors.Is(err, playback.ErrLeaseConflict) {
 				stopTrack()
@@ -342,7 +346,7 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 			continue
 		}
 		// Volume/mute are live PCM gain: update the multiplier in place. Do not
-		// stopTrack or reconnect voice — state_revision is the engine's job.
+		// stopTrack or reconnect voice - state_revision is the engine's job.
 		if g := b.streamGain(guildID); g != nil {
 			g.Set(liveVolumeMultiplier(st))
 		}
@@ -385,7 +389,7 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 	src, gainDB, durationMS, err := b.ffmpegSourceForTrack(ctx, trackID, st)
 	if err != nil {
 		b.recordPlaybackError(ctx, guildID, trackID, "ffmpeg", err.Error())
-		_ = b.play.Control(ctx, sid, "skip", nil)
+		_ = b.play.Control(ctx, sid, "skip", skipControlExtra(false))
 		return
 	}
 	defer src.Close()
@@ -394,11 +398,23 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 	pcmCmd, pcm, err := src.open(ctx, gainDB, startMS)
 	if err != nil {
 		b.recordPlaybackError(ctx, guildID, trackID, "ffmpeg", err.Error())
-		_ = b.play.Control(ctx, sid, "skip", nil)
+		_ = b.play.Control(ctx, sid, "skip", skipControlExtra(false))
 		return
 	}
-	releaseBusy := b.MediaBusy.Hold(trackID)
+	holder := "discord:" + sid.String()
+	switch g := st["renderer_generation"].(type) {
+	case int64:
+		if g > 0 {
+			holder = holder + ":" + strconv.FormatInt(g, 10)
+		}
+	case float64:
+		if g > 0 {
+			holder = holder + ":" + strconv.FormatInt(int64(g), 10)
+		}
+	}
+	releaseBusy := b.MediaBusy.Acquire(ctx, trackID, mediabusy.KindDiscord, holder)
 	defer releaseBusy()
+	b.MediaBusy.UpdateTrack(ctx, mediabusy.KindDiscord, holder, trackID)
 	defer func() {
 		if pcm != nil {
 			pcm.Close()
@@ -475,8 +491,15 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 	if ctx.Err() != nil {
 		return
 	}
-	// Natural end: advance the guild session.
-	_ = b.play.Control(context.Background(), sid, "skip", nil)
+	// Natural end: advance the guild session. Repeat-one loops only when ended=true.
+	_ = b.play.Control(context.Background(), sid, "skip", skipControlExtra(true))
+}
+
+func skipControlExtra(ended bool) map[string]any {
+	if ended {
+		return map[string]any{"ended": true}
+	}
+	return nil
 }
 
 type pcmSource struct {
@@ -521,7 +544,7 @@ func sessionPositionMS(st map[string]any) int {
 	}
 }
 
-// sessionVolume returns the session volume in 0–1. Missing volume defaults to 1;
+// sessionVolume returns the session volume in 0-1. Missing volume defaults to 1;
 // an explicit 0 is silence and must not be rewritten to 100%.
 func sessionVolume(st map[string]any) float64 {
 	if st == nil {
@@ -556,7 +579,7 @@ func sessionMuted(st map[string]any) bool {
 }
 
 // liveVolumeMultiplier is the extra PCM scale applied after ReplayGain.
-// Session volume is 0–1 (engine clamps >1); mute or volume 0 is silence.
+// Session volume is 0-1 (engine clamps >1); mute or volume 0 is silence.
 func liveVolumeMultiplier(st map[string]any) float64 {
 	if sessionMuted(st) {
 		return 0

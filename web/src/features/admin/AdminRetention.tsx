@@ -79,11 +79,11 @@ type Retention = {
 };
 
 const modes = [
-  { value: "disabled", label: "Disabled — never automatically delete acquired music" },
-  { value: "age", label: "Age based — prune idle ScapeX tracks after the age threshold" },
-  { value: "storage", label: "Storage limit — keep managed media below the high-water mark" },
-  { value: "free_space", label: "Free-space protection — prune when the disk is too full" },
-  { value: "hybrid", label: "Hybrid — age rules, then prune harder under storage pressure" }
+  { value: "disabled", label: "Disabled - never automatically delete acquired music" },
+  { value: "age", label: "Age based - prune idle ScapeX tracks after the age threshold" },
+  { value: "storage", label: "Storage limit - keep managed media below the high-water mark" },
+  { value: "free_space", label: "Free-space protection - prune when the disk is too full" },
+  { value: "hybrid", label: "Hybrid - age rules, then prune harder under storage pressure" }
 ];
 
 function toGB(bytes?: number | null) {

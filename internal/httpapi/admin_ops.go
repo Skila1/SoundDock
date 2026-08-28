@@ -16,6 +16,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/diag"
 	"github.com/sounddock/sounddock/internal/transcode"
 	"github.com/sounddock/sounddock/internal/version"
 )
@@ -315,7 +316,14 @@ func (s *Server) CheckQuota(ctx context.Context, userID, libraryID uuid.UUID, ex
 	}
 	if userID != uuid.Nil {
 		var used int64
-		_ = s.Pool.QueryRow(ctx, `SELECT COALESCE(SUM(size_bytes),0) FROM upload_sessions WHERE user_id=$1`, userID).Scan(&used)
+		_ = s.Pool.QueryRow(ctx, `
+			SELECT COALESCE(SUM(size_bytes),0) FROM (
+			  SELECT size_bytes FROM upload_sessions WHERE user_id=$1
+			  UNION ALL
+			  SELECT tf.size_bytes FROM track_files tf
+			  JOIN acquisition_intents i ON i.track_id=tf.track_id
+			  WHERE i.user_id=$1 AND tf.deleted_at IS NULL
+			) q`, userID).Scan(&used)
 		capBytes := q.DefaultUserBytes
 		for _, row := range q.Users {
 			if row.UserID == userID.String() {
@@ -533,20 +541,7 @@ func (s *Server) adminBackupRestore(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "invalid backup id")
 		return
 	}
-	var body struct {
-		Confirm bool `json:"confirm"`
-	}
-	_ = decodeJSON(r, &body)
-	if !body.Confirm {
-		writeErr(w, 400, "confirm", "restore requires confirm=true")
-		return
-	}
-	if err := s.Backup.Restore(r.Context(), id); err != nil {
-		writeErr(w, 500, "restore", err.Error())
-		return
-	}
-	s.Audit.Event(r.Context(), &currentUser(r).ID, "backup.restore", id.String(), r.RemoteAddr, nil)
-	writeJSON(w, 200, map[string]any{"ok": true, "id": id})
+	s.adminBackupDoRestore(w, r, id)
 }
 
 func (s *Server) adminDiagnostics(w http.ResponseWriter, r *http.Request) {
@@ -579,6 +574,14 @@ func (s *Server) adminDiagnostics(w http.ResponseWriter, r *http.Request) {
 	if s.Slots != nil {
 		streams = s.Slots.Active()
 	}
+	rep := diag.Run(r.Context(), diag.Deps{
+		Pool:     s.Pool,
+		Cfg:      s.Cfg,
+		Backup:   s.Backup,
+		Jobs:     s.Jobs,
+		Draining: s.Draining,
+		Streams:  streams,
+	})
 	writeJSON(w, 200, map[string]any{
 		"go": map[string]any{
 			"version":    runtime.Version(),
@@ -608,7 +611,30 @@ func (s *Server) adminDiagnostics(w http.ResponseWriter, r *http.Request) {
 		"worker":         !s.Draining,
 		"fingerprint":    fingerprintToolStatus(),
 		"maintenance":    s.maintenanceEnabled(r.Context()),
+		"checks":         rep.Checks,
+		"failed_checks":  rep.Failed,
+		"warned_checks":  rep.Warned,
 	})
+}
+
+func pick(ok bool, yes, no string) string {
+	if ok {
+		return yes
+	}
+	return no
+}
+
+func bytesLabel(n int64) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	if n < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	}
+	if n < 1024*1024*1024 {
+		return fmt.Sprintf("%.1f MB", float64(n)/1024/1024)
+	}
+	return fmt.Sprintf("%.1f GB", float64(n)/1024/1024/1024)
 }
 
 func lookPathOK(name string) bool {

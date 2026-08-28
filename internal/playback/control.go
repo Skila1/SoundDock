@@ -102,7 +102,7 @@ func (e *Engine) Control(ctx context.Context, sid uuid.UUID, action string, extr
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	return e.commitSession(ctx, tx, sid, "session.state")
 }
 
 func (e *Engine) controlTx(ctx context.Context, tx db, sid uuid.UUID, action string, extra map[string]any) (bool, error) {
@@ -122,7 +122,7 @@ func (e *Engine) controlTx(ctx context.Context, tx db, sid uuid.UUID, action str
 			mutated = true
 		}
 	}
-	if ms, ok := extraInt(extra, "position_ms"); ok && action != "seek" && action != "stop" {
+	if ms, ok := extraInt(extra, "position_ms"); ok && action != "seek" && action != "stop" && action != "pause" {
 		if _, err := tx.Exec(ctx, `UPDATE playback_sessions SET position_ms=$2, updated_at=now() WHERE id=$1`, sid, ms); err != nil {
 			return false, err
 		}
@@ -130,7 +130,21 @@ func (e *Engine) controlTx(ctx context.Context, tx db, sid uuid.UUID, action str
 	ended, _ := extraBool(extra, "ended")
 	switch action {
 	case "pause":
-		_, err := tx.Exec(ctx, `UPDATE playback_sessions SET status='paused', updated_at=now() WHERE id=$1`, sid)
+		ms, hasPos := extraInt(extra, "position_ms")
+		if hasPos {
+			if ms < 0 {
+				ms = 0
+			}
+			_, err := tx.Exec(ctx, `
+				UPDATE playback_sessions
+				SET status='paused', position_ms=$2, `+sqlStampPlayhead+`, updated_at=now()
+				WHERE id=$1`, sid, ms)
+			return true, err
+		}
+		_, err := tx.Exec(ctx, `
+			UPDATE playback_sessions
+			SET status='paused', `+sqlStampPlayhead+`, updated_at=now()
+			WHERE id=$1`, sid)
 		return true, err
 	case "resume", "play":
 		_, err := tx.Exec(ctx, `UPDATE playback_sessions SET status='playing', updated_at=now() WHERE id=$1`, sid)
@@ -148,7 +162,7 @@ func (e *Engine) controlTx(ctx context.Context, tx db, sid uuid.UUID, action str
 			if _, err := tx.Exec(ctx, `DELETE FROM playback_queue_items WHERE session_id=$1`, sid); err != nil {
 				return false, err
 			}
-			_, err = tx.Exec(ctx, `UPDATE playback_sessions SET current_track_id=NULL, current_index=0, status='stopped', position_ms=0, updated_at=now() WHERE id=$1`, sid)
+			_, err = tx.Exec(ctx, `UPDATE playback_sessions SET `+sqlEmptySession+`, updated_at=now() WHERE id=$1`, sid)
 			return true, err
 		}
 		var idx int
@@ -223,6 +237,11 @@ func (e *Engine) controlTx(ctx context.Context, tx db, sid uuid.UUID, action str
 		default:
 			return mutated, fmt.Errorf("invalid output_pref")
 		}
+		if pref == OutputDiscord {
+			if _, err := casReleaseBrowserIfHeld(ctx, tx, sid); err != nil {
+				return false, err
+			}
+		}
 		_, err := tx.Exec(ctx, `UPDATE playback_sessions SET output_pref=$2, updated_at=now() WHERE id=$1`, sid, pref)
 		return true, err
 	case "seek":
@@ -230,8 +249,21 @@ func (e *Engine) controlTx(ctx context.Context, tx db, sid uuid.UUID, action str
 		if ms < 0 {
 			ms = 0
 		}
-		_, err := tx.Exec(ctx, `UPDATE playback_sessions SET position_ms=$2, updated_at=now() WHERE id=$1`, sid, ms)
+		_, err := tx.Exec(ctx, `
+			UPDATE playback_sessions
+			SET position_ms=$2, `+sqlStampPlayhead+`, updated_at=now()
+			WHERE id=$1`, sid, ms)
 		return true, err
+	case "add":
+		tracks := extraUUIDs(extra, "track_ids")
+		if len(tracks) == 0 {
+			return mutated, nil
+		}
+		next, _ := extraBool(extra, "next")
+		if err := addTracksTx(ctx, tx, sid, tracks, next); err != nil {
+			return false, err
+		}
+		return true, nil
 	case "stop_after_current":
 		return mutated, nil
 	case "skip", "next":
@@ -413,7 +445,7 @@ func (e *Engine) removeAt(ctx context.Context, tx db, sid uuid.UUID, pos int) (b
 	var tid uuid.UUID
 	err = tx.QueryRow(ctx, `SELECT track_id FROM playback_queue_items WHERE session_id=$1 AND position=$2`, sid, newIdx).Scan(&tid)
 	if err == pgx.ErrNoRows {
-		_, err = tx.Exec(ctx, `UPDATE playback_sessions SET current_index=0, current_track_id=NULL, status='stopped', position_ms=0, updated_at=now() WHERE id=$1`, sid)
+		_, err = tx.Exec(ctx, `UPDATE playback_sessions SET `+sqlEmptySession+`, updated_at=now() WHERE id=$1`, sid)
 		if err != nil {
 			return false, err
 		}
@@ -422,7 +454,17 @@ func (e *Engine) removeAt(ctx context.Context, tx db, sid uuid.UUID, pos int) (b
 	if err != nil {
 		return false, err
 	}
-	_, err = tx.Exec(ctx, `UPDATE playback_sessions SET current_index=$2, current_track_id=$3, updated_at=now() WHERE id=$1`, sid, newIdx, tid)
+	if pos == cur {
+		_, err = tx.Exec(ctx, `
+			UPDATE playback_sessions
+			SET current_index=$2, current_track_id=$3,
+				`+sqlNewInstance+`,
+				duration_ms=COALESCE((SELECT t.duration_ms FROM tracks t WHERE t.id=$3), 0),
+				updated_at=now()
+			WHERE id=$1`, sid, newIdx, tid)
+	} else {
+		_, err = tx.Exec(ctx, `UPDATE playback_sessions SET current_index=$2, current_track_id=$3, updated_at=now() WHERE id=$1`, sid, newIdx, tid)
+	}
 	if err != nil {
 		return false, err
 	}

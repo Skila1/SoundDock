@@ -627,7 +627,7 @@ paths:
         channel (discord_user_voice.channel_id == discord_voice_runtime.voice_channel_id)
         receive runtime.session_id. Everyone else receives their personal
         web_device session. Unlinked users never auto-attach. Leaving VC is
-        resolved on the next GET — no queue copy.
+        resolved on the next GET - no queue copy.
         Query target=discord is not a second-queue selector; GET never binds.
         Response includes server_time (RFC3339) for client RTT clock offset and
         listeners (in-process presence avatars, not listen stats). GET counts as
@@ -973,7 +973,7 @@ components:
         source: { type: string, enum: [web, discord, both] }
     SessionStateEvent:
       type: object
-      description: SSE event session.state — structural/control snapshot, not 1s playhead
+      description: SSE event session.state - structural/control snapshot, not 1s playhead
       properties:
         id: { type: string, format: uuid }
         state_revision: { type: integer, format: int64 }
@@ -1005,7 +1005,7 @@ components:
         duration_ms: { type: integer }
     SessionPresenceEvent:
       type: object
-      description: SSE event session.presence — participant avatars, not listen stats
+      description: SSE event session.presence - participant avatars, not listen stats
       properties:
         listeners:
           type: array

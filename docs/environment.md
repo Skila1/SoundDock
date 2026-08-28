@@ -4,7 +4,7 @@ See `.env.example`. The installer only writes what is needed to boot. Discord cl
 
 | Variable | Purpose |
 |---|---|
-| `SD_MASTER_KEY` | Encrypts storage secrets, Discord token, webhooks |
+| `SD_MASTER_KEY` | Encrypts storage secrets, Discord token, webhooks. `{SD_DATA_DIR}/master.key` wins if that file is present (written by restore). |
 | `SD_PUBLIC_URL` | Optional override. If unset, SoundDock uses the request Host (Docker port or Cloudflare Tunnel) |
 | `SD_TRUSTED_PROXIES` | CIDRs allowed to set `X-Forwarded-For` / `X-Forwarded-Proto` |
 | `SD_METRICS_ENABLED` | Optional Prometheus `/metrics` |

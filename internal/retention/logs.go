@@ -33,7 +33,7 @@ func applyLogPolicies(ctx context.Context, pool *pgxpool.Pool) error {
 		case "audit_events":
 			_, _ = pool.Exec(ctx, `DELETE FROM audit_events WHERE created_at < now() - make_interval(days => $1)`, days)
 		case "operational_logs":
-			// Seeded policy key with no table and no delete target.
+			_, _ = pool.Exec(ctx, `DELETE FROM operational_logs WHERE created_at < now() - make_interval(days => $1)`, days)
 		}
 	}
 	_, _ = pool.Exec(ctx, `DELETE FROM sessions WHERE expires_at < now()`)

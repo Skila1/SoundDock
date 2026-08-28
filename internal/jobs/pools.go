@@ -95,8 +95,8 @@ func DefaultConfigs() Configs {
 			QueueLimit: 32, TimeoutSeconds: 300, Priority: 40, MaxRSSMB: 512,
 		},
 		PoolSync: {
-			Enabled: true, MinWorkers: 0, MaxWorkers: 1,
-			QueueLimit: 16, TimeoutSeconds: 600, Priority: 50,
+			Enabled: true, MinWorkers: 0, MaxWorkers: 2,
+			QueueLimit: 256, TimeoutSeconds: 600, Priority: 50,
 		},
 		PoolMaintenance: {
 			Enabled: true, MinWorkers: 0, MaxWorkers: 2,

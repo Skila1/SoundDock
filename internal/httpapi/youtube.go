@@ -78,6 +78,9 @@ func (s *Server) jobScapeXFetch(ctx context.Context, job jobs.Job) error {
 			}
 		}
 	}
+	cancel := func(ctx context.Context) bool {
+		return s.Jobs != nil && s.Jobs.Cancelled(ctx, job.ID)
+	}
 	ids, err := s.ScapeX.RunFetchJob(ctx, scapex.FetchOpts{
 		JobID:       job.ID,
 		URLs:        refs,
@@ -86,10 +89,9 @@ func (s *Server) jobScapeXFetch(ctx context.Context, job jobs.Job) error {
 		UserID:      userID,
 		Quota:       s.CheckQuota,
 		Player:      s.Play,
+		Cancel:      cancel,
 	})
 	if err != nil {
-		_ = scapex.FailJobIntents(ctx, s.Pool, job.ID, err.Error())
-		scapex.DropFailedAcquire(ctx, s.Pool, s.Play, job.ID)
 		return err
 	}
 	if s.Jobs != nil {

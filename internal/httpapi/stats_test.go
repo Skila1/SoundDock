@@ -45,8 +45,11 @@ func TestRecapSQLEventsPath(t *testing.T) {
 		if strings.Contains(sql, "listen_history") {
 			t.Fatalf("events path must not query listen_history:\n%s", sql)
 		}
-		if !strings.Contains(sql, "qualified_play") {
-			t.Fatalf("events path must filter qualified_play:\n%s", sql)
+		if !strings.Contains(sql, "kind = 'qualify'") {
+			t.Fatalf("events path must filter kind=qualify:\n%s", sql)
+		}
+		if strings.Contains(sql, "qualified_play") {
+			t.Fatalf("events path must not filter qualified_play:\n%s", sql)
 		}
 	}
 }

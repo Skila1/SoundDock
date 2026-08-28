@@ -62,7 +62,7 @@ function jobTone(status: string) {
 }
 
 function formatMs(ms?: number) {
-  if (!ms) return "—";
+  if (!ms) return "-";
   if (ms < 1000) return `${ms}ms`;
   const s = Math.round(ms / 1000);
   if (s < 60) return `${s}s`;
@@ -161,7 +161,7 @@ function PoolCard({ pool, onSaved }: { pool: Pool; onSaved: () => void }) {
           <Input type="number" min={1} max={100} value={form.priority}
             onChange={(e) => set("priority", Number(e.target.value))} />
         </Field>
-        <Field label="Memory cap (MB, advisory)" hint="Advisory only — this is not a cgroup or enforced memory limit. 0 leaves it unset. Worker min/max concurrency is what actually caps load.">
+        <Field label="Memory cap (MB, advisory)" hint="Advisory only - this is not a cgroup or enforced memory limit. 0 leaves it unset. Worker min/max concurrency is what actually caps load.">
           <Input type="number" min={0} max={65536} value={form.max_rss_mb || 0}
             onChange={(e) => set("max_rss_mb", Number(e.target.value))} />
         </Field>

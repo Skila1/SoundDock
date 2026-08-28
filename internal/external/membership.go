@@ -41,6 +41,20 @@ func snapshotUnchanged(prevSnap, prevStatus, snap string) bool {
 	return snap != "" && prevSnap == snap && prevStatus == "ok"
 }
 
+func retainedSnapshot(prev, incoming string) string {
+	if incoming != "" {
+		return incoming
+	}
+	return prev
+}
+
+func keepMembership(id uuid.UUID, playable bool) (uuid.UUID, bool) {
+	if id == uuid.Nil || !playable {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
 func sameUUIDs(a, b []uuid.UUID) bool {
 	if len(a) != len(b) {
 		return false

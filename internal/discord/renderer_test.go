@@ -3,14 +3,13 @@ package discordx
 import (
 	"context"
 	"errors"
-	"os"
 	"testing"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sounddock/sounddock/internal/playback"
+	"github.com/sounddock/sounddock/internal/testdb"
 )
 
 func TestNewAssignsCryptoRendererIdentity(t *testing.T) {
@@ -65,6 +64,33 @@ func TestShouldPauseAfterReclaimOnlyStaleDiscordPlaying(t *testing.T) {
 	}
 	if shouldPauseAfterReclaim(false, playback.RendererDiscord, "same", 1, "same", 1, "playing") {
 		t.Fatal("same identity is not a reclaim")
+	}
+}
+
+func TestShouldClaimDiscordLeaseNeverStealsBrowser(t *testing.T) {
+	if shouldClaimDiscordLease("web_device", playback.OutputDiscord, playback.RendererBrowser) {
+		t.Fatal("must never steal browser")
+	}
+	if shouldClaimDiscordLease("web_device", playback.OutputBrowser, playback.RendererNone) {
+		t.Fatal("HTTP-bound web session with browser pref must not claim")
+	}
+	if !shouldClaimDiscordLease("web_device", playback.OutputDiscord, playback.RendererNone) {
+		t.Fatal("explicit discord output on an empty holder may claim")
+	}
+	if !shouldClaimDiscordLease("discord_guild", playback.OutputBrowser, playback.RendererNone) {
+		t.Fatal("guild-native session may claim despite schema default pref")
+	}
+	if shouldEmitDiscordPCM(map[string]any{
+		"renderer_kind": playback.RendererDiscord, "renderer_id": "bot", "renderer_generation": int64(1),
+		"output_pref": playback.OutputBrowser,
+	}, "bot", 1) {
+		t.Fatal("browser output must not emit Discord PCM")
+	}
+	if !shouldEmitDiscordPCM(map[string]any{
+		"renderer_kind": playback.RendererDiscord, "renderer_id": "bot", "renderer_generation": int64(1),
+		"output_pref": playback.OutputDiscord,
+	}, "bot", 1) {
+		t.Fatal("held discord + output_pref=discord must emit")
 	}
 }
 
@@ -136,23 +162,7 @@ func TestInteractionCommandIDIsSnowflake(t *testing.T) {
 }
 
 func discordTestPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	dsn := os.Getenv("SD_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("SD_TEST_DATABASE_URL not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Skip(err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Skip(err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return testdb.Open(t)
 }
 
 func TestEnsureBoundSessionUsesRuntimeNotFreshGuildRow(t *testing.T) {
@@ -295,6 +305,58 @@ func TestLeaveGuildUnbindStolenLeaseStillSucceeds(t *testing.T) {
 	}
 	if bound == nil || *bound != sid {
 		t.Fatal("stolen leave must not clear the winner's runtime binding")
+	}
+}
+
+func TestEnsureBoundSessionDoesNotStealBrowser(t *testing.T) {
+	pool := discordTestPool(t)
+	ctx := context.Background()
+	play := playback.New(pool)
+	userID := uuid.New()
+	username := "w2-" + userID.String()[:8]
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, username, password_hash, display_name) VALUES ($1,$2,'x',$2)`, userID, username); err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM playback_command_receipts WHERE session_id IN (SELECT id FROM playback_sessions WHERE user_id=$1)`, userID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM discord_voice_runtime WHERE session_id IN (SELECT id FROM playback_sessions WHERE user_id=$1)`, userID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM playback_queue_items WHERE session_id IN (SELECT id FROM playback_sessions WHERE user_id=$1)`, userID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM playback_sessions WHERE user_id=$1`, userID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	sid, err := play.WebSession(ctx, userID, "tab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guild := "w2-" + uuid.NewString()[:8]
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM discord_guilds WHERE id=$1`, guild)
+	})
+	if _, err := play.BindGuildSession(ctx, guild, sid, "vc", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := play.AcquireBrowserRenderer(ctx, sid, "tab-1", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	bot := New(pool, nil, nil, play, nil, nil)
+	got, err := bot.ensureBoundSession(ctx, guild, "vc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != sid {
+		t.Fatalf("session %s want %s", got, sid)
+	}
+	st, err := play.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rendererKindOf(st) != playback.RendererBrowser {
+		t.Fatalf("worker stole browser, kind=%v", st["renderer_kind"])
+	}
+	if shouldEmitDiscordPCM(st, bot.rendererID, bot.generation) {
+		t.Fatal("must not emit Discord PCM while browser holds")
 	}
 }
 

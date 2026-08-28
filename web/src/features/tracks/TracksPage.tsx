@@ -1,17 +1,17 @@
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Music } from "lucide-react";
 import { api } from "@/lib/api";
 import { TrackList } from "@/components/media/TrackList";
 import { MediaCard } from "@/components/media/MediaCard";
 import { LayoutToggle } from "@/components/media/LayoutToggle";
-import { EmptyState } from "@/components/ui/empty";
+import { EmptyState, QueryError } from "@/components/ui/empty";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { usePlayer } from "@/stores/player";
 import { useUi } from "@/stores/ui";
-import type { Track, User } from "@/types/api";
+import type { TrackPage, User } from "@/types/api";
 import { toast } from "sonner";
 import { clearCatalogueTracks, refreshCatalogue } from "@/lib/catalogue";
 
@@ -20,9 +20,18 @@ export function TracksPage() {
   const play = usePlayer((s) => s.playTracks);
   const add = usePlayer((s) => s.add);
   const layout = useUi((s) => s.libraryLayout);
-  const q = useQuery({ queryKey: ["tracks"], queryFn: () => api.get<Track[]>("/api/v1/tracks") });
+  const q = useInfiniteQuery({
+    queryKey: ["tracks"],
+    queryFn: ({ pageParam }) => {
+      const p = new URLSearchParams({ limit: "100" });
+      if (pageParam) p.set("cursor", pageParam);
+      return api.get<TrackPage>(`/api/v1/tracks?${p}`);
+    },
+    initialPageParam: "",
+    getNextPageParam: (last) => last.next_cursor || undefined
+  });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
-  const tracks = q.data || [];
+  const tracks = q.data?.pages.flatMap((p) => p.items || []) || [];
   const ids = tracks.map((t) => t.id);
   const [allOpen, setAllOpen] = useState(false);
   const [delFiles, setDelFiles] = useState(false);
@@ -37,7 +46,8 @@ export function TracksPage() {
             )}
             <LayoutToggle />
       </div>
-      {!q.isLoading && !tracks.length && <EmptyState icon={Music} title="No tracks yet." />}
+      {q.isError && <QueryError message={q.error instanceof Error ? q.error.message : undefined} onRetry={() => q.refetch()} />}
+      {!q.isLoading && !q.isError && !tracks.length && <EmptyState icon={Music} title="No tracks yet." />}
       {layout === "grid" ? (
         <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
           {tracks.map((t, i) => (
@@ -61,6 +71,13 @@ export function TracksPage() {
           onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
           onNext={(t) => add([t.id], true).then(() => toast.success("Playing next"))}
         />
+      )}
+      {q.hasNextPage && (
+        <div className="mt-6 flex justify-center">
+          <Button variant="secondary" disabled={q.isFetchingNextPage} onClick={() => q.fetchNextPage()}>
+            {q.isFetchingNextPage ? "Loading…" : "Load more"}
+          </Button>
+        </div>
       )}
       <Dialog open={allOpen} onOpenChange={setAllOpen}>
         <DialogContent title="Remove every track">

@@ -114,9 +114,41 @@ func (b *Bot) voiceChannelForGuild(guildID string) string {
 	return ""
 }
 
-// ensureBoundSession loads discord_voice_runtime.session_id and Engine.Get that id.
-// If unbound, it creates the guild-native session then BindDiscordRenderer with this
-// worker's identity. It does not call Session when a committed binding already exists.
+// shouldClaimDiscordLease is true when this worker may CAS-claim Discord.
+// Never steal a Browser holder. Guild-native sessions may claim despite the
+// schema default output_pref=browser so slash /play can emit PCM.
+func shouldClaimDiscordLease(kind, outputPref, rendererKind string) bool {
+	if rendererKind == playback.RendererBrowser {
+		return false
+	}
+	if outputPref == playback.OutputDiscord {
+		return true
+	}
+	return kind == "discord_guild"
+}
+
+// shouldEmitDiscordPCM is true only when this worker holds the Discord lease
+// and the session wants Discord output. Browser output stays in VC silently.
+func shouldEmitDiscordPCM(st map[string]any, rendererID string, generation int64) bool {
+	if !holdsRendererLease(st, rendererID, generation) {
+		return false
+	}
+	return outputPrefOf(st) == playback.OutputDiscord
+}
+
+func outputPrefOf(st map[string]any) string {
+	s, _ := st["output_pref"].(string)
+	return s
+}
+
+func kindOf(st map[string]any) string {
+	s, _ := st["kind"].(string)
+	return s
+}
+
+// ensureBoundSession binds the guild to a playback session without granting a
+// lease. It claims Discord only when shouldClaimDiscordLease is true (never
+// steals Browser). HTTP join is bind-only; slash /play claims guild-native.
 func (b *Bot) ensureBoundSession(ctx context.Context, guildID, channelID string) (uuid.UUID, error) {
 	if b.play == nil {
 		return uuid.Nil, errors.New("playback engine is not configured")
@@ -134,35 +166,59 @@ func (b *Bot) ensureBoundSession(ctx context.Context, guildID, channelID string)
 		ch = b.voiceChannelForGuild(guildID)
 	}
 
-	if rt.SessionID != uuid.Nil {
-		st, err := b.play.Get(ctx, rt.SessionID)
+	sid := rt.SessionID
+	var prev map[string]any
+	if sid != uuid.Nil {
+		st, err := b.play.Get(ctx, sid)
 		if err == nil {
-			if holdsRendererLease(st, rid, gen) {
+			prev = st
+			sameCh := ch == "" || rt.VoiceChannelID == ch
+			if sameCh && holdsRendererLease(st, rid, gen) {
 				b.lastBindRev.Store(guildID, rt.BindingRevision)
-				return rt.SessionID, nil
+				return sid, nil
 			}
-			br, err := b.play.BindDiscordRenderer(ctx, guildID, rt.SessionID, ch, rt.BindingRevision, rid, gen)
-			if err != nil {
-				return uuid.Nil, err
+			if sameCh && !shouldClaimDiscordLease(kindOf(st), outputPrefOf(st), rendererKindOf(st)) {
+				b.lastBindRev.Store(guildID, rt.BindingRevision)
+				return sid, nil
 			}
-			b.lastBindRev.Store(guildID, br.BindingRevision)
-			b.pauseIfStaleDiscordReclaim(ctx, rt.SessionID, st)
-			return rt.SessionID, nil
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, err
+		} else {
+			sid = uuid.Nil
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+	}
+	if sid == uuid.Nil {
+		sid, err = b.play.Session(ctx, "discord_guild", guildID, nil)
+		if err != nil {
 			return uuid.Nil, err
 		}
 	}
 
-	sid, err := b.play.Session(ctx, "discord_guild", guildID, nil)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	br, err := b.play.BindDiscordRenderer(ctx, guildID, sid, ch, rt.BindingRevision, rid, gen)
+	br, err := b.play.BindGuildSession(ctx, guildID, sid, ch, rt.BindingRevision)
 	if err != nil {
 		return uuid.Nil, err
 	}
 	b.lastBindRev.Store(guildID, br.BindingRevision)
+
+	st, err := b.play.Get(ctx, sid)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if holdsRendererLease(st, rid, gen) {
+		return sid, nil
+	}
+	if !shouldClaimDiscordLease(kindOf(st), outputPrefOf(st), rendererKindOf(st)) {
+		return sid, nil
+	}
+	if err := b.play.ClaimDiscordRenderer(ctx, sid, rid, gen, false); err != nil {
+		if errors.Is(err, playback.ErrLeaseConflict) {
+			return sid, nil
+		}
+		return uuid.Nil, err
+	}
+	if prev != nil {
+		b.pauseIfStaleDiscordReclaim(ctx, sid, prev)
+	}
 	return sid, nil
 }
 

@@ -2,32 +2,16 @@ package scapex
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sounddock/sounddock/internal/testdb"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	dsn := os.Getenv("SD_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("SD_TEST_DATABASE_URL not set")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Skip(err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Skip(err)
-	}
-	t.Cleanup(pool.Close)
-	return pool
+	return testdb.Open(t)
 }
 
 func TestWaitTrackDoesNotStealByTitle(t *testing.T) {

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -16,13 +17,16 @@ func (s *Server) getTrackLyrics(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid", "id")
 		return
 	}
+	if !s.requireTrackLibrary(w, r, id, "read") {
+		return
+	}
 	ctx := r.Context()
 	meta, ok := s.lyricsMeta(ctx, id)
 	if !ok {
 		writeErr(w, http.StatusNotFound, "not_found", "track not found")
 		return
 	}
-	res := lyrics.New(s.Pool, s.Log).GetLyrics(ctx, meta)
+	res := lyrics.New(s.Pool, s.Log).WithLocalDir(filepath.Join(s.Cfg.DataDir, "lyrics")).GetLyrics(ctx, meta)
 	out := map[string]any{
 		"body":   res.Body,
 		"timed":  res.Timed,
@@ -77,19 +81,23 @@ func (s *Server) adminPutLyrics(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid", "invalid body")
 		return
 	}
-	if !body.Enabled {
-		body.ProviderURL = ""
-	} else {
+	if body.ExternalEnabled || body.Enabled {
+		body.ExternalEnabled = true
+		body.Enabled = true
 		canon, err := lyrics.NormalizeProviderURL(body.ProviderURL)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, "invalid", err.Error())
 			return
 		}
 		if canon == "" {
-			writeErr(w, http.StatusBadRequest, "invalid", "provider_url is required when enabled")
+			writeErr(w, http.StatusBadRequest, "invalid", "provider_url is required when the external provider is on")
 			return
 		}
 		body.ProviderURL = canon
+	} else {
+		body.ExternalEnabled = false
+		body.Enabled = false
+		body.ProviderURL = ""
 	}
 	if err := lyrics.StoreConfig(r.Context(), s.Pool, body); err != nil {
 		writeErr(w, http.StatusInternalServerError, "db", err.Error())

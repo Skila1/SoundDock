@@ -15,4 +15,4 @@ SoundDock is designed to be internet-exposable. Please report vulnerabilities pr
 - Restrict `SD_TRUSTED_PROXIES`
 - Keep `/metrics` disabled or token-protected
 - Run containers as non-root (default image)
-- Backups include secrets wrapped by the master key. Store the key offline.
+- Backups are stream-encrypted. Set a recovery passphrase in Admin (never stored by SoundDock). Keep that passphrase offline. `{SD_DATA_DIR}/master.key` wins over `SD_MASTER_KEY` after restore.

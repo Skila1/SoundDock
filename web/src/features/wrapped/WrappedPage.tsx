@@ -106,7 +106,7 @@ export function WrappedPage() {
           {d.first_listen && (
             <p className="mb-8 text-sm text-muted">
               First local play: {d.first_listen.title}
-              {d.first_listen.artist ? ` — ${d.first_listen.artist}` : ""}
+              {d.first_listen.artist ? ` - ${d.first_listen.artist}` : ""}
               {d.first_listen.played_at ? ` · ${relativeTime(d.first_listen.played_at)}` : ""}
             </p>
           )}

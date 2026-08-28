@@ -8,7 +8,7 @@ import (
 )
 
 // ListenerSnap is enough to decide autoplay YouTube fill. SSE presence is
-// intentionally absent — avatars are not audio listeners.
+// intentionally absent - avatars are not audio listeners.
 type ListenerSnap struct {
 	RendererKind  string
 	Status        string

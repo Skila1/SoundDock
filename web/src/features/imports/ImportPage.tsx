@@ -6,15 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { Badge } from "@/components/ui/misc";
-import { PageHeader } from "@/components/ui/empty";
-import { EmptyState } from "@/components/ui/empty";
+import { EmptyState, PageHeader, QueryError } from "@/components/ui/empty";
 import { toast } from "sonner";
+import { hasPerm } from "@/lib/perms";
+import type { User } from "@/types/api";
 
 function splitURLs(raw: string) {
   return raw.split(/[\n,]+/).map((s) => s.trim()).filter((s) => s && !s.startsWith("#"));
 }
 
 export function ImportPage() {
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const jobs = useQuery({
     queryKey: ["import-jobs"],
     queryFn: () => api.get<any[]>("/api/v1/imports/jobs"),
@@ -24,11 +26,19 @@ export function ImportPage() {
   const [busy, setBusy] = useState(false);
   const imports = jobs.data || [];
   const count = splitURLs(url).length;
+  const canImport = hasPerm(me.data, "library.import_url") || hasPerm(me.data, "library.upload");
+
+  if (jobs.isError) {
+    return <QueryError message={jobs.error instanceof Error ? jobs.error.message : undefined} onRetry={() => jobs.refetch()} />;
+  }
 
   return (
     <div>
       <PageHeader title="Import" description="Paste one or many direct audio or zip URLs, one per line. Streaming-service pages are not fetched." />
-      <form
+      {!canImport && !me.isLoading && (
+        <p className="mb-4 text-sm text-muted">You do not have permission to import files.</p>
+      )}
+      {canImport && <form
         className="max-w-xl space-y-4 rounded-xl border border-border bg-surface-1 p-5"
         onSubmit={async (e) => {
           e.preventDefault();
@@ -61,7 +71,7 @@ export function ImportPage() {
           />
         </Field>
         <Button type="submit" disabled={busy}>{busy ? "Starting…" : count > 1 ? `Import ${count} files` : "Start import"}</Button>
-      </form>
+      </form>}
       <h2 className="mt-8 mb-3 font-semibold">Import jobs</h2>
       {!imports.length && <EmptyState icon={Globe} title="No import jobs yet." />}
       <ul className="space-y-2">

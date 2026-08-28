@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/auth"
 	"github.com/sounddock/sounddock/internal/stream"
 )
 
@@ -27,6 +28,9 @@ func TestClassifyMediaState(t *testing.T) {
 		{name: "youtube stub restoring", probe: mediaProbe{Found: true, Acquisition: "youtube"}, state: MediaStateRestoring},
 		{name: "scapex stub restoring", probe: mediaProbe{Found: true, Acquisition: "scapex"}, state: MediaStateRestoring},
 		{name: "open intent restoring", probe: mediaProbe{Found: true, Acquisition: "local", OpenIntent: true, IntentID: &intent}, state: MediaStateRestoring, hasID: true},
+		{name: "failed youtube stub", probe: mediaProbe{Found: true, Acquisition: "youtube", IntentStatus: "failed"}, state: MediaStateFailed},
+		{name: "retrying stub", probe: mediaProbe{Found: true, Acquisition: "youtube", IntentStatus: "retry"}, state: MediaStateRetrying},
+		{name: "cancelled stub", probe: mediaProbe{Found: true, Acquisition: "youtube", IntentStatus: "cancelled"}, state: MediaStateCancelled},
 		{name: "nas missing external", probe: mediaProbe{Found: true, Acquisition: ""}, state: MediaStateMissingExternal},
 		{name: "local missing external", probe: mediaProbe{Found: true, Acquisition: "nas"}, state: MediaStateMissingExternal},
 		{name: "intent omitted without id", probe: mediaProbe{Found: true, Acquisition: "youtube", OpenIntent: true}, state: MediaStateRestoring},
@@ -49,19 +53,23 @@ func TestClassifyMediaState(t *testing.T) {
 }
 
 func TestStreamMissingCodes(t *testing.T) {
-	status, code, _ := streamMissingCodes("youtube")
+	status, code, _ := streamMissingCodes("youtube", MediaStateRestoring)
 	if status != http.StatusConflict || code != streamCodeUnavailable {
 		t.Fatalf("youtube %d %s", status, code)
 	}
-	status, code, _ = streamMissingCodes("scapex")
+	status, code, _ = streamMissingCodes("scapex", "")
 	if status != http.StatusConflict || code != streamCodeUnavailable {
 		t.Fatalf("scapex %d %s", status, code)
 	}
-	status, code, _ = streamMissingCodes("")
+	status, code, _ = streamMissingCodes("youtube", MediaStateFailed)
+	if status != http.StatusConflict || code != streamCodeUnavailableFailed {
+		t.Fatalf("failed %d %s", status, code)
+	}
+	status, code, _ = streamMissingCodes("", "")
 	if status != http.StatusNotFound || code != streamCodeUnavailableExternal {
 		t.Fatalf("empty %d %s", status, code)
 	}
-	status, code, _ = streamMissingCodes("local")
+	status, code, _ = streamMissingCodes("local", "")
 	if status != http.StatusNotFound || code != streamCodeUnavailableExternal {
 		t.Fatalf("local %d %s", status, code)
 	}
@@ -167,6 +175,41 @@ func TestResolvePlayTracksLibraryUUIDs(t *testing.T) {
 	}
 }
 
+func TestEnqueueHiddenUUIDForbidden(t *testing.T) {
+	pool := testPool(t)
+	s := &Server{Pool: pool}
+	fix := seedGrantLibs(t, pool)
+	u := &auth.User{ID: fix.userID, Username: "user", Permissions: []string{"tracks.stream"}}
+	ctx := context.WithValue(context.Background(), userKey, u)
+	_, err := s.resolvePlayTracks(ctx, []string{fix.trackID.String()})
+	if err == nil || !strings.Contains(err.Error(), "library stream not granted") {
+		t.Fatalf("hidden enqueue want stream grant, got %v", err)
+	}
+
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO library_grants (library_id, user_id, actions)
+		VALUES ($1,$2, ARRAY['read','stream'])`, fix.libA, fix.userID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.resolvePlayTracks(ctx, []string{fix.trackID.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != fix.trackID {
+		t.Fatalf("granted enqueue %v", got)
+	}
+
+	admin := &auth.User{ID: fix.adminID, Username: "admin", IsAdmin: true}
+	adminCtx := context.WithValue(context.Background(), userKey, admin)
+	got, err = s.resolvePlayTracks(adminCtx, []string{fix.trackID.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != fix.trackID {
+		t.Fatalf("admin enqueue %v", got)
+	}
+}
+
 func TestStreamUnavailableHTTPCodes(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -184,9 +227,18 @@ func TestStreamUnavailableHTTPCodes(t *testing.T) {
 		VALUES ($1, $2, 'music', $3, '', false)`, libID, "w6-"+libID.String()[:8], sid); err != nil {
 		t.Fatal(err)
 	}
+	uid := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO users (id, username, password_hash, display_name) VALUES ($1,$2,'x',$2)`, uid, "w6-"+uid.String()[:8]); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO tracks (id, library_id, title, duration_ms, acquisition)
 		VALUES ($1,$2,'yt stub',0,'youtube'), ($3,$4,'nas hole',0,'')`, ytID, libID, nasID, libID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO library_grants (library_id, user_id, actions) VALUES ($1,$2, ARRAY['read','stream'])`, libID, uid); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -198,7 +250,7 @@ func TestStreamUnavailableHTTPCodes(t *testing.T) {
 
 	h := s.Router()
 	get := func(id uuid.UUID) *httptest.ResponseRecorder {
-		tok := stream.Sign(s.SignKey, id, time.Hour, "")
+		tok := stream.Sign(s.SignKey, uid, id, time.Hour, "")
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/tracks/"+id.String()+"/stream?token="+tok, nil)
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)

@@ -21,6 +21,10 @@ type libraryDeletePayload struct {
 	ActorID     uuid.UUID `json:"actor_id"`
 }
 
+type libraryCleanupPayload struct {
+	JobID uuid.UUID `json:"job_id"`
+}
+
 type tracksDeletePayload struct {
 	IDs         []uuid.UUID `json:"ids"`
 	All         bool        `json:"all"`
@@ -64,6 +68,17 @@ func (s *Server) jobLibraryMerge(ctx context.Context, job jobs.Job) error {
 	return nil
 }
 
+func (s *Server) jobLibraryCleanup(ctx context.Context, job jobs.Job) error {
+	var p libraryCleanupPayload
+	if err := json.Unmarshal(job.Payload, &p); err != nil {
+		return err
+	}
+	if p.JobID == uuid.Nil {
+		p.JobID = job.ID
+	}
+	return s.runManagedCleanup(ctx, p.JobID)
+}
+
 func (s *Server) jobLibraryDelete(ctx context.Context, job jobs.Job) error {
 	var p libraryDeletePayload
 	if err := json.Unmarshal(job.Payload, &p); err != nil {
@@ -86,20 +101,23 @@ func (s *Server) deleteLibrary(ctx context.Context, id uuid.UUID, deleteFiles bo
 	if deleteFiles && !managedStorage(typ) {
 		return errString("physical delete is only offered for SoundDock-managed libraries")
 	}
+	trackRows, err := s.Pool.Query(ctx, `SELECT id FROM tracks WHERE library_id=$1`, id)
+	var trackIDs []uuid.UUID
+	if err == nil {
+		for trackRows.Next() {
+			var tid uuid.UUID
+			if trackRows.Scan(&tid) == nil {
+				trackIDs = append(trackIDs, tid)
+			}
+		}
+		trackRows.Close()
+	}
+	if s.Play != nil && len(trackIDs) > 0 {
+		_ = s.Play.DropTracks(ctx, trackIDs)
+	}
 	var files []storedFile
 	if deleteFiles {
-		rows, err := s.Pool.Query(ctx, `SELECT id FROM tracks WHERE library_id=$1`, id)
-		if err == nil {
-			defer rows.Close()
-			var ids []uuid.UUID
-			for rows.Next() {
-				var tid uuid.UUID
-				if rows.Scan(&tid) == nil {
-					ids = append(ids, tid)
-				}
-			}
-			files = s.collectManagedFiles(ctx, ids)
-		}
+		files = s.collectManagedFiles(ctx, trackIDs)
 	}
 	if isDefault {
 		if err := s.reassignDefault(ctx, id); err != nil {

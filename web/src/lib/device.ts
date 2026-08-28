@@ -91,7 +91,7 @@ function newRendererId() {
   }
 }
 
-/** Per-tab browser renderer identity. sessionStorage only — never localStorage. */
+/** Per-tab browser renderer identity. sessionStorage only - never localStorage. */
 export function getTabRendererId(): string {
   try {
     if (typeof sessionStorage === "undefined") {

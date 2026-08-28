@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/sounddock/sounddock/internal/auth"
 )
 
@@ -58,10 +60,14 @@ func (s *Server) getTrackMetadata(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "id")
 		return
 	}
+	if !s.requireTrackLibrary(w, r, id, "read") {
+		return
+	}
 	ctx := r.Context()
 	u := currentUser(r)
 	var (
-		title, genre, isrc, mbid, album, source, acq string
+		title, genre, album, source, acq string
+		isrc, mbid                       *string
 		codec, container                             *string
 		dur, tn, dn                                  int
 		year                                         *int
@@ -92,7 +98,11 @@ func (s *Server) getTrackMetadata(w http.ResponseWriter, r *http.Request) {
 		&album, &codec, &bitDepth, &sampleRate, &bitrate, &channels, &size, &container,
 		&keepForever, &acq, &unavailable)
 	if err != nil {
-		writeErr(w, 404, "not_found", "track not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeErr(w, 404, "not_found", "track not found")
+			return
+		}
+		writeInternal(w, http.StatusInternalServerError, "db", err.Error())
 		return
 	}
 	var lyrics string
@@ -328,6 +338,9 @@ func (s *Server) patchAlbumMetadata(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "id")
 		return
 	}
+	if !s.requireAlbumLibrary(w, r, id, "write") {
+		return
+	}
 	var body struct {
 		Title       *string `json:"title"`
 		Year        *int    `json:"year"`
@@ -371,6 +384,9 @@ func (s *Server) patchArtistMetadata(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeErr(w, 400, "invalid", "id")
+		return
+	}
+	if !s.requireArtistLibrary(w, r, id, "write") {
 		return
 	}
 	var body struct {
@@ -417,6 +433,9 @@ func (s *Server) postAlbumArtwork(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "id")
 		return
 	}
+	if !s.requireAlbumLibrary(w, r, id, "write") {
+		return
+	}
 	s.saveUploadedArtwork(w, r, "album", id)
 }
 
@@ -424,6 +443,9 @@ func (s *Server) postArtistArtwork(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeErr(w, 400, "invalid", "id")
+		return
+	}
+	if !s.requireArtistLibrary(w, r, id, "write") {
 		return
 	}
 	s.saveUploadedArtwork(w, r, "artist", id)

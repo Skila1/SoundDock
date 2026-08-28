@@ -97,28 +97,31 @@ func main() {
 	se := search.New(pool)
 	tx := transcode.New(pool, cfg.CacheDir, 10<<30, 2)
 	bk := backup.New(pool, cfg.BackupDir, cfg.DatabaseURL)
+	bk.Attach(cfg.ManagedDir, box)
+	bk.Configure(cfg)
 
 	busy := mediabusy.New()
+	busy.SetPool(pool)
 	srv := &httpapi.Server{
-		Cfg:     cfg,
-		Pool:    pool,
-		Auth:    auth.New(pool),
-		Jobs:    runner,
-		Search:  se,
-		Play:    play,
-		Art:     art,
-		TX:      tx,
-		Ingest:  ing,
-		Backup:  bk,
-		Audit:   audit.New(pool),
-		Hooks:   hooks,
-		Box:     box,
-		Limit:   ratelimit.New(),
-		Slots:   ratelimit.NewSlots(httpapi.DefaultRemoteConcurrency),
+		Cfg:       cfg,
+		Pool:      pool,
+		Auth:      auth.New(pool),
+		Jobs:      runner,
+		Search:    se,
+		Play:      play,
+		Art:       art,
+		TX:        tx,
+		Ingest:    ing,
+		Backup:    bk,
+		Audit:     audit.New(pool),
+		Hooks:     hooks,
+		Box:       box,
+		Limit:     ratelimit.New(),
+		Slots:     ratelimit.NewSlots(httpapi.DefaultRemoteConcurrency),
 		MediaBusy: busy,
-		Log:     log,
-		SignKey: cryptox.SigningKey(cfg.MasterKey),
-		Managed: managed,
+		Log:       log,
+		SignKey:   cryptox.SigningKey(cfg.MasterKey),
+		Managed:   managed,
 	}
 	if cfg.ScapeXURL != "" {
 		srv.ScapeX = scapex.New(cfg.ScapeXURL)
@@ -144,7 +147,7 @@ func main() {
 	srv.Retention.SetLive(busy)
 	runner.Register("maintenance.retention", retention.Handler(srv.Retention))
 	runner.Register("external.playlist.import", external.Handler(pool, box, hooks, srv.YouTube()))
-	runner.Register("external.playlist.tick", external.TickHandler(pool, runner.Enqueue))
+	runner.Register("external.playlist.tick", external.TickHandler(pool, runner.EnqueueCoalesced))
 	runner.Register("backup.run", func(ctx context.Context, job jobs.Job) error {
 		_, err := bk.Run(ctx)
 		return err
@@ -193,6 +196,9 @@ func main() {
 					_, _ = runner.Enqueue(ctx, "external.playlist.tick", map[string]any{})
 					_, _ = retention.EnqueueUnlessBusy(ctx, pool, runner.Enqueue, retention.Payload{Scheduled: true})
 					update.Tick(ctx, pool)
+					if bk.ShouldRunScheduled(ctx) {
+						_, _ = runner.Enqueue(ctx, "backup.run", map[string]any{"scheduled": true})
+					}
 				}
 			}
 		}()
@@ -207,6 +213,7 @@ func main() {
 				log.Error("http", "err", err)
 			}
 		}()
+		go srv.ListenLive(ctx)
 	}
 
 	if role == config.RoleAll || role == config.RoleDiscord {

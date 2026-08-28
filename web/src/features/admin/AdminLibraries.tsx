@@ -28,7 +28,7 @@ export function AdminLibraries() {
   const storage = useQuery({ queryKey: ["admin-storage"], queryFn: () => api.get<any[]>("/api/v1/admin/storage") });
   const scans = useScanRuns();
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", storage_id: "", kind: "music", organisation_mode: "virtual" });
+  const [form, setForm] = useState({ name: "", storage_id: "", kind: "music", organisation_mode: "virtual", prefix: "", read_only: false });
   const [edit, setEdit] = useState<Library | null>(null);
   const [rename, setRename] = useState("");
   const [remove, setRemove] = useState<Library | null>(null);
@@ -149,7 +149,7 @@ export function AdminLibraries() {
                       variant="destructive"
                       onClick={async () => {
                         await api.del(`/api/v1/admin/libraries/${l.id}`, { delete_files: deleteFiles });
-                        toast.success("Library delete queued");
+                        toast.success("Library removed");
                         setRemove(null);
                         qc.invalidateQueries({ queryKey: ["libraries"] });
                       }}
@@ -168,13 +168,25 @@ export function AdminLibraries() {
         <DialogContent title="Create library">
           <form className="space-y-3" onSubmit={async (e) => {
             e.preventDefault();
-            await api.post("/api/v1/admin/libraries", { name: form.name, kind: form.kind, storage_id: form.storage_id, Org: form.organisation_mode });
+            await api.post("/api/v1/admin/libraries", {
+              name: form.name,
+              kind: form.kind,
+              storage_id: form.storage_id,
+              organisation_mode: form.organisation_mode,
+              prefix: form.prefix,
+              read_only: form.read_only
+            });
             toast.success("Library created");
             setOpen(false);
             qc.invalidateQueries({ queryKey: ["libraries"] });
           }}>
             <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
             <Field label="Storage"><Select value={form.storage_id} onValueChange={(storage_id) => setForm({ ...form, storage_id })} options={(storage.data || []).map((s: any) => ({ value: s.id, label: s.name }))} /></Field>
+            <Field label="Root prefix"><Input value={form.prefix} onChange={(e) => setForm({ ...form, prefix: e.target.value })} placeholder="optional path prefix" /></Field>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm">Read only (default on for NAS/S3)</span>
+              <Switch checked={form.read_only} onCheckedChange={(read_only) => setForm({ ...form, read_only })} />
+            </div>
             <Button type="submit">Create</Button>
           </form>
         </DialogContent>
@@ -188,12 +200,21 @@ export function AdminLibraries() {
               toast.error("Choose a destination library");
               return;
             }
-            await api.post(`/api/v1/admin/libraries/${migrateFrom.id}/migrate`, { dest_library_id: migrateDest });
-            toast.success("Migration started");
+            const res = await api.post<{ requested_mode?: string; effective_mode?: string; reason?: string }>(
+              `/api/v1/admin/libraries/${migrateFrom.id}/migrate`,
+              { dest_library_id: migrateDest, mode: "move" }
+            );
+            if (res?.requested_mode === "move" && res?.effective_mode === "copy") {
+              toast.success("Migration started as copy (source is not managed storage)");
+            } else if (res?.effective_mode === "move") {
+              toast.success("Migration started as move after destination ingest");
+            } else {
+              toast.success("Migration started");
+            }
             setMigrateFrom(null);
             qc.invalidateQueries({ queryKey: ["libraries"] });
           }}>
-            <p className="text-sm text-muted">Files are copied into the destination library. A destination is required — nothing is copied without one.</p>
+            <p className="text-sm text-muted">Move is used only when the source is managed storage and the destination ingest succeeds. NAS and S3 sources are copied; the API reports requested_mode, effective_mode, and reason.</p>
             <Field label="Destination library">
               <Select
                 value={migrateDest}

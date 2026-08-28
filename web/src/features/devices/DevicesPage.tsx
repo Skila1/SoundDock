@@ -3,7 +3,8 @@ import { Speaker } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/misc";
-import { EmptyState, PageHeader } from "@/components/ui/empty";
+import { EmptyState, PageHeader, QueryError } from "@/components/ui/empty";
+import { fillableTrackIds, saveTracksOffline } from "@/lib/offlineFill";
 import { formatDuration } from "@/lib/utils";
 import { toast } from "sonner";
 import type { Track } from "@/types/api";
@@ -68,7 +69,10 @@ export function DevicesPage() {
           ? "Attached session while you are in the bound voice channel. Pause, resume, and skip stay in sync with the bot."
           : "Handoff playback for this browser. Join a voice channel to attach to the Discord session."}
       />
-      {!q && !queue.isLoading && (
+      {queue.isError && (
+        <QueryError message={queue.error instanceof Error ? queue.error.message : undefined} onRetry={() => queue.refetch()} />
+      )}
+      {!q && !queue.isLoading && !queue.isError && (
         <EmptyState icon={Speaker} title="No playback session" description="Start playing a track to create a web device session." />
       )}
       {q && (
@@ -99,6 +103,14 @@ export function DevicesPage() {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => saveTracksOffline(fillableTrackIds(q.items || []))}
+              disabled={!fillableTrackIds(q.items || []).length}
+            >
+              Save queue offline
+            </Button>
             {controls.map((action) => (
               <Button key={action} size="sm" variant={action === "resume" ? "default" : "outline"} onClick={() => control(action)}>
                 {action === "resume" ? (discord ? "Resume" : "Play here") : action[0].toUpperCase() + action.slice(1)}

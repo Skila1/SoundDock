@@ -13,13 +13,14 @@ func (s *Server) writeJobErr(w http.ResponseWriter, err error) {
 	if err == nil {
 		return
 	}
+	msg := explainJobError("", err.Error())
 	switch {
 	case errors.Is(err, jobs.ErrQueueFull):
-		writeErr(w, 429, "queue_full", err.Error())
+		writeErr(w, 429, "queue_full", msg)
 	case errors.Is(err, jobs.ErrPoolDisabled):
-		writeErr(w, 503, "pool_disabled", err.Error())
+		writeErr(w, 503, "pool_disabled", msg)
 	default:
-		writeErr(w, 500, "job", err.Error())
+		writeErr(w, 500, "job", msg)
 	}
 }
 

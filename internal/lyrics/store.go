@@ -10,7 +10,7 @@ import (
 )
 
 // EnsurePerm seeds lyrics.configure and attaches it to Administrator.
-// No numbered migration — first-use INSERT like other waves.
+// First-use INSERT like other waves.
 func EnsurePerm(ctx context.Context, pool *pgxpool.Pool) {
 	if pool == nil {
 		return
@@ -26,9 +26,9 @@ func EnsurePerm(ctx context.Context, pool *pgxpool.Pool) {
 		ON CONFLICT DO NOTHING`, PermConfigure)
 }
 
-// LoadConfig reads server_settings.lyrics_provider. Missing key is disabled / empty.
+// LoadConfig reads server_settings.lyrics_provider. Missing key uses local on, external off.
 func LoadConfig(ctx context.Context, pool *pgxpool.Pool) Config {
-	cfg := Config{}
+	cfg := Config{LocalEnabled: true}
 	if pool == nil {
 		return cfg
 	}
@@ -37,7 +37,21 @@ func LoadConfig(ctx context.Context, pool *pgxpool.Pool) Config {
 	if err != nil || len(raw) == 0 {
 		return cfg
 	}
-	_ = json.Unmarshal(raw, &cfg)
+	var bag map[string]json.RawMessage
+	if json.Unmarshal(raw, &bag) != nil {
+		return cfg
+	}
+	if v, ok := bag["local_enabled"]; ok {
+		_ = json.Unmarshal(v, &cfg.LocalEnabled)
+	}
+	if v, ok := bag["external_enabled"]; ok {
+		_ = json.Unmarshal(v, &cfg.ExternalEnabled)
+	} else if v, ok := bag["enabled"]; ok {
+		_ = json.Unmarshal(v, &cfg.ExternalEnabled)
+	}
+	if v, ok := bag["provider_url"]; ok {
+		_ = json.Unmarshal(v, &cfg.ProviderURL)
+	}
 	return normalizeConfig(cfg)
 }
 
@@ -58,15 +72,23 @@ func StoreConfig(ctx context.Context, pool *pgxpool.Pool, cfg Config) error {
 }
 
 func normalizeConfig(cfg Config) Config {
+	out := Config{LocalEnabled: cfg.LocalEnabled, ExternalEnabled: cfg.ExternalEnabled || cfg.Enabled}
 	url := strings.TrimSpace(cfg.ProviderURL)
-	if !cfg.Enabled {
-		return Config{Enabled: false, ProviderURL: ""}
+	if !out.ExternalEnabled {
+		out.Enabled = false
+		out.ProviderURL = ""
+		return out
 	}
 	canon, err := NormalizeProviderURL(url)
 	if err != nil || canon == "" {
-		return Config{Enabled: false, ProviderURL: ""}
+		out.ExternalEnabled = false
+		out.Enabled = false
+		out.ProviderURL = ""
+		return out
 	}
-	return Config{Enabled: true, ProviderURL: canon}
+	out.Enabled = true
+	out.ProviderURL = canon
+	return out
 }
 
 func (s *Service) list(ctx context.Context, trackID uuid.UUID) ([]Result, error) {
@@ -143,7 +165,7 @@ func (s *Service) providerURL(ctx context.Context) string {
 		return s.urlFn(ctx)
 	}
 	cfg := LoadConfig(ctx, s.pool)
-	if !cfg.Enabled {
+	if !cfg.ExternalEnabled {
 		return ""
 	}
 	return cfg.ProviderURL

@@ -2,32 +2,37 @@ package external
 
 import (
 	"context"
-	"os"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sounddock/sounddock/internal/testdb"
 )
 
 func testPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	dsn := os.Getenv("SD_TEST_DATABASE_URL")
-	if dsn == "" {
-		t.Skip("SD_TEST_DATABASE_URL not set")
+	return testdb.Open(t)
+}
+
+func TestRetainedSnapshotKeepsPreviousOnBlank(t *testing.T) {
+	if retainedSnapshot("snap-1", "") != "snap-1" {
+		t.Fatal("blank incoming must keep previous")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
-	if err != nil {
-		t.Skip(err)
+	if retainedSnapshot("old", "new") != "new" {
+		t.Fatal("incoming snapshot wins")
 	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		t.Skip(err)
+}
+
+func TestKeepMembershipFillStubNotInKeepIDs(t *testing.T) {
+	id := uuid.New()
+	if got, ok := keepMembership(id, false); ok || got != uuid.Nil {
+		t.Fatal("Fill stubs are pending_acquire, not membership")
 	}
-	t.Cleanup(pool.Close)
-	return pool
+	if got, ok := keepMembership(id, true); !ok || got != id {
+		t.Fatal("playable mapped tracks stay in keepIDs")
+	}
+	if _, ok := keepMembership(uuid.Nil, true); ok {
+		t.Fatal("nil id")
+	}
 }
 
 func TestSnapshotUnchanged(t *testing.T) {

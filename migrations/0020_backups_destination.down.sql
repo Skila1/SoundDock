@@ -1,0 +1,3 @@
+ALTER TABLE backups DROP COLUMN IF EXISTS remote_key;
+ALTER TABLE backups DROP COLUMN IF EXISTS kind;
+ALTER TABLE backups DROP COLUMN IF EXISTS destination;

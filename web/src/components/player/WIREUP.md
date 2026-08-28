@@ -12,10 +12,10 @@ Play now (jump to an existing index) is `POST /me/queue/control` `action=index`,
 
 ## Other routes
 
-- `GET /api/v1/me/queue` — attached session snapshot (`state_revision`, playhead, `renderer_id`, `binding_revision`, listeners)
-- `POST /api/v1/me/queue/control` — mutating controls; `command_id` required from the web client
-- `GET /api/v1/tracks/{id}/stream` — cookie or HMAC; library `stream` grant when a user is present
-- `GET /api/v1/radio?fill=youtube` — YouTube fill only when an audio listener exists (browser lease playing, or Discord lease + human in bound VC)
+- `GET /api/v1/me/queue` - attached session snapshot (`state_revision`, playhead, `renderer_id`, `binding_revision`, listeners)
+- `POST /api/v1/me/queue/control` - mutating controls; `command_id` required from the web client
+- `GET /api/v1/tracks/{id}/stream` - cookie or HMAC; library `stream` grant when a user is present
+- `GET /api/v1/radio?fill=youtube` - YouTube fill only when an audio listener exists (browser lease playing, or Discord lease + human in bound VC)
 - Discord: `POST /me/discord/join` → `BindDiscordRenderer`; switch back to browser keeps the bind
 
 `?target=discord` is not a second-queue selector.

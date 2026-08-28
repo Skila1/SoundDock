@@ -11,18 +11,18 @@ Plans below are from `EXPLAIN` (not `EXPLAIN ANALYZE`) on modest synthetic rows.
 
 Indexes added in `migrations/0018_query_indexes.up.sql`:
 
-- `library_grants_user_idx` / `library_grants_role_idx` — grant filtering used on every library-scoped request
-- `listen_history_user_track_played_idx` — Home continue `DISTINCT ON (track_id)` ordered by latest play
-- `listen_events_user_track_started_idx` — same shape after stats cutover
+- `library_grants_user_idx` / `library_grants_role_idx` - grant filtering used on every library-scoped request
+- `listen_history_user_track_played_idx` - Home continue `DISTINCT ON (track_id)` ordered by latest play
+- `listen_events_user_track_started_idx` - same shape after stats cutover
 
 Already present from earlier waves (not re-created):
 
-- `playback_queue_session_idx` — queue snapshot items
-- `listen_history_user_idx` — recap / history lists
-- `listen_events_user_started_idx` — event recap
-- `acquisition_intents_coalesce_idx` — intent coalesce
-- `jobs_coalesce_key_active_uidx` — active `scapex.fetch` coalesce
-- `duplicate_review_groups_open_idx` — open duplicate review
+- `playback_queue_session_idx` - queue snapshot items
+- `listen_history_user_idx` - recap / history lists
+- `listen_events_user_started_idx` - event recap
+- `acquisition_intents_coalesce_idx` - intent coalesce
+- `jobs_coalesce_key_active_uidx` - active `scapex.fetch` coalesce
+- `duplicate_review_groups_open_idx` - open duplicate review
 
 ## Results
 
@@ -35,7 +35,7 @@ Expected access patterns (not timings):
 | Home continue | Index on `(user_id, track_id, played_at)` or `(user_id, played_at)` |
 | Queue snapshot | PK lookup on `playback_sessions` + `playback_queue_session_idx` |
 | Listen totals / periods | `listen_history_user_idx` or events `(user_id, started_at)` |
-| Stats rebuild source | Sequential or index scan of `listen_events` then HashAggregate — acceptable for an admin rebuild |
+| Stats rebuild source | Sequential or index scan of `listen_events` then HashAggregate - acceptable for an admin rebuild |
 | Acquisition-intent coalesce | `acquisition_intents_coalesce_idx` |
 | Jobs coalesce | `jobs_coalesce_key_active_uidx` |
 | Duplicate review open | `duplicate_review_groups_open_idx` |

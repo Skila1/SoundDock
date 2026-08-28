@@ -2,6 +2,16 @@ package discordx
 
 import "testing"
 
+func TestSkipControlExtraEnded(t *testing.T) {
+	got := skipControlExtra(true)
+	if got["ended"] != true {
+		t.Fatalf("natural EOF extra %v", got)
+	}
+	if skipControlExtra(false) != nil {
+		t.Fatal("user skip / decode error must send ended=false (nil extra)")
+	}
+}
+
 func TestFFmpegSeekArgs(t *testing.T) {
 	if ffmpegSeekArgs(0) != nil || ffmpegSeekArgs(250) != nil {
 		t.Fatal("small offsets should be ignored")

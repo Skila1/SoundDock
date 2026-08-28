@@ -54,7 +54,7 @@ INSERT INTO retention_policies (key, days) VALUES ('listen_events', 0)
 ON CONFLICT (key) DO NOTHING;
 
 -- Copy history into shadow events. listened_ms stays NULL (do not fabricate duration).
--- accumulated_listened_ms is 0, not duration_ms — recap minutes that summed duration stay estimated.
+-- accumulated_listened_ms is 0, not duration_ms - recap minutes that summed duration stay estimated.
 INSERT INTO listen_events (
     user_id, track_id, kind,
     accumulated_listened_ms, listened_ms, track_duration_ms,

@@ -153,6 +153,12 @@ func TestCommitReplaceInsertsTrackSourcesAndKeepsOldKey(t *testing.T) {
 	})
 
 	jobID := uuid.New()
+	if _, err := pool.Exec(ctx, `INSERT INTO jobs (id, type, status, payload) VALUES ($1,'scapex.replace','running','{}')`, jobID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM jobs WHERE id=$1`, jobID)
+	})
 	retired, err := CommitReplace(ctx, pool, CommitReplaceInput{
 		TrackID:     trackID,
 		LibraryID:   libID,

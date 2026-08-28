@@ -45,8 +45,39 @@ func (s *Scanner) updateExistingTrack(ctx context.Context, trackID, albumID uuid
 	if s.pool == nil || trackID == uuid.Nil {
 		return
 	}
+	title = s.keepStrongTitle(ctx, trackID, title)
 	_, _ = s.pool.Exec(ctx, updateExistingTrackSQL,
 		trackID, title, albumID, max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre, probe.Source, confOrNil(probe.Confidence), probe.MBID)
+}
+
+func (s *Scanner) keepStrongTitle(ctx context.Context, trackID uuid.UUID, incoming string) string {
+	var existing, ref string
+	_ = s.pool.QueryRow(ctx, `SELECT title, coalesce(acquisition_ref,'') FROM tracks WHERE id=$1`, trackID).Scan(&existing, &ref)
+	if existing == "" {
+		return incoming
+	}
+	if IsPlaceholderTitle(existing) {
+		return incoming
+	}
+	if WeakIncomingTitle(incoming, ref) {
+		return existing
+	}
+	return incoming
+}
+
+func WeakIncomingTitle(incoming, videoID string) bool {
+	incoming = strings.TrimSpace(incoming)
+	videoID = strings.TrimSpace(videoID)
+	if incoming == "" || videoID == "" {
+		return false
+	}
+	base := strings.TrimSuffix(path.Base(incoming), path.Ext(incoming))
+	return strings.EqualFold(incoming, videoID) || strings.EqualFold(base, videoID)
+}
+
+func IsPlaceholderTitle(s string) bool {
+	s = strings.TrimSpace(s)
+	return s == "" || strings.EqualFold(s, "Restoring") || strings.HasPrefix(s, "YouTube ")
 }
 
 func confOrNil(c float64) any {

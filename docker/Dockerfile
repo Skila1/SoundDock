@@ -32,7 +32,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     ver="${VERSION}"; \
     if [ -z "${ver}" ] && [ -f VERSION ]; then ver="$(tr -d '[:space:]' < VERSION)"; fi; \
     if [ -z "${ver}" ]; then ver=0.0.1; fi; \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/sounddock/sounddock/internal/version.Version=${ver}" -o /out/sounddock ./cmd/sounddock
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/sounddock/sounddock/internal/version.Version=${ver}" -o /out/sounddock ./cmd/sounddock; \
+    max=0; \
+    for f in migrations/*.up.sql; do \
+      n=$$(basename "$$f" | cut -c1-4); \
+      n=$$((10#$$n)); \
+      if [ "$$n" -gt "$$max" ]; then max=$$n; fi; \
+    done; \
+    mkdir -p /out; \
+    printf '%s\n' "$$max" > /out/schema-head
 
 FROM debian:bookworm-slim
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -40,13 +48,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
     && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
     && apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates ffmpeg wget libopus0 python3 \
+        ca-certificates ffmpeg wget libopus0 python3 postgresql-client \
     && wget -qO /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
     && chmod a+rx /usr/local/bin/yt-dlp \
     && useradd --system --home /data --uid 1000 sounddock \
     && mkdir -p /data/cache /data/backups /data/managed /data/managed/inbox /libraries \
     && chown -R sounddock:sounddock /data /libraries
 COPY --from=build /out/sounddock /usr/local/bin/sounddock
+COPY --from=build /out/schema-head /etc/sounddock/schema-head
+ARG SCHEMA_HEAD=23
+LABEL org.sounddock.schema-head=${SCHEMA_HEAD}
 USER sounddock
 WORKDIR /data
 EXPOSE 8080

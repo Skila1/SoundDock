@@ -14,7 +14,7 @@ import (
 
 const (
 	listenCompareMatchKey  = "user_id + track_id + UTC calendar day of listen_history.played_at vs listen_events.started_at"
-	listenCompareMatchNote = "There is no shared primary key. listen_history.id and listen_events.id are independent UUIDs; backfill inserts new event rows and does not preserve history ids. Day-bucket EXISTS is not 1:1 — multiple plays of the same track on the same UTC day collapse to a single match."
+	listenCompareMatchNote = "There is no shared primary key. listen_history.id and listen_events.id are independent UUIDs; backfill inserts new event rows and does not preserve history ids. Day-bucket EXISTS is not 1:1 - multiple plays of the same track on the same UTC day collapse to a single match."
 	listenComparePurpose   = "Validation only: listen_history and listen_events are compared in parallel. This is not a merged listen statistic. Production Home/Stats/Wrapped still read listen_history."
 )
 
@@ -383,7 +383,7 @@ func queryListenCompareDiffs(ctx context.Context, pool *pgxpool.Pool, period lis
 		SELECT count(*)
 		FROM listen_events e
 		WHERE e.legacy_backfill = false
-			AND e.qualified_play = true
+			AND e.kind = 'qualify'
 			AND ($1::timestamptz IS NULL OR e.started_at >= $1)
 			AND ($2::timestamptz IS NULL OR e.started_at < $2)
 			AND NOT EXISTS (
@@ -422,7 +422,7 @@ func queryListenCompareDiffs(ctx context.Context, pool *pgxpool.Pool, period lis
 		SkipEvents:                               ev.KindSkip,
 		SkipEventsUnqualified:                    ev.KindSkipUnqualified,
 		SkipDelta:                                playSkip - ev.KindSkipUnqualified,
-		SkipNote:                                 "play_counts.skip_count is lifetime and is not filtered by from/to. Skip events are filtered to the selected period. Backfill copies listen_history qualifies only — it does not create skip events from play_counts.",
+		SkipNote:                                 "play_counts.skip_count is lifetime and is not filtered by from/to. Skip events are filtered to the selected period. Backfill copies listen_history qualifies only - it does not create skip events from play_counts.",
 	}, nil
 }
 

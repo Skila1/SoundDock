@@ -8,7 +8,7 @@ import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { Badge, Progress } from "@/components/ui/misc";
 import { PageHeader } from "@/components/ui/empty";
-import { relativeTime } from "@/lib/utils";
+import { formatBytes, relativeTime } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { User } from "@/types/api";
@@ -51,7 +51,7 @@ export function AdminUsers() {
                   <div className="text-xs text-subtle">{u.username}{u.email ? ` · ${u.email}` : ""}</div>
                 </td>
                 <td className="p-3">
-                  {u.discord_id ? u.discord_id : <span className="text-subtle">—</span>}
+                  {u.discord_id ? u.discord_id : <span className="text-subtle">-</span>}
                 </td>
                 <td className="p-3"><Badge tone={u.role === "Administrator" ? "success" : "neutral"}>{u.role || "User"}</Badge></td>
                 <td className="p-3"><Badge tone={u.disabled ? "danger" : "success"}>{u.disabled ? "Disabled" : "Active"}</Badge></td>
@@ -169,8 +169,8 @@ function ManageUserDialog({
           <div className="space-y-4">
             <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
               <dt className="text-muted">Username</dt><dd className="font-medium">{user.username}</dd>
-              <dt className="text-muted">Display name</dt><dd>{user.display_name || "—"}</dd>
-              <dt className="text-muted">Email</dt><dd>{user.email || "—"}</dd>
+              <dt className="text-muted">Display name</dt><dd>{user.display_name || "-"}</dd>
+              <dt className="text-muted">Email</dt><dd>{user.email || "-"}</dd>
               <dt className="text-muted">Discord</dt>
               <dd>{user.discord_id || "Not linked"}</dd>
               <dt className="text-muted">Created</dt><dd>{relativeTime(user.created_at)}</dd>
@@ -213,35 +213,148 @@ function ManageUserDialog({
   );
 }
 
+type StorageRow = {
+  id: string;
+  name: string;
+  type: string;
+  type_label?: string;
+  description?: string;
+  root?: string;
+  endpoint?: string;
+  bucket?: string;
+  prefix?: string;
+  region?: string;
+  use_ssl?: boolean;
+  used_bytes?: number;
+  free_bytes?: number;
+  total_bytes?: number;
+  file_count?: number;
+  lib_count?: number;
+  can_delete?: boolean;
+  libraries?: { id: string; name: string }[];
+};
+
+const emptyStorageForm = {
+  name: "", type: "local", root: "",
+  endpoint: "", bucket: "", region: "auto", access_key: "", secret_key: "", prefix: "", use_ssl: true
+};
+
 export function AdminStorage() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["admin-storage"], queryFn: () => api.get<any[]>("/api/v1/admin/storage") });
+  const q = useQuery({ queryKey: ["admin-storage"], queryFn: () => api.get<StorageRow[]>("/api/v1/admin/storage") });
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", type: "local", root: "" });
+  const [edit, setEdit] = useState<StorageRow | null>(null);
+  const [form, setForm] = useState(emptyStorageForm);
+
+  const saveConfig = () => {
+    if (form.type === "s3") {
+      return {
+        endpoint: form.endpoint, bucket: form.bucket, region: form.region,
+        access_key: form.access_key, secret_key: form.secret_key, prefix: form.prefix, use_ssl: form.use_ssl
+      };
+    }
+    return { root: form.root };
+  };
+
   return (
     <div>
-      <PageHeader title="Storage" actions={<Button onClick={() => setOpen(true)}>Add provider</Button>} />
+      <PageHeader title="Storage" description="Where SoundDock keeps media. Managed is the local folder this instance writes downloads into." actions={<Button onClick={() => { setForm(emptyStorageForm); setOpen(true); }}>Add provider</Button>} />
       <div className="grid gap-3 md:grid-cols-2">
-        {(q.data || []).map((s) => (
-          <article key={s.id} className="rounded-xl border border-border bg-surface-1 p-4">
-            <h3 className="font-semibold">{s.name}</h3>
-            <p className="text-sm capitalize text-muted">{s.type}</p>
-            <Badge className="mt-2" tone="success">Configured</Badge>
-          </article>
-        ))}
+        {(q.data || []).map((s) => {
+          const used = s.used_bytes || 0;
+          const total = s.total_bytes || 0;
+          const free = s.free_bytes || 0;
+          const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+          return (
+            <article key={s.id} className="rounded-xl border border-border bg-surface-1 p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold">{s.name}</h3>
+                  <p className="text-sm text-muted">{s.type_label || s.type}</p>
+                </div>
+                <Badge tone="success">Configured</Badge>
+              </div>
+              <p className="mt-2 text-sm text-subtle">{s.description}</p>
+              {s.root && <p className="mt-2 break-all font-mono text-xs text-muted">{s.root}</p>}
+              {s.bucket && <p className="mt-2 text-xs text-muted">{s.bucket}{s.prefix ? ` / ${s.prefix}` : ""} · {s.endpoint || "S3"}</p>}
+              {(total > 0 || used > 0) && (
+                <div className="mt-3">
+                  <div className="mb-1 flex justify-between text-xs text-muted">
+                    <span>Used {formatBytes(used)}{typeof s.file_count === "number" ? ` · ${s.file_count} files` : ""}</span>
+                    {total > 0 && <span>Free {formatBytes(free)}</span>}
+                  </div>
+                  {total > 0 && <Progress value={pct} />}
+                  {total > 0 && <p className="mt-1 text-xs text-subtle">{formatBytes(used)} of {formatBytes(total)} on this volume</p>}
+                </div>
+              )}
+              {(s.libraries || []).length > 0 && (
+                <p className="mt-2 text-xs text-muted">Libraries: {(s.libraries || []).map((l) => l.name).join(", ")}</p>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="sm" variant="secondary" onClick={() => {
+                  setEdit(s);
+                  setForm({
+                    ...emptyStorageForm,
+                    name: s.name,
+                    type: s.type,
+                    root: s.root || "",
+                    endpoint: s.endpoint || "",
+                    bucket: s.bucket || "",
+                    region: s.region || "auto",
+                    prefix: s.prefix || "",
+                    use_ssl: s.use_ssl !== false
+                  });
+                }}>Edit</Button>
+                <Button size="sm" variant="ghost" disabled={!s.can_delete} onClick={async () => {
+                  if (!s.can_delete) return;
+                  await api.del(`/api/v1/admin/storage/${s.id}`);
+                  toast.success("Provider removed");
+                  qc.invalidateQueries({ queryKey: ["admin-storage"] });
+                }}>Delete</Button>
+              </div>
+            </article>
+          );
+        })}
       </div>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent title="Add storage">
+      <Dialog open={open || !!edit} onOpenChange={(v) => { if (!v) { setOpen(false); setEdit(null); } }}>
+        <DialogContent title={edit ? `Edit ${edit.name}` : "Add storage"}>
           <form className="space-y-3" onSubmit={async (e) => {
             e.preventDefault();
-            await api.post("/api/v1/admin/storage", { name: form.name, type: form.type, config: { root: form.root } });
-            toast.success("Storage added");
+            if (edit) {
+              await api.patch(`/api/v1/admin/storage/${edit.id}`, { name: form.name, config: saveConfig() });
+              toast.success("Storage updated");
+            } else {
+              await api.post("/api/v1/admin/storage", { name: form.name, type: form.type, config: saveConfig() });
+              toast.success("Storage added");
+            }
             setOpen(false);
+            setEdit(null);
             qc.invalidateQueries({ queryKey: ["admin-storage"] });
           }}>
             <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
-            <Field label="Type"><Select value={form.type} onValueChange={(type) => setForm({ ...form, type })} options={[{ value: "local", label: "Local" }, { value: "managed", label: "Managed" }, { value: "s3", label: "S3" }]} /></Field>
-            <Field label="Root / endpoint" hint="Secrets are write-only and never shown again."><Input value={form.root} onChange={(e) => setForm({ ...form, root: e.target.value })} /></Field>
+            {!edit && (
+              <Field label="Type">
+                <Select value={form.type} onValueChange={(type) => setForm({ ...form, type })} options={[
+                  { value: "managed", label: "Managed (SoundDock media folder)" },
+                  { value: "local", label: "Local folder" },
+                  { value: "s3", label: "S3 / R2" }
+                ]} />
+              </Field>
+            )}
+            {form.type !== "s3" ? (
+              <Field label="Folder path" hint="Leave empty to use the instance managed folder.">
+                <Input value={form.root} onChange={(e) => setForm({ ...form, root: e.target.value })} placeholder="e.g. D:\\SoundDock\\data\\managed" />
+              </Field>
+            ) : (
+              <>
+                <Field label="Endpoint"><Input value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder="xxx.r2.cloudflarestorage.com" required={!edit} /></Field>
+                <Field label="Bucket"><Input value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} required={!edit} /></Field>
+                <Field label="Region"><Input value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} /></Field>
+                <Field label="Prefix"><Input value={form.prefix} onChange={(e) => setForm({ ...form, prefix: e.target.value })} /></Field>
+                <Field label="Access key" hint="Leave blank when editing to keep the current key."><Input value={form.access_key} onChange={(e) => setForm({ ...form, access_key: e.target.value })} /></Field>
+                <Field label="Secret key" hint="Write-only. Never shown again."><Input type="password" value={form.secret_key} onChange={(e) => setForm({ ...form, secret_key: e.target.value })} /></Field>
+              </>
+            )}
             <Button type="submit">Save</Button>
           </form>
         </DialogContent>
@@ -250,30 +363,301 @@ export function AdminStorage() {
   );
 }
 
+type BackupSettings = {
+  local_enabled?: boolean;
+  r2_enabled?: boolean;
+  include_media?: boolean;
+  scheduled_enabled?: boolean;
+  endpoint?: string;
+  region?: string;
+  bucket?: string;
+  access_key?: string;
+  secret_key?: string;
+  prefix?: string;
+  use_ssl?: boolean;
+  secret_set?: boolean;
+  restore_passphrase_set?: boolean;
+  reminder_pending?: boolean;
+};
+
+type RestoreRequirement = {
+  key: string;
+  class: string;
+  source: string;
+  present_at_backup?: boolean;
+  present_on_host?: boolean;
+  recovered?: boolean;
+  note?: string;
+};
+
 export function AdminBackups() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["admin-backups"], queryFn: () => api.get<any[]>("/api/v1/admin/backups") });
+  const settings = useQuery({ queryKey: ["admin-backup-settings"], queryFn: () => api.get<BackupSettings>("/api/v1/admin/backups/settings") });
+  const reqs = useQuery({ queryKey: ["admin-backup-requirements"], queryFn: () => api.get<{ items?: RestoreRequirement[]; instance_name?: string }>("/api/v1/admin/backups/restore-requirements") });
+  const remote = useQuery({
+    queryKey: ["admin-backup-remote"],
+    queryFn: () => api.get<any[]>("/api/v1/admin/backups/remote"),
+    enabled: !!settings.data?.r2_enabled
+  });
+  const [form, setForm] = useState<BackupSettings>({});
+  const [busy, setBusy] = useState(false);
+  const [passphrase, setPassphrase] = useState("");
+  const [currentPass, setCurrentPass] = useState("");
+  const [restorePass, setRestorePass] = useState("");
+  const [restoreId, setRestoreId] = useState("");
+  const st = { local_enabled: true, include_media: true, use_ssl: true, ...settings.data, ...form };
   const last = q.data?.[0];
+  const passphraseSet = !!settings.data?.restore_passphrase_set;
+  const reminderPending = !!settings.data?.reminder_pending;
+
+  async function saveSettings() {
+    await api.put("/api/v1/admin/backups/settings", st);
+    toast.success("Backup settings saved");
+    qc.invalidateQueries({ queryKey: ["admin-backup-settings"] });
+    qc.invalidateQueries({ queryKey: ["admin-backup-remote"] });
+  }
+
+  async function downloadReminder() {
+    const res = await fetch("/api/v1/admin/backups/reminder", { credentials: "include" });
+    if (!res.ok) {
+      toast.error("Reminder is not available");
+      return;
+    }
+    const text = await res.text();
+    const url = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "sounddock-recovery-reminder.txt";
+    a.click();
+    URL.revokeObjectURL(url);
+    qc.invalidateQueries({ queryKey: ["admin-backup-settings"] });
+  }
+
   return (
     <div>
-      <PageHeader title="Backups" actions={<Button onClick={() => api.post("/api/v1/admin/backups").then(() => { toast.success("Backup started"); qc.invalidateQueries({ queryKey: ["admin-backups"] }); })}>Run backup</Button>} />
+      <PageHeader
+        title="Backups"
+        description="Encrypted instance backups include the database, managed media, artwork, and on-disk lyrics. NAS library trees are not packed. A recovery passphrase is required before any backup."
+        actions={<Button disabled={busy || !passphraseSet} onClick={async () => {
+          setBusy(true);
+          try {
+            await api.post("/api/v1/admin/backups");
+            toast.success("Backup finished");
+            qc.invalidateQueries({ queryKey: ["admin-backups"] });
+            qc.invalidateQueries({ queryKey: ["admin-backup-remote"] });
+          } catch (e: any) {
+            toast.error(e?.message || "Backup failed");
+          } finally {
+            setBusy(false);
+          }
+        }}>Run backup</Button>}
+      />
+      {(reqs.data?.items || []).length > 0 && (
+        <article className="mb-5 rounded-xl border border-border bg-surface-1 p-4">
+          <h3 className="mb-2 font-semibold">Restore requirements</h3>
+          <p className="mb-3 text-sm text-muted">Recovered values versus items this host still needs. NAS bind and public URL are never copied from the archive.</p>
+          <ul className="mb-3 space-y-2 text-sm">
+            {reqs.data!.items!.map((it) => (
+              <li key={it.key} className="rounded-lg border border-border px-3 py-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{it.key}</span>
+                  <Badge tone={it.recovered ? "success" : "warning"}>{it.class}</Badge>
+                  {it.present_on_host ? <Badge>on this host</Badge> : null}
+                </div>
+                {it.note && <p className="mt-1 text-xs text-subtle">{it.note}</p>}
+              </li>
+            ))}
+          </ul>
+          <Button size="sm" variant="secondary" onClick={async () => {
+            await api.post("/api/v1/admin/backups/restore-requirements/dismiss");
+            qc.invalidateQueries({ queryKey: ["admin-backup-requirements"] });
+          }}>Dismiss</Button>
+        </article>
+      )}
+      <article className="mb-5 rounded-xl border border-border bg-surface-1 p-4">
+        <h3 className="mb-2 font-semibold">Recovery passphrase</h3>
+        <p className="mb-3 text-sm text-muted">
+          SoundDock never stores this passphrase. Scheduled backups use a boxed archive key and do not prompt.
+          {passphraseSet ? " Changing it re-wraps future backups. Old backups stay recoverable with the old passphrase." : " Set it before the first backup."}
+        </p>
+        <div className="mb-3 grid gap-3 md:grid-cols-2">
+          {passphraseSet && (
+            <Field label="Current passphrase">
+              <Input type="password" value={currentPass} onChange={(e) => setCurrentPass(e.target.value)} autoComplete="off" />
+            </Field>
+          )}
+          <Field label={passphraseSet ? "New passphrase" : "Passphrase"} hint="At least 12 characters.">
+            <Input type="password" value={passphrase} onChange={(e) => setPassphrase(e.target.value)} autoComplete="new-password" />
+          </Field>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" onClick={async () => {
+            try {
+              await api.post("/api/v1/admin/backups/passphrase", {
+                passphrase,
+                current_passphrase: currentPass
+              });
+              setPassphrase("");
+              setCurrentPass("");
+              toast.success(passphraseSet ? "Passphrase updated. Old backups stay recoverable with the old passphrase." : "Recovery passphrase set");
+              qc.invalidateQueries({ queryKey: ["admin-backup-settings"] });
+            } catch (e: any) {
+              toast.error(e?.message || "Could not set passphrase");
+            }
+          }}>{passphraseSet ? "Change passphrase" : "Set passphrase"}</Button>
+          {reminderPending && (
+            <>
+              <Button size="sm" variant="secondary" onClick={downloadReminder}>Download recovery reminder</Button>
+              <Button size="sm" variant="ghost" onClick={async () => {
+                await api.post("/api/v1/admin/backups/reminder/dismiss");
+                qc.invalidateQueries({ queryKey: ["admin-backup-settings"] });
+              }}>Skip reminder</Button>
+            </>
+          )}
+        </div>
+      </article>
+      <article className="mb-5 rounded-xl border border-border bg-surface-1 p-4">
+        <h3 className="mb-3 font-semibold">Destinations</h3>
+        <div className="mb-3 flex flex-wrap gap-6">
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={!!st.local_enabled} onCheckedChange={(v) => setForm({ ...form, local_enabled: v })} />
+            This machine
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={!!st.r2_enabled} onCheckedChange={(v) => setForm({ ...form, r2_enabled: v })} />
+            Cloudflare R2 / S3
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={!!st.include_media} onCheckedChange={(v) => setForm({ ...form, include_media: v })} />
+            Include managed media
+          </label>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch
+              checked={!!st.scheduled_enabled}
+              onCheckedChange={(v) => {
+                if (v && !passphraseSet) {
+                  toast.error("Set a recovery passphrase before enabling scheduled backups.");
+                  return;
+                }
+                setForm({ ...form, scheduled_enabled: v });
+              }}
+            />
+            Nightly schedule
+          </label>
+        </div>
+        {!passphraseSet && <p className="mb-3 text-sm text-muted">Scheduled backups cannot be turned on until a recovery passphrase is set.</p>}
+        {st.r2_enabled && (
+          <div className="mb-3 grid gap-3 md:grid-cols-2">
+            <Field label="Endpoint"><Input value={st.endpoint || ""} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder="xxx.r2.cloudflarestorage.com" /></Field>
+            <Field label="Bucket"><Input value={st.bucket || ""} onChange={(e) => setForm({ ...form, bucket: e.target.value })} /></Field>
+            <Field label="Access key"><Input value={st.access_key || ""} onChange={(e) => setForm({ ...form, access_key: e.target.value })} /></Field>
+            <Field label="Secret key" hint={st.secret_set ? "Saved. Leave blank to keep it." : "Write-only."}><Input type="password" value={form.secret_key || ""} onChange={(e) => setForm({ ...form, secret_key: e.target.value })} /></Field>
+            <Field label="Prefix"><Input value={st.prefix || ""} onChange={(e) => setForm({ ...form, prefix: e.target.value })} placeholder="sounddock-backups" /></Field>
+            <Field label="Region"><Input value={st.region || "auto"} onChange={(e) => setForm({ ...form, region: e.target.value })} /></Field>
+          </div>
+        )}
+        <Button size="sm" onClick={saveSettings}>Save destinations</Button>
+      </article>
       {last && (
         <div className="mb-4 rounded-xl border border-border bg-surface-1 p-4">
           <div className="text-sm text-muted">Last backup</div>
           <div className="font-medium">{last.path}</div>
-          <div className="mt-1 flex gap-2 text-sm">
+          <div className="mt-1 flex flex-wrap gap-2 text-sm">
             <Badge tone={last.verified ? "success" : "warning"}>{last.verified ? "Verified" : "Unverified"}</Badge>
             <Badge>{last.status}</Badge>
+            <Badge>{last.kind || "sql"}</Badge>
+            <Badge>{last.destination || "local"}</Badge>
           </div>
         </div>
       )}
-      <ul className="space-y-2">
+      <h3 className="mb-2 font-semibold">Local copies</h3>
+      {restoreId && !restoreId.startsWith("remote:") && (
+        <article className="mb-3 rounded-xl border border-border bg-surface-1 p-4">
+          <Field label="Recovery passphrase for this restore">
+            <Input type="password" value={restorePass} onChange={(e) => setRestorePass(e.target.value)} autoComplete="off" />
+          </Field>
+          <div className="mt-3 flex gap-2">
+            <Button size="sm" onClick={async () => {
+              if (!window.confirm("Restore this backup into the live database? This cannot be undone.")) return;
+              try {
+                const out = await api.post<any>(`/api/v1/admin/backups/${restoreId}/restore`, { confirm: true, passphrase: restorePass });
+                toast.success("Restore completed. Review Restore requirements, then wait for restart.");
+                setRestoreId("");
+                setRestorePass("");
+                if (out?.requirements) {
+                  qc.setQueryData(["admin-backup-requirements"], out.requirements);
+                }
+                qc.invalidateQueries({ queryKey: ["admin-backup-requirements"] });
+              } catch (e: any) {
+                toast.error(e?.message || "Restore failed");
+              }
+            }}>Confirm restore</Button>
+            <Button size="sm" variant="ghost" onClick={() => { setRestoreId(""); setRestorePass(""); }}>Cancel</Button>
+          </div>
+        </article>
+      )}
+      <ul className="mb-6 space-y-2">
         {(q.data || []).map((b) => (
-          <li key={b.id} className="rounded-lg border border-border px-4 py-3 text-sm">
-            {b.path} · {relativeTime(b.created_at)}
+          <li key={b.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-4 py-3 text-sm">
+            <div className="min-w-0">
+              <div className="truncate font-medium">{b.path}</div>
+              <div className="text-xs text-subtle">{relativeTime(b.created_at)} · {b.kind || "sql"} · {b.destination || "local"}</div>
+            </div>
+            <Button size="sm" variant="secondary" onClick={() => { setRestoreId(b.id); setRestorePass(""); }}>Restore</Button>
           </li>
         ))}
       </ul>
+      {st.r2_enabled && (
+        <>
+          <h3 className="mb-2 font-semibold">R2 copies</h3>
+          <p className="mb-2 text-sm text-muted">Import onto this machine, then restore. Use this after moving to a new host. First setup can also list and import from R2.</p>
+          <ul className="space-y-2">
+            {(remote.data || []).map((o) => (
+              <li key={o.key} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-4 py-3 text-sm">
+                <div>
+                  <div className="font-medium">{o.name || o.key}</div>
+                  <div className="text-xs text-subtle">{formatBytes(o.size_bytes)} · {o.mod_time ? relativeTime(o.mod_time) : ""}</div>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" variant="secondary" onClick={async () => {
+                    await api.post("/api/v1/admin/backups/import-remote", { key: o.key });
+                    toast.success("Downloaded from R2");
+                    qc.invalidateQueries({ queryKey: ["admin-backups"] });
+                  }}>Import</Button>
+                  <Button size="sm" onClick={() => { setRestoreId("remote:" + o.key); setRestorePass(""); }}>Import and restore</Button>
+                </div>
+              </li>
+            ))}
+            {restoreId.startsWith("remote:") && (
+              <li className="rounded-lg border border-border px-4 py-3">
+                <Field label="Recovery passphrase">
+                  <Input type="password" value={restorePass} onChange={(e) => setRestorePass(e.target.value)} autoComplete="off" />
+                </Field>
+                <div className="mt-3 flex gap-2">
+                  <Button size="sm" onClick={async () => {
+                    if (!window.confirm("Download this R2 backup and restore it now? This cannot be undone.")) return;
+                    await api.post("/api/v1/admin/backups/import-remote", {
+                      key: restoreId.slice("remote:".length),
+                      restore: true,
+                      confirm: true,
+                      passphrase: restorePass
+                    });
+                    toast.success("Imported and restored");
+                    setRestoreId("");
+                    qc.invalidateQueries({ queryKey: ["admin-backups"] });
+                    qc.invalidateQueries({ queryKey: ["admin-backup-requirements"] });
+                  }}>Confirm import and restore</Button>
+                  <Button size="sm" variant="ghost" onClick={() => setRestoreId("")}>Cancel</Button>
+                </div>
+              </li>
+            )}
+            {!!settings.data?.r2_enabled && !(remote.data || []).length && !remote.isLoading && (
+              <li className="text-sm text-muted">No SoundDock archives in this bucket yet.</li>
+            )}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
@@ -613,6 +997,16 @@ function ProviderCard({ p, onSaved }: { p: any; onSaved: () => void }) {
         {p.has_client_secret && <Badge tone="success">Secret on file</Badge>}
       </div>
       <p className="text-xs text-subtle">Callback: <code>{p.callback_url}</code></p>
+      {p.capabilities ? (
+        <p className="text-xs text-subtle">
+          {[
+            p.capabilities.list_user_playlists && "user playlists",
+            p.capabilities.private_playlists && "private playlists",
+            p.capabilities.isrc && "ISRC",
+            p.capabilities.snapshot && "snapshot sync"
+          ].filter(Boolean).join(" · ")}
+        </p>
+      ) : null}
       <div className="flex flex-wrap gap-4">
         <label className="flex items-center gap-2 text-sm"><Switch checked={enabled} onCheckedChange={setEnabled} /> Enabled</label>
         <label className="flex items-center gap-2 text-sm"><Switch checked={may} onCheckedChange={setMay} /> Users may connect</label>
@@ -718,19 +1112,57 @@ export function AdminSecurity() {
 }
 
 export function AdminLogs() {
-  const q = useQuery({ queryKey: ["logs"], queryFn: () => api.get<any[]>("/api/v1/admin/logs") });
+  const [level, setLevel] = useState("");
+  const [category, setCategory] = useState("");
+  const [search, setSearch] = useState("");
+  const [qtext, setQtext] = useState("");
+  const [cursor, setCursor] = useState("");
+  const [pages, setPages] = useState<any[]>([]);
+  const q = useQuery({
+    queryKey: ["logs", level, category, qtext, cursor],
+    queryFn: () => api.get<{ items?: any[]; next_cursor?: string }>(`/api/v1/admin/logs?level=${encodeURIComponent(level)}&category=${encodeURIComponent(category)}&q=${encodeURIComponent(qtext)}&cursor=${encodeURIComponent(cursor)}&limit=50`)
+  });
+  const items = cursor ? pages : (q.data?.items || []);
+  const [open, setOpen] = useState<string | null>(null);
   return (
     <div>
-      <PageHeader title="Logs" description="Recent job errors." />
+      <PageHeader title="Logs" description="Filter and search operational logs. Job entries keep a plain-language explanation." />
+      <form className="mb-4 flex flex-wrap gap-2" onSubmit={(e) => { e.preventDefault(); setCursor(""); setPages([]); setQtext(search); }}>
+        <input className="rounded-md border border-border bg-surface-1 px-3 py-2 text-sm" placeholder="Search" value={search} onChange={(e) => setSearch(e.target.value)} />
+        <select className="rounded-md border border-border bg-surface-1 px-3 py-2 text-sm" value={level} onChange={(e) => { setLevel(e.target.value); setCursor(""); setPages([]); }}>
+          <option value="">All levels</option>
+          <option value="debug">debug</option>
+          <option value="info">info</option>
+          <option value="warn">warn</option>
+          <option value="error">error</option>
+        </select>
+        <input className="rounded-md border border-border bg-surface-1 px-3 py-2 text-sm" placeholder="Category" value={category} onChange={(e) => { setCategory(e.target.value); setCursor(""); setPages([]); }} />
+        <Button type="submit" variant="secondary">Search</Button>
+      </form>
       <ul className="space-y-2">
-        {(q.data || []).map((l, i) => (
-          <li key={i} className="rounded-lg border border-border px-4 py-3 text-sm">
-            <div className="font-medium">{l.type}</div>
-            <div className="text-destructive">{l.error}</div>
-            <div className="text-xs text-subtle">{relativeTime(l.at)}</div>
+        {items.map((l: any, i: number) => (
+          <li key={l.id || i} className="rounded-lg border border-border px-4 py-3 text-sm">
+            <div className="font-medium">{l.summary || l.category || l.type}</div>
+            <div className="text-destructive">{l.error || l.message}</div>
+            <div className="text-xs text-subtle">{l.level} · {relativeTime(l.at || l.created_at)}</div>
+            {l.detail && l.detail !== l.error && (
+              <button className="mt-2 text-xs text-muted underline" onClick={() => setOpen(open === (l.id || String(i)) ? null : (l.id || String(i)))}>
+                {open === (l.id || String(i)) ? "Hide technical detail" : "Show technical detail"}
+              </button>
+            )}
+            {open === (l.id || String(i)) && l.detail && (
+              <pre className="mt-2 max-h-32 overflow-auto rounded-md bg-surface-2 p-2 font-mono text-[11px] text-muted">{l.detail}</pre>
+            )}
           </li>
         ))}
+        {!items.length && !q.isLoading && <li className="text-sm text-muted">No matching log entries.</li>}
       </ul>
+      {q.data?.next_cursor && (
+        <Button className="mt-3" variant="secondary" onClick={() => {
+          setPages(items.concat(q.data?.items || []));
+          setCursor(q.data?.next_cursor || "");
+        }}>Load more</Button>
+      )}
     </div>
   );
 }
@@ -756,9 +1188,9 @@ export function AdminUpdates() {
   useEffect(() => {
     if (!watch) return;
     if (updating) return;
-    if (d.last_status === "error") {
+    if (d.last_status === "error" || d.last_status === "needs_recovery") {
       setWatch(false);
-      toast.error(d.last_error || "Update failed");
+      toast.error(d.last_error || (d.last_status === "needs_recovery" ? "Update needs recovery" : "Update failed"));
       return;
     }
     if (d.last_status === "ok") {
@@ -771,11 +1203,14 @@ export function AdminUpdates() {
 
   return (
     <div>
-      <PageHeader title="Updates" description="Update pulls the new image on the host, then recreates SoundDock. Postgres stays running and the app stays up until the new container starts." />
+      <PageHeader title="Updates" description="Check now talks to GitHub and works on any host. Update now prefers the installer helper. The Docker socket is used only when SD_ALLOW_DOCKER_SOCK is on. Postgres is left running." />
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge tone={d.available ? "warning" : "success"}>{d.available ? "Update available" : "Up to date"}</Badge>
-        {updating ? <Badge tone="accent">Updating</Badge> : d.can_apply ? <Badge tone="success">Can install</Badge> : <Badge tone="warning">Cannot install</Badge>}
-        <Badge>{d.last_status || "idle"}</Badge>
+        {updating ? <Badge tone="accent">Updating</Badge> : d.can_apply ? <Badge tone="success">Can install</Badge> : <Badge tone="warning">Cannot install here</Badge>}
+        {d.helper_ok ? <Badge tone="success">Host helper</Badge> : <Badge>No host helper</Badge>}
+        {d.socket_ok ? <Badge tone="success">Docker socket</Badge> : <Badge>No Docker socket</Badge>}
+        {d.schema_forward_only ? <Badge tone="warning">Schema forward only</Badge> : d.reversible ? <Badge tone="success">Reversible</Badge> : null}
+        {d.needs_recovery ? <Badge tone="danger">Needs recovery</Badge> : <Badge>{d.last_status || "idle"}</Badge>}
       </div>
       <div className="mb-4 rounded-xl border border-border bg-surface-1 p-5">
         <div className="grid gap-4 sm:grid-cols-2">
@@ -792,7 +1227,13 @@ export function AdminUpdates() {
         <p className="mt-3 text-sm text-muted">Last check: {d.last_check_at ? relativeTime(d.last_check_at) : "never"}</p>
         <p className="text-sm text-muted">Last update: {d.last_applied_at ? relativeTime(d.last_applied_at) : "never"}{d.last_applied_by ? ` (${d.last_applied_by})` : ""}</p>
         {d.last_error && <p className="mt-2 text-sm text-destructive">{d.last_error}</p>}
-        {!d.can_apply && <p className="mt-2 text-sm text-muted">Neither the host helper nor the Docker socket is available. Re-run the installer so sounddock-update can pull images on the host.</p>}
+        {d.needs_recovery && (
+          <p className="mt-2 text-sm text-destructive">
+            This update changed the database schema and then failed. The previous image was not started. Restore from the pre-update SQL backup{d.backup_path ? ` (${d.backup_path})` : ""} using Admin, Backups.
+          </p>
+        )}
+        {d.apply_reason && <p className="mt-2 text-sm text-muted">{d.apply_reason}</p>}
+        {!d.can_apply && !d.apply_reason && <p className="mt-2 text-sm text-muted">Neither the host helper nor an opted-in Docker socket is available. Re-run the installer so sounddock-update can pull images on the host.</p>}
 
         {d.available && !updating && (
           <div className="mt-4 rounded-lg border border-border bg-surface-2 p-4">
@@ -843,7 +1284,7 @@ export function AdminUpdates() {
               setBusy(false);
             }
           }}>Check now</Button>
-          <Button disabled={busy || updating || !d.can_apply || !d.available} onClick={async () => {
+          <Button disabled={busy || updating || !d.can_apply || !d.available || d.needs_recovery} onClick={async () => {
             setBusy(true);
             try {
               await api.post("/api/v1/admin/updates/apply");
@@ -884,8 +1325,6 @@ export function AdminCloudflare() {
 export { AdminHealth } from "./AdminHealth";
 export { AdminQuotas } from "./AdminQuotas";
 export { AdminMaintenance } from "./AdminMaintenance";
-export { AdminBackupPreview } from "./AdminBackupPreview";
 export { AdminDiagnostics } from "./AdminDiagnostics";
-export { AdminDemo } from "./AdminDemo";
 export { AdminGrants } from "./AdminGrants";
 

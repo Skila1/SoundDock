@@ -46,7 +46,7 @@ func (s *Server) requirePermMW(name string) func(http.Handler) http.Handler {
 }
 
 // ensurePerm seeds permissions.name and attaches it to Administrator.
-// ON CONFLICT DO NOTHING — no numbered migration (0017 is Wave 8 duplicate review).
+// ON CONFLICT DO NOTHING - no numbered migration (0017 is Wave 8 duplicate review).
 func (s *Server) ensurePerm(ctx context.Context, name string) {
 	if s == nil || s.Pool == nil || name == "" {
 		return

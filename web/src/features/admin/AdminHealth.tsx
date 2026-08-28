@@ -49,7 +49,7 @@ export function AdminHealth() {
             <span className="text-sm">Version</span>
             <Server className="h-4 w-4" />
           </div>
-          <div className="mt-2 text-2xl font-semibold">{h.version || "—"}</div>
+          <div className="mt-2 text-2xl font-semibold">{h.version || "-"}</div>
         </article>
         <article className="rounded-xl border border-border bg-surface-1 p-4">
           <div className="flex items-center justify-between text-muted">

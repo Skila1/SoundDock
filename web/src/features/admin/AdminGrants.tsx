@@ -5,9 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/misc";
-import { PageHeader } from "@/components/ui/empty";
+import { PageHeader, QueryError } from "@/components/ui/empty";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import type { LibraryGrant } from "@/types/api";
+import type { LibraryGrant, LibraryGrantsStrict } from "@/types/api";
 
 const ACTION_OPTS = ["read", "stream", "write"] as const;
 
@@ -15,6 +16,10 @@ export function AdminGrants() {
   const qc = useQueryClient();
   const libs = useQuery({ queryKey: ["libraries"], queryFn: () => api.get<any[]>("/api/v1/libraries") });
   const users = useQuery({ queryKey: ["admin-users"], queryFn: () => api.get<any[]>("/api/v1/admin/users") });
+  const strict = useQuery({
+    queryKey: ["library-grants-strict"],
+    queryFn: () => api.get<LibraryGrantsStrict>("/api/v1/admin/library-grants-strict")
+  });
   const [lib, setLib] = useState("");
   const [userId, setUserId] = useState("");
   const grants = useQuery({
@@ -34,8 +39,29 @@ export function AdminGrants() {
     <div>
       <PageHeader
         title="Library grants"
-        description="Scoped ACL per library: read (catalogue), stream (playback), write (mutations). Capabilities such as upload still use permissions. A User role grant on a library is why everyone sees it — do not remove that row unless you intend to hide the library from the group."
+        description="Scoped ACL per library: read (catalogue), stream (playback), write (mutations). Capabilities such as upload still use permissions. A User role grant on a library is why everyone sees it - do not remove that row unless you intend to hide the library from the group."
       />
+      {libs.isError && <QueryError message={libs.error instanceof Error ? libs.error.message : undefined} onRetry={() => libs.refetch()} />}
+      <article className="mb-6 max-w-lg rounded-xl border border-border bg-surface-1 p-4">
+        <label className="flex items-center justify-between gap-3 text-sm">
+          <span>
+            <span className="font-medium">Require listed actions</span>
+            <span className="mt-0.5 block text-xs text-muted">Off: empty grant rows still allow read and stream. On: only the actions you tick apply.</span>
+          </span>
+          <Switch
+            checked={!!strict.data?.library_grants_strict}
+            onCheckedChange={async (v) => {
+              try {
+                await api.put("/api/v1/admin/library-grants-strict", { library_grants_strict: v });
+                toast.success(v ? "Grants are strict" : "Grants use compatibility mode");
+                qc.invalidateQueries({ queryKey: ["library-grants-strict"] });
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Could not update grants mode");
+              }
+            }}
+          />
+        </label>
+      </article>
       <div className="mb-4 max-w-sm">
         <Field label="Library">
           <Select value={lib} onValueChange={setLib} options={libOptions} placeholder="Select library" />

@@ -113,7 +113,7 @@ export function TrackPage() {
           </p>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {t.explicit && <Badge tone="warning">Explicit</Badge>}
-            {t.media_unavailable && <Badge tone="warning">Unavailable — will reacquire</Badge>}
+            {t.media_unavailable && <Badge tone="warning">Unavailable - will reacquire</Badge>}
             {t.keep_forever && <Badge tone="success">Keep forever</Badge>}
             {t.codec && <Badge>{t.codec}</Badge>}
             {hires && <Badge tone="accent">Hi-Res</Badge>}
@@ -212,7 +212,7 @@ function TrackEditDialog({ track, onClose, onSaved }: { track: TrackMeta; onClos
             <Switch checked={writeBack} onCheckedChange={setWriteBack} />
           </div>
           <p className="text-xs text-subtle">
-            {track.write_back_supported ? "Managed library — P3 write-back when registered." : "DB save always. File write-back is managed libraries only (P3)."}
+            {track.write_back_supported ? "Managed library - P3 write-back when registered." : "DB save always. File write-back is managed libraries only (P3)."}
           </p>
           <div className="flex justify-end gap-2">
             <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>

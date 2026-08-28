@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -14,7 +15,6 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/auth"
-	cryptox "github.com/sounddock/sounddock/internal/crypto"
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/opensubsonic"
 	"github.com/sounddock/sounddock/internal/scan"
@@ -118,29 +118,6 @@ func (s *Server) identities(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
-func (s *Server) startDiscordLink(w http.ResponseWriter, r *http.Request) {
-	tok, _ := cryptox.RandomToken(24)
-	hash := cryptox.HashToken(tok)
-	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO identity_link_challenges (token_hash, provider, user_id, expires_at) VALUES ($1,'discord',$2,now()+interval '10 minutes')`, hash, currentUser(r).ID)
-	writeJSON(w, 200, map[string]string{"url": s.absURL(r) + "/link/discord?challenge=" + tok, "challenge": tok})
-}
-
-func (s *Server) confirmDiscordLink(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Challenge, ProviderUserID, Username string }
-	_ = decodeJSON(r, &body)
-	hash := cryptox.HashToken(body.Challenge)
-	var uid uuid.UUID
-	err := s.Pool.QueryRow(r.Context(), `SELECT user_id FROM identity_link_challenges WHERE token_hash=$1 AND consumed_at IS NULL AND expires_at>now()`, hash).Scan(&uid)
-	if err != nil {
-		writeErr(w, 400, "invalid", "expired or invalid challenge")
-		return
-	}
-	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO user_identities (user_id, provider, provider_user_id, provider_username) VALUES ($1,'discord',$2,$3) ON CONFLICT (provider, provider_user_id) DO UPDATE SET user_id=EXCLUDED.user_id`, uid, body.ProviderUserID, body.Username)
-	_, _ = s.Pool.Exec(r.Context(), `UPDATE identity_link_challenges SET consumed_at=now() WHERE token_hash=$1`, hash)
-	s.Audit.Event(r.Context(), &uid, "identity.link", "discord", r.RemoteAddr, nil)
-	writeJSON(w, 200, map[string]bool{"ok": true})
-}
-
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	q := r.URL.Query().Get("q")
@@ -162,8 +139,8 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 			"duration_ms": h.Duration, "codec": h.Codec, "explicit": h.Explicit, "year": h.Year, "score": h.Score,
 			"artwork_url": "/api/v1/tracks/" + h.ID.String() + "/artwork?size=thumb",
 		}
-		if h.Type == "track" {
-			item["stream_url"] = "/api/v1/tracks/" + h.ID.String() + "/stream?token=" + stream.Sign(s.SignKey, h.ID, 15*time.Minute, "original")
+		if h.Type == "track" && s.userCanStreamTrack(r.Context(), u, h.ID) {
+			item["stream_url"] = "/api/v1/tracks/" + h.ID.String() + "/stream?token=" + stream.Sign(s.SignKey, u.ID, h.ID, 15*time.Minute, "original")
 			item["qualities"] = []string{"original", "high", "medium", "low"}
 		}
 		out = append(out, item)
@@ -171,34 +148,135 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"query": q, "results": out})
 }
 
-func (s *Server) listTracks(w http.ResponseWriter, r *http.Request) {
-	libs := s.libraryIDs(r.Context(), currentUser(r))
-	rows, err := s.Pool.Query(r.Context(), `
-		SELECT t.id, t.title, t.duration_ms, t.track_number, t.disc_number, t.year, t.explicit, t.album_id, t.library_id,
-		       coalesce(al.title,''), t.created_at,
-		       coalesce((SELECT string_agg(ar.name, ', ' ORDER BY ta.position)
-		         FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
-		         WHERE ta.track_id=t.id AND ta.role='primary'),'')
-		FROM tracks t LEFT JOIN albums al ON al.id=t.album_id
-		WHERE t.library_id = ANY($1)
-		  AND NOT (
+const trackPlayablePred = `NOT (
 		    coalesce(t.acquisition,'') IN ('youtube','scapex')
 		    AND NOT EXISTS (
 		      SELECT 1 FROM track_files tf
 		      WHERE tf.track_id=t.id AND tf.deleted_at IS NULL
 		    )
-		  )
-		ORDER BY t.created_at DESC LIMIT 10000`, libs)
+		  )`
+
+const defaultTrackPage = 100
+const maxTrackPage = 200
+
+func listTracksSQL() string {
+	return `
+		SELECT t.id, t.title, t.duration_ms, t.track_number, t.disc_number, t.year, t.explicit, t.album_id, t.library_id,
+		       coalesce(al.title,''), t.created_at, ` + listenArtistSQL + `
+		FROM tracks t LEFT JOIN albums al ON al.id=t.album_id
+		WHERE t.library_id = ANY($1)
+		  AND ` + trackPlayablePred + `
+		  AND ($2::timestamptz IS NULL OR (t.created_at, t.id) < ($2, $3))
+		ORDER BY t.created_at DESC, t.id DESC
+		LIMIT $4`
+}
+
+func trackPageLimit(raw string) int {
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultTrackPage
+	}
+	if n > maxTrackPage {
+		return maxTrackPage
+	}
+	return n
+}
+
+func encodeTrackCursor(createdAt time.Time, id uuid.UUID) string {
+	payload := createdAt.UTC().Format(time.RFC3339Nano) + "|" + id.String()
+	return base64.RawURLEncoding.EncodeToString([]byte(payload))
+}
+
+func parseTrackCursor(raw string) (time.Time, uuid.UUID, error) {
+	if strings.TrimSpace(raw) == "" {
+		return time.Time{}, uuid.Nil, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		b, err = base64.URLEncoding.DecodeString(raw)
+		if err != nil {
+			return time.Time{}, uuid.Nil, err
+		}
+	}
+	parts := strings.SplitN(string(b), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, uuid.Nil, errors.New("bad cursor")
+	}
+	ts, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		ts, err = time.Parse(time.RFC3339, parts[0])
+		if err != nil {
+			return time.Time{}, uuid.Nil, err
+		}
+	}
+	id, err := uuid.Parse(parts[1])
+	if err != nil {
+		return time.Time{}, uuid.Nil, err
+	}
+	return ts, id, nil
+}
+
+func (s *Server) listTracks(w http.ResponseWriter, r *http.Request) {
+	libs := s.libraryIDs(r.Context(), currentUser(r))
+	limit := trackPageLimit(r.URL.Query().Get("limit"))
+	cursorTime, cursorID, err := parseTrackCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "bad cursor")
+		return
+	}
+	var cursorArg any
+	if !cursorTime.IsZero() && cursorID != uuid.Nil {
+		cursorArg = cursorTime
+	}
+	rows, err := s.Pool.Query(r.Context(), listTracksSQL(), libs, cursorArg, cursorID, limit+1)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return
 	}
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "title", "duration_ms", "track_number", "disc_number", "year", "explicit", "album_id", "library_id", "album", "created_at", "artist"))
+	items := scanMaps(rows, "id", "title", "duration_ms", "track_number", "disc_number", "year", "explicit", "album_id", "library_id", "album", "created_at", "artist")
+	var next any
+	if len(items) > limit {
+		last := items[limit-1]
+		if ts, id, ok := trackCursorFromRow(last); ok {
+			next = encodeTrackCursor(ts, id)
+		}
+		items = items[:limit]
+	}
+	writeJSON(w, 200, map[string]any{"items": items, "next_cursor": next})
+}
+
+func trackCursorFromRow(row map[string]any) (time.Time, uuid.UUID, bool) {
+	id, err := uuid.Parse(asString(row["id"]))
+	if err != nil {
+		return time.Time{}, uuid.Nil, false
+	}
+	switch v := row["created_at"].(type) {
+	case time.Time:
+		return v, id, true
+	case string:
+		ts, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			ts, err = time.Parse(time.RFC3339, v)
+		}
+		if err != nil {
+			return time.Time{}, uuid.Nil, false
+		}
+		return ts, id, true
+	default:
+		return time.Time{}, uuid.Nil, false
+	}
 }
 
 func (s *Server) getTrack(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 404, "not_found", "track not found")
+		return
+	}
+	if !s.requireTrackLibrary(w, r, id, "read") {
+		return
+	}
 	m, err := s.trackDTO(r.Context(), id)
 	if err != nil {
 		writeErr(w, 404, "not_found", "track not found")
@@ -338,7 +416,13 @@ func (s *Server) serveArtwork(w http.ResponseWriter, r *http.Request, ownerType 
 }
 
 func (s *Server) trackArtwork(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil || !s.requireTrackLibrary(w, r, id, "read") {
+		if err != nil {
+			http.NotFound(w, r)
+		}
+		return
+	}
 	var albumID uuid.UUID
 	if err := s.Pool.QueryRow(r.Context(), `SELECT album_id FROM tracks WHERE id=$1`, id).Scan(&albumID); err != nil {
 		http.NotFound(w, r)
@@ -348,12 +432,24 @@ func (s *Server) trackArtwork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) albumArtwork(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil || !s.requireAlbumLibrary(w, r, id, "read") {
+		if err != nil {
+			http.NotFound(w, r)
+		}
+		return
+	}
 	s.serveArtwork(w, r, "album", id)
 }
 
 func (s *Server) artistArtwork(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil || !s.requireArtistLibrary(w, r, id, "read") {
+		if err != nil {
+			http.NotFound(w, r)
+		}
+		return
+	}
 	s.serveArtwork(w, r, "artist", id)
 }
 
@@ -370,7 +466,7 @@ func (s *Server) listAlbums(w http.ResponseWriter, r *http.Request) {
 		FROM albums a
 		LEFT JOIN album_artists aa ON aa.album_id=a.id
 		LEFT JOIN artists ar ON ar.id=aa.artist_id
-		WHERE a.library_id = ANY($1) OR a.library_id IS NULL
+		WHERE a.library_id = ANY($1)
 		GROUP BY a.id
 		ORDER BY a.title LIMIT 200`, libs)
 	if err != nil {
@@ -382,7 +478,14 @@ func (s *Server) listAlbums(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getAlbum(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 404, "not_found", "album not found")
+		return
+	}
+	if !s.requireAlbumLibrary(w, r, id, "read") {
+		return
+	}
 	var title, edition string
 	var year *int
 	var discs int
@@ -392,7 +495,8 @@ func (s *Server) getAlbum(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "not_found", "album not found")
 		return
 	}
-	rows, _ := s.Pool.Query(r.Context(), `SELECT id, title, disc_number, track_number, duration_ms FROM tracks WHERE album_id=$1 ORDER BY disc_number, track_number`, id)
+	libs := s.libraryIDs(r.Context(), currentUser(r))
+	rows, _ := s.Pool.Query(r.Context(), `SELECT id, title, disc_number, track_number, duration_ms FROM tracks WHERE album_id=$1 AND library_id = ANY($2) ORDER BY disc_number, track_number`, id, libs)
 	defer rows.Close()
 	tracks := scanMaps(rows, "id", "title", "disc_number", "track_number", "duration_ms")
 	discsMap := map[int][]map[string]any{}
@@ -416,7 +520,17 @@ func (s *Server) getAlbum(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) patchAlbum(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	if !s.requireMetaEditor(w, r) {
+		return
+	}
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "id")
+		return
+	}
+	if !s.requireAlbumLibrary(w, r, id, "write") {
+		return
+	}
 	var body struct{ Title, Edition *string }
 	_ = decodeJSON(r, &body)
 	if body.Title != nil {
@@ -431,8 +545,12 @@ func (s *Server) patchAlbum(w http.ResponseWriter, r *http.Request) {
 func (s *Server) mergeAlbums(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Into, From uuid.UUID }
 	_ = decodeJSON(r, &body)
-	if !currentUser(r).IsAdmin {
+	u := currentUser(r)
+	if u == nil || !u.IsAdmin {
 		writeErr(w, 403, "forbidden", "admin required")
+		return
+	}
+	if !s.requireAlbumLibrary(w, r, body.Into, "write") || !s.requireAlbumLibrary(w, r, body.From, "write") {
 		return
 	}
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE tracks SET album_id=$1 WHERE album_id=$2`, body.Into, body.From)
@@ -441,15 +559,16 @@ func (s *Server) mergeAlbums(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listArtists(w http.ResponseWriter, r *http.Request) {
+	libs := s.libraryIDs(r.Context(), currentUser(r))
 	rows, err := s.Pool.Query(r.Context(), `
 		SELECT a.id, a.name FROM artists a
 		WHERE EXISTS (
 			SELECT 1 FROM track_artists ta
 			JOIN tracks t ON t.id=ta.track_id
 			JOIN track_files tf ON tf.track_id=t.id AND tf.deleted_at IS NULL
-			WHERE ta.artist_id=a.id
+			WHERE ta.artist_id=a.id AND t.library_id = ANY($1)
 		)
-		ORDER BY a.name LIMIT 500`)
+		ORDER BY a.name LIMIT 500`, libs)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return
@@ -459,20 +578,28 @@ func (s *Server) listArtists(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) getArtist(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 404, "not_found", "artist not found")
+		return
+	}
+	if !s.requireArtistLibrary(w, r, id, "read") {
+		return
+	}
 	var name string
 	if err := s.Pool.QueryRow(r.Context(), `SELECT name FROM artists WHERE id=$1`, id).Scan(&name); err != nil {
 		writeErr(w, 404, "not_found", "artist not found")
 		return
 	}
-	rows, _ := s.Pool.Query(r.Context(), `SELECT DISTINCT a.id, a.title, a.year, a.is_compilation FROM albums a JOIN album_artists aa ON aa.album_id=a.id WHERE aa.artist_id=$1 ORDER BY a.year DESC NULLS LAST`, id)
+	libs := s.libraryIDs(r.Context(), currentUser(r))
+	rows, _ := s.Pool.Query(r.Context(), `SELECT DISTINCT a.id, a.title, a.year, a.is_compilation FROM albums a JOIN album_artists aa ON aa.album_id=a.id WHERE aa.artist_id=$1 AND a.library_id = ANY($2) ORDER BY a.year DESC NULLS LAST`, id, libs)
 	albums := scanMaps(rows, "id", "title", "year", "is_compilation")
 	rows.Close()
 	trows, _ := s.Pool.Query(r.Context(), `
 		SELECT t.id, t.title, t.duration_ms, coalesce(al.title,'')
 		FROM tracks t JOIN track_artists ta ON ta.track_id=t.id
 		LEFT JOIN albums al ON al.id=t.album_id
-		WHERE ta.artist_id=$1
+		WHERE ta.artist_id=$1 AND t.library_id = ANY($2)
 		  AND NOT (
 		    coalesce(t.acquisition,'') IN ('youtube','scapex')
 		    AND NOT EXISTS (
@@ -480,7 +607,7 @@ func (s *Server) getArtist(w http.ResponseWriter, r *http.Request) {
 		      WHERE tf.track_id=t.id AND tf.deleted_at IS NULL
 		    )
 		  )
-		ORDER BY t.created_at DESC LIMIT 20`, id)
+		ORDER BY t.created_at DESC LIMIT 20`, id, libs)
 	defer trows.Close()
 	writeJSON(w, 200, map[string]any{
 		"id": id, "name": name, "albums": albums,
@@ -492,14 +619,40 @@ func (s *Server) getArtist(w http.ResponseWriter, r *http.Request) {
 func (s *Server) mergeArtists(w http.ResponseWriter, r *http.Request) {
 	var body struct{ Into, From uuid.UUID }
 	_ = decodeJSON(r, &body)
+	if !s.authorizeMergeArtists(w, r, body.Into, body.From) {
+		return
+	}
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE track_artists SET artist_id=$1 WHERE artist_id=$2`, body.Into, body.From)
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE album_artists SET artist_id=$1 WHERE artist_id=$2`, body.Into, body.From)
 	_, _ = s.Pool.Exec(r.Context(), `DELETE FROM artists WHERE id=$1`, body.From)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
+func (s *Server) authorizeMergeArtists(w http.ResponseWriter, r *http.Request, into, from uuid.UUID) bool {
+	u := currentUser(r)
+	if u != nil && u.IsAdmin {
+		return true
+	}
+	if !auth.HasPerm(u, "tracks.merge") {
+		writeErr(w, 403, "forbidden", "tracks.merge not permitted")
+		return false
+	}
+	seen := map[uuid.UUID]struct{}{}
+	for _, id := range append(s.artistLibraryIDs(r.Context(), into), s.artistLibraryIDs(r.Context(), from)...) {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		if !s.requireLibraryWrite(w, r, id) {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Server) listGenres(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT DISTINCT genre_text FROM tracks WHERE genre_text<>'' ORDER BY 1`)
+	libs := s.libraryIDs(r.Context(), currentUser(r))
+	rows, _ := s.Pool.Query(r.Context(), `SELECT DISTINCT genre_text FROM tracks WHERE genre_text<>'' AND library_id = ANY($1) ORDER BY 1`, libs)
 	defer rows.Close()
 	var g []string
 	for rows.Next() {
@@ -618,6 +771,14 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) patchUpload(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	if s.Pool != nil && id != uuid.Nil {
+		var libID uuid.UUID
+		if err := s.Pool.QueryRow(r.Context(), `SELECT library_id FROM upload_sessions WHERE id=$1`, id).Scan(&libID); err == nil {
+			if !s.requireLibraryWrite(w, r, libID) {
+				return
+			}
+		}
+	}
 	off, _ := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
 	n, err := s.Ingest.PatchUpload(r.Context(), id, off, io.LimitReader(r.Body, 200<<20))
 	if err != nil {

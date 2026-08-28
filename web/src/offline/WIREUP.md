@@ -1,4 +1,4 @@
-# P8 WIREUP — offline PWA + stream policy
+# P8 WIREUP - offline PWA + stream policy
 
 P8 owns `web/src/offline/**`, `web/src/main.tsx` (install/update toasts), `web/vite.config.ts` (NetworkOnly `/api` `/rest`; no stream SW cache), and `internal/httpapi/stream_policy.go`. Do not parse `X-Forwarded-For` outside `proxyHeaders`.
 
@@ -28,7 +28,7 @@ r.Put("/stream-policy", s.adminPutStreamPolicy)
    - `defer s.ReleaseStreamSlot(r)`
    Keep `s.Slots` only as a process-wide backstop if you still want one.
 3. After choosing `quality`, set `quality = s.CapStreamQuality(r, quality)` so remote clients cannot exceed `stream_remote_max_bitrate` (LAN uses `stream_lan_max_bitrate`, `0` = original).
-4. Read **`r.RemoteAddr` only**. `proxyHeaders` already rewrote it. If hop count or trusted CIDRs are wrong, extend `proxyHeaders` / `SD_TRUSTED_PROXIES` — do not add a second XFF parser in stream or policy code.
+4. Read **`r.RemoteAddr` only**. `proxyHeaders` already rewrote it. If hop count or trusted CIDRs are wrong, extend `proxyHeaders` / `SD_TRUSTED_PROXIES` - do not add a second XFF parser in stream or policy code.
 
 ## `NewSlots` (`cmd/sounddock/main.go`)
 
@@ -47,7 +47,7 @@ Trusted proxy CIDRs live in `SD_TRUSTED_PROXIES` (`config.TrustedNets`). `proxyH
 `web/src/lib/api.ts` is owned elsewhere. Integrator should:
 
 - Prefer `offlineObjectUrl(trackId)` from `@/offline` when the track is opted in (blob URL). Never set `audio.src` to a cached `/api/v1/tracks/*/stream` URL.
-- Opt-in bulk download: `fillTracks(ids)` — **max 2 concurrent `/stream` fills**.
+- Opt-in bulk download: `fillTracks(ids)` - **max 2 concurrent `/stream` fills**.
 - Device revoke: `revokeDeviceAndClear()` (DELETE `/api/v1/me/offline/tokens` + Cache API wipe).
 - Do not persist interactive `/stream?token=` values in Cache Storage or the service worker.
 

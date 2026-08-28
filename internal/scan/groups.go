@@ -77,7 +77,7 @@ func artistTitleClusterKey(blockKey string, clusterIndex int) string {
 }
 
 // ClusterByDuration groups tracks whose durations form a chain of gaps ≤ windowMS.
-// One cluster is returned per connected component — never one row per pair.
+// One cluster is returned per connected component - never one row per pair.
 func ClusterByDuration(tracks []timedTrack, windowMS int) [][]timedTrack {
 	if len(tracks) == 0 {
 		return nil

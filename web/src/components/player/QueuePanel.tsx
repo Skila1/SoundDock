@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
-import { GripVertical, History, ListMusic, ListPlus, PanelRightClose, Pin, PinOff, Play, Trash2, Undo2, X } from "lucide-react";
+import { Download, GripVertical, History, ListMusic, ListPlus, PanelRightClose, Pin, PinOff, Play, Trash2, Undo2, X } from "lucide-react";
+import { fillableTrackIds, saveTracksOffline } from "@/lib/offlineFill";
 import { Button } from "@/components/ui/button";
 import { Artwork } from "@/components/media/Artwork";
 import { artworkUrl, cn, relativeTime } from "@/lib/utils";
@@ -73,7 +74,7 @@ export function QueuePresence({ className }: { className?: string }) {
             <Tooltip key={p.user_id} label={label}>
               <span className="relative inline-flex h-7 w-7 shrink-0">
                 {p.avatar_url ? (
-                  <img src={p.avatar_url} alt="" className="h-7 w-7 rounded-full object-cover ring-2 ring-surface-1" />
+                  <img src={p.avatar_url} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full object-cover ring-2 ring-surface-1" />
                 ) : (
                   <span className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-3 text-[10px] font-semibold text-foreground ring-2 ring-surface-1">
                     {p.display_name.slice(0, 1).toUpperCase()}
@@ -271,6 +272,14 @@ export function QueuePanel({
       </div>
       {view === "queue" && (
         <div className="flex justify-end gap-1 px-4">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!fillableTrackIds(items).length}
+            onClick={() => saveTracksOffline(fillableTrackIds(items))}
+          >
+            <Download className="mr-1 h-3.5 w-3.5" /> Offline
+          </Button>
           <Button size="sm" variant="ghost" onClick={() => setSaveOpen(true)} disabled={!ids.length}>
             <ListPlus className="mr-1 h-3.5 w-3.5" /> Save
           </Button>

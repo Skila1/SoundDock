@@ -12,12 +12,12 @@ import type { ListenComparePair, ListenCompareReport } from "@/types/api";
 type Preset = "last_30_days" | "all" | "custom";
 
 function fmt(n?: number | null) {
-  if (n == null || Number.isNaN(n)) return "—";
+  if (n == null || Number.isNaN(n)) return "-";
   return new Intl.NumberFormat().format(n);
 }
 
 function fmtMin(n?: number | null) {
-  if (n == null || Number.isNaN(n)) return "—";
+  if (n == null || Number.isNaN(n)) return "-";
   return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(n)} min`;
 }
 
@@ -59,7 +59,7 @@ export function AdminListenCompare() {
     <div>
       <PageHeader
         title="Listen compare"
-        description="Validation report only. History and events are compared in parallel — this is not a merged listen statistic. Home, Stats, and Wrapped still read listen_history. Recap minutes from sum(duration_ms) are labeled estimated_minutes."
+        description="Validation report only. History and events are compared in parallel - this is not a merged listen statistic. Home, Stats, and Wrapped still read listen_history. Recap minutes from sum(duration_ms) are labeled estimated_minutes."
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">

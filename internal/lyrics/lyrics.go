@@ -18,12 +18,13 @@ import (
 const (
 	// PermConfigure is the admin permission for GET|PUT /api/v1/admin/lyrics.
 	PermConfigure = "lyrics.configure"
-	// SettingKey is the server_settings key for {enabled, provider_url}.
+	// SettingKey is the server_settings key for local + optional LRCLIB.
 	SettingKey = "lyrics_provider"
 
 	SourceManual   = "manual"
 	SourceUser     = "user" // metadata editor (never overwrite)
 	SourceEmbedded = "embedded"
+	SourceLocal    = "local"
 	SourceLRCLIB   = "lrclib"
 
 	AllowedHost = "lrclib.net"
@@ -51,10 +52,13 @@ type Line struct {
 	Text string `json:"text"`
 }
 
-// Config is the admin lyrics-provider setting. Empty URL / enabled=false means no network.
+// Config is the admin lyrics setting. Local (embedded + on-disk) is the default.
+// External LRCLIB is optional.
 type Config struct {
-	Enabled     bool   `json:"enabled"`
-	ProviderURL string `json:"provider_url"`
+	LocalEnabled    bool   `json:"local_enabled"`
+	ExternalEnabled bool   `json:"external_enabled"`
+	Enabled         bool   `json:"enabled"` // same as ExternalEnabled for older clients
+	ProviderURL     string `json:"provider_url"`
 }
 
 // Service reads the lyrics table and, when enabled, LRCLIB.
@@ -63,11 +67,21 @@ type Service struct {
 	log    *slog.Logger
 	client *http.Client
 
+	localDir string
+
 	listFn  func(ctx context.Context, trackID uuid.UUID) ([]Result, error)
 	saveFn  func(ctx context.Context, trackID uuid.UUID, source, body string, timed bool) error
 	urlFn   func(ctx context.Context) string
 	lockFn  func(ctx context.Context, trackID uuid.UUID) bool
 	fetchFn func(ctx context.Context, origin string, meta Meta) (body string, timed bool, err error)
+}
+
+// WithLocalDir sets the on-disk lyrics folder ({artist}/{title}.lrc).
+func (s *Service) WithLocalDir(dir string) *Service {
+	if s != nil {
+		s.localDir = dir
+	}
+	return s
 }
 
 // New builds a Service. log and pool may be nil (GetLyrics then returns empty).
@@ -88,7 +102,8 @@ func New(pool *pgxpool.Pool, log *slog.Logger) *Service {
 }
 
 // GetLyrics returns lyrics for meta. Lookup order: manual/user (never overwritten)
-// > embedded > cached provider > provider fetch. Failure is non-fatal.
+// > local (embedded + on-disk files) > cached provider (only when ExternalEnabled)
+// > optional LRCLIB fetch. Provider cache is left in place when external is off.
 func (s *Service) GetLyrics(ctx context.Context, meta Meta) Result {
 	if s == nil {
 		return Result{}
@@ -98,7 +113,21 @@ func (s *Service) GetLyrics(ctx context.Context, meta Meta) Result {
 		s.warn("lyrics cache lookup failed", "err", err, "track_id", meta.TrackID)
 		return Result{}
 	}
-	if hit := pickCached(rows); hit.Body != "" || hit.Source != "" {
+	if hit := pickProtected(rows); hit.Body != "" || hit.Source != "" {
+		return hit
+	}
+	if s.localOn(ctx) {
+		if hit := pickEmbedded(rows); hit.Source != "" {
+			return hit
+		}
+		if hit := s.lookupLocal(meta); hit.Body != "" {
+			return hit
+		}
+	}
+	if !s.externalOn(ctx) {
+		return Result{}
+	}
+	if hit := pickProvider(rows); hit.Source != "" {
 		return hit
 	}
 	if s.lyricsLocked(ctx, meta.TrackID) {
@@ -129,24 +158,41 @@ func (s *Service) GetLyrics(ctx context.Context, meta Meta) Result {
 	return Result{Body: body, Timed: timed, Source: SourceLRCLIB}
 }
 
-func pickCached(rows []Result) Result {
-	var embedded, provider Result
+func pickProtected(rows []Result) Result {
 	for _, row := range rows {
-		switch {
-		case isProtected(row.Source):
-			if strings.TrimSpace(row.Body) != "" || row.Source != "" {
-				return row
-			}
-		case row.Source == SourceEmbedded && embedded.Source == "":
-			embedded = row
-		case provider.Source == "":
-			provider = row
+		if isProtected(row.Source) && (strings.TrimSpace(row.Body) != "" || row.Source != "") {
+			return row
 		}
 	}
-	if embedded.Source != "" {
-		return embedded
+	return Result{}
+}
+
+func pickEmbedded(rows []Result) Result {
+	for _, row := range rows {
+		if row.Source == SourceEmbedded || row.Source == SourceLocal {
+			return row
+		}
 	}
-	return provider
+	return Result{}
+}
+
+func pickProvider(rows []Result) Result {
+	for _, row := range rows {
+		if !isProtected(row.Source) && row.Source != SourceEmbedded && row.Source != SourceLocal && row.Source != "" {
+			return row
+		}
+	}
+	return Result{}
+}
+
+func pickCached(rows []Result) Result {
+	if hit := pickProtected(rows); hit.Source != "" {
+		return hit
+	}
+	if hit := pickEmbedded(rows); hit.Source != "" {
+		return hit
+	}
+	return pickProvider(rows)
 }
 
 func isProtected(source string) bool {

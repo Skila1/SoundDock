@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS listen_events_null_instance_qualify_uidx;

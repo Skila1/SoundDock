@@ -80,12 +80,8 @@ frontend_routes:
     component: web/src/features/admin/AdminQuotas.tsx#AdminQuotas
   - path: /admin/maintenance
     component: web/src/features/admin/AdminMaintenance.tsx#AdminMaintenance
-  - path: /admin/backup-preview
-    component: web/src/features/admin/AdminBackupPreview.tsx#AdminBackupPreview
   - path: /admin/diagnostics
     component: web/src/features/admin/AdminDiagnostics.tsx#AdminDiagnostics
-  - path: /admin/demo
-    component: web/src/features/admin/AdminDemo.tsx#AdminDemo
   - path: /admin/grants
     component: web/src/features/admin/AdminGrants.tsx#AdminGrants
 nav:
@@ -99,14 +95,8 @@ nav:
     to: maintenance
     label: Maintenance
   - slot: AdminLayout
-    to: backup-preview
-    label: Backup preview
-  - slot: AdminLayout
     to: diagnostics
     label: Diagnostics
-  - slot: AdminLayout
-    to: demo
-    label: Demo
   - slot: AdminLayout
     to: grants
     label: Grants

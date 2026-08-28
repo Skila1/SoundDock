@@ -144,3 +144,124 @@ func TestRequestUpdateReplaces(t *testing.T) {
 		t.Fatal("host pull progress after removing request is a takeover")
 	}
 }
+
+func TestImageRef(t *testing.T) {
+	t.Setenv("SD_IMAGE", "")
+	if ImageRef() != CanonicalImage+":latest" {
+		t.Fatalf("default %s", ImageRef())
+	}
+	t.Setenv("SD_IMAGE", "evil.example/hack:latest")
+	if ImageRef() != CanonicalImage+":latest" {
+		t.Fatalf("non-canonical override leaked: %s", ImageRef())
+	}
+	t.Setenv("SD_IMAGE", CanonicalImage+":0.0.9")
+	if ImageRef() != CanonicalImage+":0.0.9" {
+		t.Fatalf("canonical tag should stick: %s", ImageRef())
+	}
+}
+
+func TestSocketOKFalseWithoutFlag(t *testing.T) {
+	t.Setenv("SD_ALLOW_DOCKER_SOCK", "")
+	if SocketOK() {
+		t.Fatal("socket must stay off unless SD_ALLOW_DOCKER_SOCK is set")
+	}
+	t.Setenv("SD_ALLOW_DOCKER_SOCK", "0")
+	if SocketOK() {
+		t.Fatal("explicit 0 must not enable the socket")
+	}
+}
+
+func TestReconcileRequiresExpectedDigest(t *testing.T) {
+	st := stored{LastStatus: "updating", LatestDigest: "sha256:expected", CurrentDigest: "sha256:old"}
+	out, save := confirmApply(st, "sha256:other", true)
+	if save || out.LastStatus == "ok" {
+		t.Fatal("must not confirm without the expected digest")
+	}
+	out, save = confirmApply(st, "sha256:expected", false)
+	if save || out.LastStatus == "ok" {
+		t.Fatal("must not confirm without health")
+	}
+	out, save = confirmApply(st, "sha256:expected", true)
+	if !save || out.LastStatus != "ok" {
+		t.Fatalf("matching digest and health should confirm: save=%v status=%s", save, out.LastStatus)
+	}
+}
+
+func TestNoSchemaUpdateFailureRollsBack(t *testing.T) {
+	oldStarted := false
+	res := RunTransaction(TxHooks{
+		SchemaBefore:   23,
+		TargetHead:     23,
+		OldImageHead:   23,
+		PreviousDigest: "sha256:old",
+		NewDigest:      "sha256:new",
+		Dump: func() (string, error) {
+			t.Fatal("image_only must not dump")
+			return "", nil
+		},
+		Pull:     func() error { return nil },
+		StartNew: func() error { return nil },
+		Health:   func() error { return errHealth },
+		SchemaAfter: func() (int64, error) {
+			return 23, nil
+		},
+		StartOld: func() error { oldStarted = true; return nil },
+	})
+	if res.Status != "rolled_back" {
+		t.Fatalf("status=%s err=%v", res.Status, res.Err)
+	}
+	if !oldStarted {
+		t.Fatal("no-schema failure must start the previous image")
+	}
+	if res.CurrentDigest != "sha256:old" {
+		t.Fatalf("digest %s", res.CurrentDigest)
+	}
+	if res.NeedsRecovery {
+		t.Fatal("image_only failure is not needs_recovery")
+	}
+}
+
+func TestSchemaChangingUpdateFailureNeedsRecovery(t *testing.T) {
+	oldStarted := false
+	res := RunTransaction(TxHooks{
+		SchemaBefore:   22,
+		TargetHead:     23,
+		OldImageHead:   22,
+		PreviousDigest: "sha256:old",
+		NewDigest:      "sha256:new",
+		Dump:           func() (string, error) { return "/tmp/pre.sql", nil },
+		Pull:           func() error { return nil },
+		StartNew:       func() error { return nil },
+		Health:         func() error { return errHealth },
+		SchemaAfter:    func() (int64, error) { return 23, nil },
+		StartOld:       func() error { oldStarted = true; return nil },
+	})
+	if res.Status != "needs_recovery" || !res.NeedsRecovery {
+		t.Fatalf("status=%s recovery=%v", res.Status, res.NeedsRecovery)
+	}
+	if oldStarted {
+		t.Fatal("schema-changing failure must not start the old image")
+	}
+	if !res.Dumped {
+		t.Fatal("schema_forward must dump SQL first")
+	}
+}
+
+func TestOldImageIncompatibleWhenSchemaExceedsHead(t *testing.T) {
+	if OldImageCompatible(23, 22) {
+		t.Fatal("current schema exceeds the old image head")
+	}
+	if !OldImageCompatible(22, 22) {
+		t.Fatal("same head is compatible")
+	}
+	dec := DecideAfterFailure(22, 23, 22)
+	if dec.StartOldImage || dec.Status != "needs_recovery" {
+		t.Fatalf("%#v", dec)
+	}
+}
+
+var errHealth = errString("unhealthy")
+
+type errString string
+
+func (e errString) Error() string { return string(e) }

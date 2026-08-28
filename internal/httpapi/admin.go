@@ -2,9 +2,9 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +15,7 @@ import (
 	discordx "github.com/sounddock/sounddock/internal/discord"
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/jobs"
+	"github.com/sounddock/sounddock/internal/oplog"
 	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/storage"
 	"github.com/sounddock/sounddock/internal/transcode"
@@ -244,6 +245,7 @@ func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request) {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE users SET disabled=$2, updated_at=now() WHERE id=$1`, id, *body.Disabled)
 		if *body.Disabled {
 			_ = s.Auth.DeleteUserSessions(r.Context(), id)
+			_, _ = s.Pool.Exec(r.Context(), `UPDATE personal_access_tokens SET revoked_at=now() WHERE user_id=$1 AND revoked_at IS NULL`, id)
 		}
 		s.Audit.Event(r.Context(), &currentUser(r).ID, "user.disable", id.String(), r.RemoteAddr, nil)
 	}
@@ -325,54 +327,11 @@ func (s *Server) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
-func (s *Server) adminStorage(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT id, name, type FROM storage_providers`)
-	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "name", "type"))
-}
-
-func (s *Server) adminCreateStorage(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name   string          `json:"name"`
-		Type   string          `json:"type"`
-		Config json.RawMessage `json:"config"`
-	}
-	_ = decodeJSON(r, &body)
-	enc := body.Config
-	if s.Box != nil && len(body.Config) > 0 {
-		if b, err := s.Box.Encrypt(body.Config); err == nil {
-			enc = b
-		}
-	}
-	if body.Type == "local" || body.Type == "managed" {
-		var c struct {
-			Root string `json:"root"`
-		}
-		_ = json.Unmarshal(body.Config, &c)
-		if c.Root == "" {
-			c.Root = s.Cfg.ManagedDir
-		}
-		if s.Box != nil {
-			enc, _ = s.Box.Encrypt([]byte(c.Root))
-		} else {
-			enc = []byte(c.Root)
-		}
-	}
-	var id uuid.UUID
-	err := s.Pool.QueryRow(r.Context(), `INSERT INTO storage_providers (name, type, config_enc) VALUES ($1,$2,$3) RETURNING id`, body.Name, body.Type, enc).Scan(&id)
-	if err != nil {
-		writeErr(w, 400, "storage", err.Error())
-		return
-	}
-	s.Audit.Event(r.Context(), &currentUser(r).ID, "storage.create", body.Name, r.RemoteAddr, nil)
-	writeJSON(w, 201, map[string]any{"id": id})
-}
-
 func (s *Server) adminCreateLibrary(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name, Kind, Prefix, Org string
 		StorageID               uuid.UUID `json:"storage_id"`
-		ReadOnly                bool      `json:"read_only"`
+		ReadOnly                *bool     `json:"read_only"`
 	}
 	_ = decodeJSON(r, &body)
 	if body.Org == "" {
@@ -381,10 +340,20 @@ func (s *Server) adminCreateLibrary(w http.ResponseWriter, r *http.Request) {
 	if body.Kind == "" {
 		body.Kind = "music"
 	}
+	readOnly := false
+	if body.ReadOnly != nil {
+		readOnly = *body.ReadOnly
+	} else {
+		var typ string
+		_ = s.Pool.QueryRow(r.Context(), `SELECT type FROM storage_providers WHERE id=$1`, body.StorageID).Scan(&typ)
+		if typ == "local" || typ == "s3" {
+			readOnly = true
+		}
+	}
 	var id uuid.UUID
 	err := s.Pool.QueryRow(r.Context(), `INSERT INTO libraries (name, kind, storage_provider_id, root_prefix, read_only, organisation_mode, is_default)
 		VALUES ($1,$2,$3,$4,$5,$6, NOT EXISTS (SELECT 1 FROM libraries WHERE is_default)) RETURNING id`,
-		body.Name, body.Kind, body.StorageID, body.Prefix, body.ReadOnly, body.Org).Scan(&id)
+		body.Name, body.Kind, body.StorageID, body.Prefix, readOnly, body.Org).Scan(&id)
 	if err != nil {
 		writeErr(w, 400, "library", err.Error())
 		return
@@ -458,12 +427,22 @@ func (s *Server) adminMigrate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 404, "not_found", "destination library not found")
 		return
 	}
-	jid, err := s.Jobs.Enqueue(r.Context(), "library.migrate", ingest.MigratePayload{Source: src, Dest: body.Dest, Mode: body.Mode, Dedupe: body.Dedupe})
+	req, effective, reason := "copy", "copy", ""
+	if s.Ingest != nil {
+		req, effective, reason = s.Ingest.ResolveMigrateModes(r.Context(), body.Mode, src)
+	} else if strings.EqualFold(strings.TrimSpace(body.Mode), "move") {
+		req, effective, reason = "move", "copy", "source_not_managed"
+	}
+	jid, err := s.Jobs.Enqueue(r.Context(), "library.migrate", ingest.MigratePayload{
+		Source: src, Dest: body.Dest, Mode: effective, RequestedMode: req, EffectiveMode: effective, Reason: reason, Dedupe: body.Dedupe,
+	})
 	if err != nil {
 		s.writeJobErr(w, err)
 		return
 	}
-	writeJSON(w, 202, map[string]any{"job_id": jid})
+	writeJSON(w, 202, map[string]any{
+		"job_id": jid, "requested_mode": req, "effective_mode": effective, "reason": reason,
+	})
 }
 
 func (s *Server) adminTranscode(w http.ResponseWriter, r *http.Request) {
@@ -478,16 +457,21 @@ func (s *Server) adminClearCache(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) adminBackups(w http.ResponseWriter, r *http.Request) {
 	rows, _ := s.Pool.Query(r.Context(), `SELECT b.id, b.path, b.size_bytes, b.status, b.created_at,
+		COALESCE(b.destination,'local'), COALESCE(b.kind,'sql'), COALESCE(b.remote_key,''),
 		(SELECT ok FROM backup_verifications v WHERE v.backup_id=b.id ORDER BY created_at DESC LIMIT 1) AS verified
 		FROM backups b ORDER BY created_at DESC LIMIT 50`)
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "path", "size_bytes", "status", "created_at", "verified"))
+	writeJSON(w, 200, scanMaps(rows, "id", "path", "size_bytes", "status", "created_at", "destination", "kind", "remote_key", "verified"))
 }
 
 func (s *Server) adminBackup(w http.ResponseWriter, r *http.Request) {
 	id, err := s.Backup.Run(r.Context())
 	if err != nil {
-		writeErr(w, 500, "backup", err.Error())
+		code := 500
+		if strings.Contains(err.Error(), "passphrase") || strings.Contains(err.Error(), "pg_dump is missing") {
+			code = 400
+		}
+		writeErr(w, code, "backup", err.Error())
 		return
 	}
 	writeJSON(w, 201, map[string]any{"id": id})
@@ -595,9 +579,70 @@ func (s *Server) adminPutMetadata(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminLogs(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT type, last_error, updated_at FROM jobs WHERE last_error IS NOT NULL ORDER BY updated_at DESC LIMIT 50`)
-	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "type", "error", "at"))
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	items, next, err := oplog.List(r.Context(), s.Pool, oplog.Filter{
+		Level:    q.Get("level"),
+		Category: q.Get("category"),
+		Q:        q.Get("q"),
+		Limit:    limit,
+		Cursor:   q.Get("cursor"),
+	})
+	if err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, e := range items {
+		jobType := e.Type
+		if jobType == "" && e.Category == "job" {
+			jobType = e.Category
+		}
+		human := e.Message
+		if e.Category == "job" || jobType != "" {
+			human = explainJobError(jobType, e.Message)
+		}
+		out = append(out, map[string]any{
+			"id":         e.ID,
+			"type":       jobType,
+			"category":   e.Category,
+			"level":      e.Level,
+			"error":      human,
+			"detail":     e.Message,
+			"message":    e.Message,
+			"at":         e.CreatedAt,
+			"created_at": e.CreatedAt,
+			"summary":    jobTypeSummary(jobType),
+			"job_id":     e.JobID,
+		})
+	}
+	writeJSON(w, 200, map[string]any{
+		"items":       out,
+		"next_cursor": next,
+		"limit":       limit,
+	})
+}
+
+func jobTypeSummary(typ string) string {
+	switch typ {
+	case "external.playlist.import":
+		return "Playlist import"
+	case "external.playlist.tick":
+		return "Playlist sync"
+	case "scapex.fetch":
+		return "Download"
+	case "library.scan":
+		return "Library scan"
+	case "backup.run":
+		return "Backup"
+	case "app.update.apply":
+		return "App update"
+	default:
+		if typ == "" {
+			return "Job"
+		}
+		return typ
+	}
 }
 
 func (s *Server) discordGet(w http.ResponseWriter, r *http.Request) {

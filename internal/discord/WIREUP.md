@@ -1,4 +1,4 @@
-# P7 Discord gateway / voice + scrobble — integrator wireup
+# P7 Discord gateway / voice + scrobble - integrator wireup
 
 This package owns the **primary listening path** when Discord is enabled: music plays in guild voice from SoundDock library files (FFmpeg PCM), not as a browser substitute. No Lavalink, YouTube, or Spotify audio.
 
@@ -17,7 +17,7 @@ System: `ffmpeg` built with `libopus` (PCM from `FFmpegPCM` is re-encoded to Opu
 replace github.com/bwmarrin/discordgo => github.com/yeongaori/discordgo-fork v0.0.0-20260627070107-c65bda26a53b
 ```
 
-## `cmd/sounddock/main.go` — run the bot on `SD_ROLE=all` as well as `discord`
+## `cmd/sounddock/main.go` - run the bot on `SD_ROLE=all` as well as `discord`
 
 Today the bot starts only when `role == config.RoleDiscord`. Also start it for `RoleAll` (single-process compose):
 
@@ -35,7 +35,7 @@ if role == config.RoleAll || role == config.RoleDiscord {
 
 `Bot.Run` opens the Gateway, handles slash interactions, joins voice, and streams `FFmpegPCM` from `StorageProvider`. Admin **Sync commands** sets `command_registration_status='pending'`; the existing 15s tick **PUTs** the command catalogue globally and **per invited guild** when status is `pending`, `unknown`, or `error`. Ready and `GUILD_CREATE` also register guild commands so they appear immediately.
 
-## `internal/httpapi/server.go` — mount P7 routes (do not rewrite Router)
+## `internal/httpapi/server.go` - mount P7 routes (do not rewrite Router)
 
 Inside the authenticated `/api/v1` group (`requireAuth`), call:
 
@@ -59,7 +59,7 @@ Same-process join uses `discordx.Live()`. If the API role has no gateway, join w
 
 ## Web player Rich Presence
 
-`web/src/features/settings/discordPresence.ts` talks to Discord desktop RPC on `127.0.0.1:6463–6472`. Connected Services toggles it. To keep presence alive on every page, import in `AppShell`:
+`web/src/features/settings/discordPresence.ts` talks to Discord desktop RPC on `127.0.0.1:6463-6472`. Connected Services toggles it. To keep presence alive on every page, import in `AppShell`:
 
 ```ts
 import { ensureDiscordPresence } from "@/features/settings/discordPresence";
@@ -75,6 +75,6 @@ Do not invent a second command set. Keep `CommandHelp` in `commands.go`. Impleme
 
 ## Env
 
-- `SD_PUBLIC_URL` — `/link` challenge URL
-- `SD_LASTFM_API_KEY` / `SD_LASTFM_API_SECRET` — Last.fm scrobble + import
-- `SD_ROLE=all` or `discord` — gateway process
+- `SD_PUBLIC_URL` - `/link` challenge URL
+- `SD_LASTFM_API_KEY` / `SD_LASTFM_API_SECRET` - Last.fm scrobble + import
+- `SD_ROLE=all` or `discord` - gateway process

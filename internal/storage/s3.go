@@ -11,14 +11,14 @@ import (
 )
 
 type S3Config struct {
-	Endpoint       string
-	Region         string
-	Bucket         string
-	AccessKey      string
-	SecretKey      string
-	UseSSL         bool
-	PathStyle      bool
-	Prefix         string
+	Endpoint  string `json:"endpoint"`
+	Region    string `json:"region"`
+	Bucket    string `json:"bucket"`
+	AccessKey string `json:"access_key"`
+	SecretKey string `json:"secret_key"`
+	UseSSL    bool   `json:"use_ssl"`
+	PathStyle bool   `json:"path_style"`
+	Prefix    string `json:"prefix"`
 }
 
 type S3 struct {

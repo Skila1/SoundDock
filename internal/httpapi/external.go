@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,6 +18,7 @@ func (s *Server) meProviders(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	rows, err := s.Pool.Query(r.Context(), `
 		SELECT s.provider, s.enabled, s.users_may_connect, s.public_import,
+			s.client_id, (s.extra_enc IS NOT NULL AND length(s.extra_enc) > 0),
 			a.display_name, a.status, a.last_successful_sync_at, a.connected_at, a.last_error, a.scopes
 		FROM external_provider_settings s
 		LEFT JOIN external_provider_accounts a ON a.provider=s.provider AND a.user_id=$1
@@ -27,17 +30,18 @@ func (s *Server) meProviders(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	out := []map[string]any{}
 	for rows.Next() {
-		var prov string
-		var enabled, may, pub bool
+		var prov, cid string
+		var enabled, may, pub, hasExtra bool
 		var name, status, lastErr *string
 		var lastSync, connected *time.Time
 		var scopes []string
-		if err := rows.Scan(&prov, &enabled, &may, &pub, &name, &status, &lastSync, &connected, &lastErr, &scopes); err != nil {
+		if err := rows.Scan(&prov, &enabled, &may, &pub, &cid, &hasExtra, &name, &status, &lastSync, &connected, &lastErr, &scopes); err != nil {
 			continue
 		}
 		m := map[string]any{
 			"provider": prov, "enabled": enabled, "users_may_connect": may, "public_import": pub,
-			"capabilities": external.Caps[prov], "connected": status != nil && *status == "connected",
+			"configured": providerConfigured(prov, cid, hasExtra), "capabilities": external.Caps[prov],
+			"connected": status != nil && *status == "connected",
 		}
 		if name != nil {
 			m["account_name"] = *name
@@ -204,13 +208,12 @@ func (s *Server) listProviderPlaylists(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	access, extra, err := s.accountAccess(r, u.ID, prov, st)
-	if err != nil {
-		writeErr(w, 400, "not_connected", "connect this provider first")
+	if s.writeProviderAccessErr(w, err) {
 		return
 	}
-	list, err := external.ListPlaylists(r.Context(), prov, access, extra)
+	list, err := external.ListPlaylistsRefresh(r.Context(), prov, access, extra, s.providerRefresh(r, u.ID, prov, st))
 	if err != nil {
-		writeErr(w, 502, "provider", err.Error())
+		writeErr(w, 502, "provider", explainJobError("external.playlist.import", err.Error()))
 		return
 	}
 	writeJSON(w, 200, list)
@@ -223,15 +226,15 @@ func (s *Server) getProviderPlaylist(w http.ResponseWriter, r *http.Request) {
 	st, _ := external.LoadSettings(r.Context(), s.Pool, s.Box, prov)
 	access, extra, err := s.accountAccess(r, u.ID, prov, st)
 	if err != nil && !st.PublicImport {
-		writeErr(w, 400, "not_connected", err.Error())
+		_ = s.writeProviderAccessErr(w, err)
 		return
 	}
 	if access == "" {
 		access, extra = publicPair(r, st)
 	}
-	meta, tracks, err := external.GetPlaylistItems(r.Context(), prov, access, extra, id)
+	meta, tracks, err := external.GetPlaylistItemsRefresh(r.Context(), prov, access, extra, id, s.providerRefresh(r, u.ID, prov, st))
 	if err != nil {
-		writeErr(w, 502, "provider", err.Error())
+		writeErr(w, 502, "provider", explainJobError("external.playlist.import", err.Error()))
 		return
 	}
 	writeJSON(w, 200, map[string]any{"playlist": meta, "tracks": tracks})
@@ -256,7 +259,7 @@ func (s *Server) importProviderPlaylist(w http.ResponseWriter, r *http.Request) 
 	if body.Mode == "" {
 		body.Mode = "once"
 	}
-	jid, err := s.Jobs.Enqueue(r.Context(), "external.playlist.import", external.ImportPayload{
+	jid, err := s.enqueuePlaylistImport(r, external.ImportPayload{
 		UserID: u.ID, Provider: prov, ExternalID: extID, Mode: body.Mode, Name: body.Name,
 		Interval: body.Interval, Removal: body.Removal, LibraryIDs: s.libraryIDs(r.Context(), u),
 		FillYouTube: body.FillYouTube,
@@ -294,7 +297,7 @@ func (s *Server) importPlaylistURL(w http.ResponseWriter, r *http.Request) {
 	if body.Mode == "" {
 		body.Mode = "once"
 	}
-	jid, err := s.Jobs.Enqueue(r.Context(), "external.playlist.import", external.ImportPayload{
+	jid, err := s.enqueuePlaylistImport(r, external.ImportPayload{
 		UserID: u.ID, Provider: ref.Provider, ExternalID: ref.ID, Mode: body.Mode, Name: body.Name,
 		Interval: body.Interval, Removal: body.Removal, LibraryIDs: s.libraryIDs(r.Context(), u),
 		FillYouTube: body.FillYouTube,
@@ -319,8 +322,7 @@ func (s *Server) importAllProviderPlaylists(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	access, extra, err := s.accountAccess(r, u.ID, prov, st)
-	if err != nil {
-		writeErr(w, 400, "not_connected", "connect this provider first")
+	if s.writeProviderAccessErr(w, err) {
 		return
 	}
 	var body struct {
@@ -333,28 +335,35 @@ func (s *Server) importAllProviderPlaylists(w http.ResponseWriter, r *http.Reque
 	if body.Mode == "" {
 		body.Mode = "once"
 	}
-	list, err := external.ListPlaylists(r.Context(), prov, access, extra)
+	list, err := external.ListPlaylistsRefresh(r.Context(), prov, access, extra, s.providerRefresh(r, u.ID, prov, st))
 	if err != nil {
-		writeErr(w, 502, "provider", err.Error())
+		writeErr(w, 502, "provider", explainJobError("external.playlist.import", err.Error()))
 		return
 	}
 	libs := s.libraryIDs(r.Context(), u)
 	ids := make([]uuid.UUID, 0, len(list))
+	skipped := 0
+	var lastErr error
 	for _, pl := range list {
 		if pl.ID == "" {
 			continue
 		}
-		jid, err := s.Jobs.Enqueue(r.Context(), "external.playlist.import", external.ImportPayload{
+		jid, err := s.enqueuePlaylistImport(r, external.ImportPayload{
 			UserID: u.ID, Provider: prov, ExternalID: pl.ID, Mode: body.Mode, Name: pl.Name,
 			Interval: body.Interval, Removal: body.Removal, LibraryIDs: libs, FillYouTube: body.FillYouTube,
 		})
 		if err != nil {
-			s.writeJobErr(w, err)
-			return
+			lastErr = err
+			skipped++
+			continue
 		}
 		ids = append(ids, jid)
 	}
-	writeJSON(w, 202, map[string]any{"count": len(ids), "job_ids": ids})
+	if len(ids) == 0 && lastErr != nil {
+		s.writeJobErr(w, lastErr)
+		return
+	}
+	writeJSON(w, 202, map[string]any{"count": len(ids), "job_ids": ids, "skipped": skipped})
 }
 
 func (s *Server) playlistExternalSync(w http.ResponseWriter, r *http.Request) {
@@ -382,7 +391,7 @@ func (s *Server) playlistExternalSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fill := true
-	jid, err := s.Jobs.Enqueue(r.Context(), "external.playlist.import", external.ImportPayload{
+	jid, err := s.enqueuePlaylistImport(r, external.ImportPayload{
 		UserID: u.ID, Provider: prov, ExternalID: ext, Mode: "sync", Interval: iv, Removal: rem,
 		PlaylistUUID: id, LibraryIDs: s.libraryIDs(r.Context(), u), FillYouTube: &fill,
 	})
@@ -584,6 +593,36 @@ func (s *Server) adminPutExternalProvider(w http.ResponseWriter, r *http.Request
 
 func (s *Server) accountAccess(r *http.Request, userID uuid.UUID, prov string, st external.Settings) (string, string, error) {
 	return external.EnsureAccess(r.Context(), s.Pool, s.Box, userID, prov, st)
+}
+
+func (s *Server) providerRefresh(r *http.Request, userID uuid.UUID, prov string, st external.Settings) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		tok, _, err := external.ForceRefresh(ctx, s.Pool, s.Box, userID, prov, st)
+		return tok, err
+	}
+}
+
+func (s *Server) writeProviderAccessErr(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, external.ErrNeedsReconnect) {
+		writeErr(w, http.StatusConflict, "needs_reconnect", err.Error())
+		return true
+	}
+	writeErr(w, http.StatusBadRequest, "not_connected", "connect this provider first")
+	return true
+}
+
+func (s *Server) enqueuePlaylistImport(r *http.Request, p external.ImportPayload) (uuid.UUID, error) {
+	return s.Jobs.EnqueueCoalesced(r.Context(), "external.playlist.import", p.CoalesceKey(), p)
+}
+
+func providerConfigured(provider, clientID string, hasExtra bool) bool {
+	if provider == "apple_music" {
+		return hasExtra
+	}
+	return strings.TrimSpace(clientID) != ""
 }
 
 func publicPair(r *http.Request, st external.Settings) (string, string) {
