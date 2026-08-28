@@ -24,16 +24,16 @@ func TestClampLimit(t *testing.T) {
 }
 
 func TestClampFill(t *testing.T) {
-	if ClampFill(0) != 12 {
+	if ClampFill(0) != 6 {
 		t.Fatal("default")
 	}
 	if ClampFill(1) != 1 {
 		t.Fatal("min")
 	}
-	if ClampFill(20) != 20 {
+	if ClampFill(10) != 10 {
 		t.Fatal("max")
 	}
-	if ClampFill(50) != 20 {
+	if ClampFill(50) != 10 {
 		t.Fatal("cap")
 	}
 }
@@ -57,8 +57,23 @@ func TestSameSong(t *testing.T) {
 	if !SameSong("Numb", "numb") {
 		t.Fatal("case")
 	}
+	if !SameSong("Major Tom (Coming Home)", "Major Tom") {
+		t.Fatal("parens")
+	}
+	if !SameSong("Song (ft. Nateman)", "Song") {
+		t.Fatal("feat")
+	}
 	if SameSong("Numb", "In The End") {
 		t.Fatal("different")
+	}
+}
+
+func TestClampRecent(t *testing.T) {
+	if ClampRecent(0) != 40 {
+		t.Fatal("default")
+	}
+	if ClampRecent(500) != 200 {
+		t.Fatal("cap")
 	}
 }
 

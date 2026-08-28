@@ -34,7 +34,7 @@ export function ListenTrackList({
         <MediaCard
           key={`${t.id}-${i}`}
           className="max-w-none min-w-0 w-full"
-          to={t.album_id ? `/albums/${t.album_id}` : "/tracks"}
+          to={t.album_id ? `/albums/${t.album_id}` : "/library"}
           id={t.id}
           title={t.title}
           subtitle={subtitle?.(t) || t.artist || t.album || "Unknown artist"}

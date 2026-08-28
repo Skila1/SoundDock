@@ -64,19 +64,19 @@ export function AdminQuotas() {
           <Input type="number" min={0} value={libBytes} onChange={(e) => setLibBytes(e.target.value)} />
         </Field>
         <h3 className="font-semibold">Libraries</h3>
-        <ul className="space-y-3">
+        <ul className="max-h-[min(22rem,40vh)] space-y-2 overflow-y-auto rounded-xl border border-border p-2 scrollbar-thin">
           {(libs.data || []).map((l: any) => {
             const used = usageL[l.id] || 0;
             const cap = Number(libCaps[l.id] ?? q.data?.default_library_bytes ?? 0) || 0;
             const pct = cap > 0 ? Math.min(100, (used / cap) * 100) : 0;
             return (
-              <li key={l.id} className="rounded-xl border border-border bg-surface-1 p-4">
+              <li key={l.id} className="rounded-lg border border-border bg-surface-1 px-3 py-2">
                 <div className="mb-2 flex items-center justify-between gap-3">
-                  <div>
-                    <div className="font-medium">{l.name}</div>
+                  <div className="min-w-0">
+                    <div className="truncate font-medium">{l.name}</div>
                     <div className="text-xs text-subtle">{formatBytes(used)} used{cap ? ` / ${formatBytes(cap)}` : ""}</div>
                   </div>
-                  <Input className="w-36" type="number" min={0} placeholder="override" value={libCaps[l.id] ?? ""} onChange={(e) => setLibCaps({ ...libCaps, [l.id]: e.target.value })} />
+                  <Input className="w-32" type="number" min={0} placeholder="override" value={libCaps[l.id] ?? ""} onChange={(e) => setLibCaps({ ...libCaps, [l.id]: e.target.value })} />
                 </div>
                 {cap > 0 && <Progress value={pct} />}
               </li>
@@ -84,17 +84,17 @@ export function AdminQuotas() {
           })}
         </ul>
         <h3 className="font-semibold">Users</h3>
-        <ul className="space-y-3">
+        <ul className="max-h-[min(22rem,40vh)] space-y-2 overflow-y-auto rounded-xl border border-border p-2 scrollbar-thin">
           {(users.data || []).map((u: any) => {
             const used = usageU[u.id] || 0;
             const cap = Number(userCaps[u.id] ?? q.data?.default_user_bytes ?? 0) || 0;
             return (
-              <li key={u.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-surface-1 p-4">
-                <div>
-                  <div className="font-medium">{u.display_name || u.username}</div>
+              <li key={u.id} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface-1 px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{u.display_name || u.username}</div>
                   <div className="text-xs text-subtle">{formatBytes(used)} uploaded{cap ? ` / ${formatBytes(cap)}` : ""}</div>
                 </div>
-                <Input className="w-36" type="number" min={0} placeholder="override" value={userCaps[u.id] ?? ""} onChange={(e) => setUserCaps({ ...userCaps, [u.id]: e.target.value })} />
+                <Input className="w-32 shrink-0" type="number" min={0} placeholder="override" value={userCaps[u.id] ?? ""} onChange={(e) => setUserCaps({ ...userCaps, [u.id]: e.target.value })} />
               </li>
             );
           })}

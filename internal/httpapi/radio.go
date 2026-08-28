@@ -32,13 +32,15 @@ func (s *Server) getRadio(w http.ResponseWriter, r *http.Request) {
 	}
 	decade := radio.ParseDecade(r.URL.Query().Get("decade"))
 	req := radio.Request{
-		Kind:   kind,
-		SeedID: seed,
-		Genre:  r.URL.Query().Get("genre"),
-		Decade: decade,
-		Limit:  limit,
-		UserID: u.ID,
-		Libs:   s.libraryIDs(r.Context(), u),
+		Kind:    kind,
+		SeedID:  seed,
+		Genre:   r.URL.Query().Get("genre"),
+		Decade:  decade,
+		Limit:   limit,
+		UserID:  u.ID,
+		Libs:    s.libraryIDs(r.Context(), u),
+		Exclude: parseUUIDList(r.URL.Query().Get("exclude")),
+		Recent:  atoiDefault(r.URL.Query().Get("recent"), 40),
 	}
 	res, err := radio.New(s.Pool).Select(r.Context(), req)
 	if err != nil {
@@ -57,7 +59,8 @@ func (s *Server) getRadio(w http.ResponseWriter, r *http.Request) {
 	if fillYouTube && seed != uuid.Nil {
 		need := limit - len(res.TrackIDs)
 		if need > 0 {
-			res.YoutubeIDs = s.similarYouTube(r.Context(), seed, need, res.TrackIDs)
+			have := append(append([]uuid.UUID{}, res.TrackIDs...), req.Exclude...)
+			res.YoutubeIDs = s.similarYouTube(r.Context(), seed, need, have)
 		}
 	}
 	writeJSON(w, 200, res)
@@ -87,8 +90,32 @@ func (s *Server) radioRefresh(w http.ResponseWriter, r *http.Request) {
 	body.UserID = u.ID
 	jid, err := s.Jobs.Enqueue(r.Context(), "radio.refresh", body)
 	if err != nil {
-		writeErr(w, 500, "job", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	writeJSON(w, 202, map[string]any{"job_id": jid, "ok": true})
+}
+
+func parseUUIDList(raw string) []uuid.UUID {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var out []uuid.UUID
+	for _, p := range strings.Split(raw, ",") {
+		id, err := uuid.Parse(strings.TrimSpace(p))
+		if err != nil {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func atoiDefault(raw string, def int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return def
+	}
+	return n
 }

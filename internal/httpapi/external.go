@@ -259,7 +259,7 @@ func (s *Server) importProviderPlaylist(w http.ResponseWriter, r *http.Request) 
 		FillYouTube: body.FillYouTube,
 	})
 	if err != nil {
-		writeErr(w, 500, "job", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	if s.Hooks != nil {
@@ -293,7 +293,7 @@ func (s *Server) importPlaylistURL(w http.ResponseWriter, r *http.Request) {
 		FillYouTube: body.FillYouTube,
 	})
 	if err != nil {
-		writeErr(w, 500, "job", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	writeJSON(w, 202, map[string]any{"job_id": jid, "provider": ref.Provider, "external_id": ref.ID})
@@ -340,7 +340,7 @@ func (s *Server) importAllProviderPlaylists(w http.ResponseWriter, r *http.Reque
 			Interval: body.Interval, Removal: body.Removal, LibraryIDs: libs, FillYouTube: body.FillYouTube,
 		})
 		if err != nil {
-			writeErr(w, 500, "job", err.Error())
+			s.writeJobErr(w, err)
 			return
 		}
 		ids = append(ids, jid)
@@ -372,12 +372,13 @@ func (s *Server) playlistExternalSync(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	fill := true
 	jid, err := s.Jobs.Enqueue(r.Context(), "external.playlist.import", external.ImportPayload{
-		UserID: u.ID, Provider: prov, ExternalID: ext, Mode: mode, Interval: iv, Removal: rem,
-		PlaylistUUID: id, LibraryIDs: s.libraryIDs(r.Context(), u),
+		UserID: u.ID, Provider: prov, ExternalID: ext, Mode: "sync", Interval: iv, Removal: rem,
+		PlaylistUUID: id, LibraryIDs: s.libraryIDs(r.Context(), u), FillYouTube: &fill,
 	})
 	if err != nil {
-		writeErr(w, 500, "job", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	writeJSON(w, 202, map[string]any{"job_id": jid})
@@ -465,7 +466,7 @@ func (s *Server) youtubeFillExternalItem(w http.ResponseWriter, r *http.Request)
 			artists = append(artists, a)
 		}
 	}
-	tid, err := external.FillTrack(r.Context(), s.ScapeX, prov, extID, title, artists)
+	tid, err := external.FillTrack(r.Context(), s.YouTube(), prov, extID, title, artists)
 	if err != nil {
 		writeErr(w, 502, "youtube", err.Error())
 		return

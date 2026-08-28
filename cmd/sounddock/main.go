@@ -116,7 +116,13 @@ func main() {
 		Log:     log,
 		SignKey: cryptox.SigningKey(cfg.MasterKey),
 		Managed: managed,
-		ScapeX:  scapex.New(cfg.ScapeXURL),
+	}
+	if cfg.ScapeXURL != "" {
+		srv.ScapeX = scapex.New(cfg.ScapeXURL)
+	} else {
+		inbox := filepath.Join(cfg.ManagedDir, "inbox")
+		dock := scapex.NewDockWithPool(pool, inbox)
+		srv.ScapeX = scapex.NewLocal(scapex.NewService(nil, dock))
 	}
 	if fsys, err := web.FS(); err == nil {
 		srv.Web = fsys
@@ -132,7 +138,7 @@ func main() {
 	runner.Register("ingest.zip", ing.ZipHandler(srv.ProviderFor))
 	runner.Register("library.migrate", ing.MigrateHandler(srv.ProviderFor))
 	runner.Register("maintenance.retention", retention.Handler(pool))
-	runner.Register("external.playlist.import", external.Handler(pool, box, hooks, srv.ScapeX))
+	runner.Register("external.playlist.import", external.Handler(pool, box, hooks, srv.YouTube()))
 	runner.Register("external.playlist.tick", external.TickHandler(pool, runner.Enqueue))
 	runner.Register("backup.run", func(ctx context.Context, job jobs.Job) error {
 		_, err := bk.Run(ctx)
@@ -161,12 +167,13 @@ func main() {
 	runner.Register("integrity.scan", integrity.New(pool, srv.ProviderFor).Handler())
 	runner.Register("radio.refresh", radio.RefreshHandler(pool))
 	runner.Register("smart_playlist.refresh", radio.SmartRefreshHandler(pool))
+	srv.RegisterJobs()
 
 	role := resolveRole(cfg.Role)
 	log.Info("starting", "role", role, "addr", cfg.HTTPAddr)
 
 	if role == config.RoleAll || role == config.RoleApp || role == config.RoleWorker {
-		runner.Start(ctx, 2)
+		runner.Start(ctx)
 		_, _ = runner.Enqueue(ctx, "maintenance.retention", map[string]any{})
 		_, _ = runner.Enqueue(ctx, "external.playlist.tick", map[string]any{})
 		go watch.New(pool, sc, srv.ProviderFor, log).Run(ctx)

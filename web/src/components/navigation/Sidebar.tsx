@@ -1,49 +1,25 @@
 import { NavLink } from "react-router-dom";
-import {
-  Disc3,
-  Heart,
-  Home,
-  Library,
-  Link2,
-  ListMusic,
-  Mic2,
-  PanelLeftClose,
-  PanelLeftOpen,
-  Radio,
-  Search,
-  Settings,
-  Upload,
-  Globe,
-  Music
-} from "lucide-react";
+import { Home, Library, Link2, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Search, Shield } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
-import { CommunityTextLink, DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useUi } from "@/stores/ui";
 import type { User } from "@/types/api";
 
-const items = [
+const primary = [
   { to: "/", label: "Home", icon: Home, end: true },
   { to: "/search", label: "Search", icon: Search },
-  { to: "/artists", label: "Artists", icon: Mic2 },
-  { to: "/albums", label: "Albums", icon: Disc3 },
-  { to: "/tracks", label: "Tracks", icon: Music },
+  { to: "/library", label: "Library", icon: Library },
   { to: "/playlists", label: "Playlists", icon: ListMusic },
   { to: "/radio", label: "Radio", icon: Radio },
-  { to: "/settings/connected", label: "Connected Services", icon: Link2 },
-  { to: "/favourites", label: "Favourites", icon: Heart },
-  { to: "/library", label: "Libraries", icon: Library },
-  { to: "/upload", label: "Upload", icon: Upload },
-  { to: "/import", label: "Remote Import", icon: Globe }
+  { to: "/settings/connected", label: "Connected Services", icon: Link2 }
 ];
 
-const profileItems = [
+const listening = [
   { to: "/history", label: "History" },
-  { to: "/stats", label: "Listening stats" },
+  { to: "/stats", label: "Stats" },
   { to: "/wrapped", label: "Wrapped" },
-  { to: "/profile/devices", label: "Devices" },
   { to: "/profile/party", label: "Party" }
 ];
 
@@ -64,8 +40,8 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
           </Tooltip>
         )}
       </div>
-      <nav className="flex-1 space-y-0.5 px-2 pt-2">
-        {items.map((it) => (
+      <nav className="flex-1 space-y-0.5 overflow-auto px-2 pt-2">
+        {primary.map((it) => (
           <NavLink
             key={it.to}
             to={it.to}
@@ -83,42 +59,41 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
             {!compact && it.label}
           </NavLink>
         ))}
+        {!compact && (
+          <div className="pt-4">
+            <div className="px-3 pb-1 text-[11px] text-subtle">Listening</div>
+            {listening.map((it) => (
+              <NavLink
+                key={it.to}
+                to={it.to}
+                className={({ isActive }) =>
+                  cn("block rounded-lg px-3 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-foreground", isActive && "bg-surface-2 text-foreground")
+                }
+              >
+                {it.label}
+              </NavLink>
+            ))}
+          </div>
+        )}
         {user.is_admin && (
-          <NavLink to="/admin" title={compact ? "Administration" : undefined} className={({ isActive }) => cn("mt-4 flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2", compact && "justify-center px-0", isActive && "bg-surface-2 text-foreground")}>
-            <Settings className="h-4 w-4" />
+          <NavLink
+            to="/admin"
+            title={compact ? "Administration" : undefined}
+            className={({ isActive }) =>
+              cn(
+                "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
+                compact ? "justify-center px-0" : "mt-4",
+                isActive && "bg-surface-2 text-foreground"
+              )
+            }
+          >
+            <Shield className="h-4 w-4 shrink-0" />
             {!compact && "Administration"}
           </NavLink>
         )}
       </nav>
-      {!compact && (
-        <div className="space-y-0.5 px-2 pb-2">
-          {profileItems.map((it) => (
-            <NavLink
-              key={it.to}
-              to={it.to}
-              className={({ isActive }) =>
-                cn("block rounded-lg px-3 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-foreground", isActive && "bg-surface-2 text-foreground")
-              }
-            >
-              {it.label}
-            </NavLink>
-          ))}
-          <CommunityTextLink kind="help" />
-          <CommunityTextLink kind="discord" />
-        </div>
-      )}
       {collapsible && compact && (
-        <div className="space-y-1 px-2 pb-2">
-          <Tooltip label="Help">
-            <span className="block w-full">
-              <HelpButton iconOnly variant="ghost" className="w-full" />
-            </span>
-          </Tooltip>
-          <Tooltip label="Discord server">
-            <span className="block w-full">
-              <DiscordServerButton iconOnly variant="ghost" className="w-full" />
-            </span>
-          </Tooltip>
+        <div className="px-2 pb-2">
           <Tooltip label="Expand menu">
             <Button size="icon" variant="ghost" className="w-full" onClick={() => ui.set({ navCollapsed: false })} aria-label="Expand menu">
               <PanelLeftOpen className="h-4 w-4" />

@@ -14,7 +14,7 @@ func (s *Server) ensureDefaultLibrary(ctx context.Context) (uuid.UUID, error) {
 		FROM libraries l
 		JOIN storage_providers sp ON sp.id = l.storage_provider_id
 		WHERE l.read_only = false AND sp.type IN ('managed', 'local')
-		ORDER BY CASE WHEN lower(l.name) = 'music' THEN 0 ELSE 1 END, l.created_at
+		ORDER BY l.is_default DESC, CASE WHEN lower(l.name) = 'music' THEN 0 ELSE 1 END, l.created_at
 		LIMIT 1`).Scan(&id)
 	if err == nil {
 		return id, nil
@@ -45,8 +45,8 @@ func (s *Server) ensureDefaultLibrary(ctx context.Context) (uuid.UUID, error) {
 	}
 
 	if err := s.Pool.QueryRow(ctx, `
-		INSERT INTO libraries (name, kind, storage_provider_id, root_prefix, read_only, organisation_mode)
-		VALUES ('Music', 'music', $1, '', false, 'virtual') RETURNING id`, sid).Scan(&id); err != nil {
+		INSERT INTO libraries (name, kind, storage_provider_id, root_prefix, read_only, organisation_mode, is_default)
+		VALUES ('Music', 'music', $1, '', false, 'virtual', NOT EXISTS (SELECT 1 FROM libraries WHERE is_default)) RETURNING id`, sid).Scan(&id); err != nil {
 		return uuid.Nil, err
 	}
 	_, _ = s.Pool.Exec(ctx, `INSERT INTO library_grants (library_id, role_id, actions)

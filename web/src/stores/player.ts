@@ -312,14 +312,15 @@ async function maybeReplenishRadio() {
   if (!seed || !isLibraryTrackId(seed)) return;
   radioBusy = true;
   try {
-    const r = await api.get<{ track_ids?: string[]; youtube_ids?: string[] }>(
-      `/api/v1/radio?kind=track&seed_id=${encodeURIComponent(seed)}&limit=20&fill=youtube`
-    );
     const have = new Set(items.map((it) => it.track_id));
     have.add(seed);
+    const exclude = [...have].filter((id) => isLibraryTrackId(id)).slice(-80);
+    const r = await api.get<{ track_ids?: string[]; youtube_ids?: string[] }>(
+      `/api/v1/radio?kind=track&seed_id=${encodeURIComponent(seed)}&limit=8&fill=youtube&exclude=${exclude.map(encodeURIComponent).join(",")}&recent=40`
+    );
     const extra = (r.track_ids || []).filter((id) => id && !have.has(id));
     if (extra.length) await usePlayer.getState().add(extra, false);
-    const yt = (r.youtube_ids || []).filter(Boolean).slice(0, 20);
+    const yt = (r.youtube_ids || []).filter(Boolean).slice(0, 6);
     for (let i = 0; i < yt.length; i += 4) {
       const live = usePlayer.getState();
       if (!live.autoplay || live.stopAfterCurrent) break;
@@ -652,7 +653,7 @@ export const usePlayer = create<PlayerStore>()(
         }
         if (!q) return;
         const prevId = get().current?.id;
-        const metaOnly = action === "seek" || action === "reorder" || action === "volume" || action === "stop_after_current";
+        const metaOnly = action === "seek" || action === "reorder" || action === "volume" || action === "stop_after_current" || action === "remove" || action === "clear";
         set({
           queue: q,
           shuffle: !!q.shuffle,

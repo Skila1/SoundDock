@@ -10,12 +10,14 @@ export function SheetContent({
   side = "right",
   className,
   children,
-  title
+  title,
+  hideClose
 }: {
   side?: "right" | "bottom" | "left";
   className?: string;
   children: ReactNode;
   title?: string;
+  hideClose?: boolean;
 }) {
   const pos =
     side === "bottom"
@@ -32,9 +34,11 @@ export function SheetContent({
         ) : (
           <SheetPrimitive.Title className="sr-only">Panel</SheetPrimitive.Title>
         )}
-        <SheetPrimitive.Close className="absolute right-3 top-3 rounded-full p-1 text-muted hover:bg-surface-2" aria-label="Close">
-          <X className="h-4 w-4" />
-        </SheetPrimitive.Close>
+        {!hideClose && (
+          <SheetPrimitive.Close className="absolute right-3 top-3 rounded-full p-1 text-muted hover:bg-surface-2" aria-label="Close">
+            <X className="h-4 w-4" />
+          </SheetPrimitive.Close>
+        )}
         {children}
       </SheetPrimitive.Content>
     </SheetPrimitive.Portal>

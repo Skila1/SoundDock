@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MediaCard } from "@/components/media/MediaCard";
 import { TrackList } from "@/components/media/TrackList";
-import { EmptyState, PageHeader } from "@/components/ui/empty";
+import { EmptyState } from "@/components/ui/empty";
 import { usePlayer } from "@/stores/player";
 import type { Album, Artist, Favourite, Playlist, Track } from "@/types/api";
 
@@ -33,7 +33,6 @@ export function FavouritesPage() {
   const empty = !d || (!d.tracks.length && !d.albums.length && !d.artists.length && !d.playlists.length);
   return (
     <div>
-      <PageHeader title="Favourites" />
       {empty && !q.isLoading && <EmptyState icon={Heart} title="Nothing favourited yet." description="Heart albums, artists, tracks, and playlists to find them here." />}
       {d && !empty && (
         <Tabs defaultValue="tracks">

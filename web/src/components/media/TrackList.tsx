@@ -120,6 +120,8 @@ export function TrackList({
   const [bulkGenre, setBulkGenre] = useState("");
   const [bulkYear, setBulkYear] = useState("");
   const [bulkWriteBack, setBulkWriteBack] = useState(false);
+  const [delOpen, setDelOpen] = useState(false);
+  const [delFiles, setDelFiles] = useState(false);
 
   const favs = useQuery({ queryKey: ["favourites"], queryFn: () => api.get<Favourite[]>("/api/v1/favourites") });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
@@ -210,7 +212,7 @@ export function TrackList({
     } catch {
       await api.post("/api/v1/tracks/bulk", { ids, genre: body.genre, year: body.year });
     }
-    toast.success(`Updated ${ids.length} tracks`);
+      toast.success(`Queued update for ${ids.length} tracks`);
     if (bulkWriteBack) await callWriteBack(ids);
     setBulkOpen(false);
     qc.invalidateQueries({ queryKey: ["tracks"] });
@@ -282,6 +284,16 @@ export function TrackList({
         <ContextMenuItem onSelect={() => doFav(t)}>{favSet.has(t.id) ? "Unfavourite" : "Favourite"}</ContextMenuItem>
         <ContextMenuItem onSelect={() => openPlaylist(t)}>Add to playlist</ContextMenuItem>
         <ContextMenuItem onSelect={() => navigate(`/tracks/${t.id}`)}>Go to track info</ContextMenuItem>
+        {admin && t.source !== "youtube" && (
+          <ContextMenuItem
+            onSelect={() => {
+              setSelected(new Set(targetIds(t)));
+              setDelOpen(true);
+            }}
+          >
+            Delete
+          </ContextMenuItem>
+        )}
         <ContextMenuItem
           onSelect={() => {
             targetIds(t).forEach((id) => {
@@ -308,9 +320,14 @@ export function TrackList({
             Download
           </Button>
           {admin && (
-            <Button size="sm" variant="secondary" onClick={() => setBulkOpen(true)}>
-              Edit metadata
-            </Button>
+            <>
+              <Button size="sm" variant="secondary" onClick={() => setBulkOpen(true)}>
+                Edit metadata
+              </Button>
+              <Button size="sm" variant="destructive" onClick={() => setDelOpen(true)}>
+                Delete selected
+              </Button>
+            </>
           )}
           <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>Clear</Button>
         </div>
@@ -362,6 +379,34 @@ export function TrackList({
             <p className="text-xs text-subtle">Write-back is managed libraries only and calls P3 APIs when registered.</p>
             <div className="flex justify-end"><Button type="submit">Apply</Button></div>
           </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={delOpen} onOpenChange={setDelOpen}>
+        <DialogContent title={`Remove ${selected.size} tracks`}>
+          <div className="space-y-3">
+            <p className="text-sm text-muted">This removes them from SoundDock. NAS, local, and external source files are not deleted.</p>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              Also delete SoundDock-managed files
+              <Switch checked={delFiles} onCheckedChange={setDelFiles} />
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setDelOpen(false)}>Cancel</Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={async () => {
+                  const ids = [...selected];
+                  await api.post("/api/v1/tracks/bulk", { ids, delete: true, delete_files: delFiles });
+                  toast.success("Delete queued");
+                  setDelOpen(false);
+                  setSelected(new Set());
+                  qc.invalidateQueries({ queryKey: ["tracks"] });
+                }}
+              >
+                Remove
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

@@ -12,7 +12,6 @@ import { relativeTime } from "@/lib/utils";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { User } from "@/types/api";
-import { ScanProgressBar, latestScan, scanActive, useScanRuns } from "@/features/library/ScanProgress";
 import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 
 type AdminUserRow = {
@@ -25,26 +24,8 @@ type AdminUserRow = {
   discord_id?: string | null;
   discord_username?: string | null;
   role?: string;
+  roles?: string[];
 };
-
-export function AdminRoles() {
-  return (
-    <div>
-      <PageHeader title="Roles" description="Built-in roles control administration and library grants." />
-      <div className="grid gap-3 md:grid-cols-2">
-        <article className="rounded-xl border border-border bg-surface-1 p-4">
-          <h3 className="font-semibold">Administrator</h3>
-          <p className="mt-1 text-sm text-muted">Full library grants, user management, storage, jobs, backups, and integrations.</p>
-        </article>
-        <article className="rounded-xl border border-border bg-surface-1 p-4">
-          <h3 className="font-semibold">User</h3>
-          <p className="mt-1 text-sm text-muted">Read and stream granted libraries. Upload and import into writable libraries.</p>
-        </article>
-      </div>
-      <p className="mt-4 text-sm text-muted">Assign a role when creating a user. Library grants are applied automatically for Administrator and User.</p>
-    </div>
-  );
-}
 
 export function AdminUsers() {
   const qc = useQueryClient();
@@ -265,89 +246,6 @@ export function AdminStorage() {
           </form>
         </DialogContent>
       </Dialog>
-    </div>
-  );
-}
-
-export function AdminLibraries() {
-  const qc = useQueryClient();
-  const libs = useQuery({ queryKey: ["libraries"], queryFn: () => api.get<any[]>("/api/v1/libraries") });
-  const storage = useQuery({ queryKey: ["admin-storage"], queryFn: () => api.get<any[]>("/api/v1/admin/storage") });
-  const scans = useScanRuns();
-  const [open, setOpen] = useState(false);
-  const [form, setForm] = useState({ name: "", storage_id: "", kind: "music", organisation_mode: "virtual" });
-  return (
-    <div>
-      <PageHeader title="Libraries" actions={<Button onClick={() => setOpen(true)}>Create library</Button>} />
-      <div className="space-y-3">
-        {(libs.data || []).map((l) => {
-          const scan = latestScan(scans.data, l.id);
-          const busy = scanActive(scan);
-          return (
-            <div key={l.id} className="rounded-xl border border-border bg-surface-1 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <div className="font-semibold">{l.name}</div>
-                  <div className="text-xs text-muted">{l.kind} · {l.organisation_mode} · {l.track_count ?? 0} tracks</div>
-                </div>
-                <Button
-                  size="sm"
-                  disabled={busy}
-                  onClick={async () => {
-                    await api.post(`/api/v1/admin/libraries/${l.id}/scan`);
-                    toast.success("Scan started");
-                    scans.refetch();
-                  }}
-                >
-                  {busy ? "Scanning…" : "Scan"}
-                </Button>
-              </div>
-              <ScanProgressBar scan={scan} />
-            </div>
-          );
-        })}
-      </div>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent title="Create library">
-          <form className="space-y-3" onSubmit={async (e) => {
-            e.preventDefault();
-            await api.post("/api/v1/admin/libraries", { name: form.name, kind: form.kind, storage_id: form.storage_id, Org: form.organisation_mode });
-            toast.success("Library created");
-            setOpen(false);
-            qc.invalidateQueries({ queryKey: ["libraries"] });
-          }}>
-            <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
-            <Field label="Storage"><Select value={form.storage_id} onValueChange={(storage_id) => setForm({ ...form, storage_id })} options={(storage.data || []).map((s: any) => ({ value: s.id, label: s.name }))} /></Field>
-            <Button type="submit">Create</Button>
-          </form>
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
-
-export function AdminJobs() {
-  const q = useQuery({ queryKey: ["admin-jobs"], queryFn: () => api.get<any[]>("/api/v1/admin/jobs"), refetchInterval: 4000 });
-  return (
-    <div>
-      <PageHeader title="Jobs" />
-      <div className="overflow-x-auto rounded-xl border border-border">
-        <table className="w-full text-left text-sm">
-          <thead className="bg-surface-2 text-muted"><tr><th className="p-3">Type</th><th className="p-3">State</th><th className="p-3">Progress</th><th className="p-3">Started</th><th className="p-3">Error</th><th /></tr></thead>
-          <tbody>
-            {(q.data || []).map((j) => (
-              <tr key={j.id} className="border-t border-border">
-                <td className="p-3">{j.type}</td>
-                <td className="p-3"><Badge tone={j.status === "failed" ? "danger" : j.status === "succeeded" ? "success" : "accent"}>{j.status}</Badge></td>
-                <td className="p-3 w-32"><div className="h-1.5 rounded-full bg-surface-3"><div className="h-full rounded-full bg-accent" style={{ width: `${j.progress || 0}%` }} /></div></td>
-                <td className="p-3 text-muted">{relativeTime(j.created_at)}</td>
-                <td className="max-w-xs truncate p-3 text-destructive">{j.last_error}</td>
-                <td className="p-3"><Button size="sm" variant="ghost" onClick={() => api.post(`/api/v1/admin/jobs/${j.id}/cancel`).then(() => toast("Cancel requested"))}>Cancel</Button></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
     </div>
   );
 }

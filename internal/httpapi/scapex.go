@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/radio"
@@ -25,7 +24,7 @@ func (s *Server) searchYouTube(w http.ResponseWriter, r *http.Request) {
 	if limit > 16 {
 		limit = 16
 	}
-	hits, err := s.ScapeX.Search(r.Context(), song, limit)
+	hits, err := s.YouTube().Search(r.Context(), song, limit)
 	if err != nil || len(hits) == 0 {
 		writeJSON(w, 200, map[string]any{"query": q, "results": []any{}})
 		return
@@ -63,12 +62,7 @@ func (s *Server) fetchYouTube(ctx context.Context, refs []string) ([]uuid.UUID, 
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	if s.ScapeX == nil {
-		return nil, errScapeXDown
-	}
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
-	defer cancel()
-	return s.ScapeX.Fetch(ctx, refs)
+	return s.YouTube().Fetch(ctx, refs)
 }
 
 func (s *Server) similarYouTube(ctx context.Context, seed uuid.UUID, need int, have []uuid.UUID) []string {
@@ -84,7 +78,7 @@ func (s *Server) similarYouTube(ctx context.Context, seed uuid.UUID, need int, h
 	if q == "" {
 		return nil
 	}
-	hits, err := s.ScapeX.Search(ctx, q, need+8)
+	hits, err := s.YouTube().Search(ctx, q, need+8)
 	if err != nil || len(hits) == 0 {
 		return nil
 	}

@@ -9,6 +9,13 @@ import (
 	"github.com/sounddock/sounddock/internal/scapex"
 )
 
+// Filler is YouTube search + fetch. Callers should pass an isolated
+// implementation so yt-dlp runs on the acquisition/search pools.
+type Filler interface {
+	Search(ctx context.Context, q string, limit int) ([]scapex.Hit, error)
+	Fetch(ctx context.Context, refs []string) ([]uuid.UUID, error)
+}
+
 func pickYouTubeID(hits []scapex.Hit, title string, artists []string) string {
 	wantT := matcher.NormaliseTitle(title)
 	if wantT == "" {
@@ -47,7 +54,7 @@ func youtubeQuery(title string, artists []string) string {
 	return strings.TrimSpace(strings.Join(parts, " "))
 }
 
-func fillFromYouTube(ctx context.Context, sx *scapex.Client, title string, artists []string) (uuid.UUID, error) {
+func fillFromYouTube(ctx context.Context, sx Filler, title string, artists []string) (uuid.UUID, error) {
 	if sx == nil {
 		return uuid.Nil, nil
 	}
@@ -70,14 +77,14 @@ func fillFromYouTube(ctx context.Context, sx *scapex.Client, title string, artis
 	return got[0], nil
 }
 
-func FillTrack(ctx context.Context, sx *scapex.Client, provider, videoID, title string, artists []string) (uuid.UUID, error) {
+func FillTrack(ctx context.Context, sx Filler, provider, videoID, title string, artists []string) (uuid.UUID, error) {
 	if provider == "youtube" {
 		return fillFromVideo(ctx, sx, videoID)
 	}
 	return fillFromYouTube(ctx, sx, title, artists)
 }
 
-func fillFromVideo(ctx context.Context, sx *scapex.Client, videoID string) (uuid.UUID, error) {
+func fillFromVideo(ctx context.Context, sx Filler, videoID string) (uuid.UUID, error) {
 	if sx == nil || strings.TrimSpace(videoID) == "" {
 		return uuid.Nil, nil
 	}

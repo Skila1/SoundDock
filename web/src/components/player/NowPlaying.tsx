@@ -82,7 +82,7 @@ export function NowPlaying() {
                 <Heart className="mr-2" /> Favourite
               </Button>
             )}
-            <Button variant="secondary" onClick={() => ui.set({ queueOpen: true, nowPlayingOpen: false })}>
+            <Button variant="secondary" onClick={() => { ui.openQueue(); ui.set({ nowPlayingOpen: false }); }}>
               <ListMusic className="mr-2" /> Queue
             </Button>
             <Button variant={p.stopAfterCurrent ? "default" : "secondary"} onClick={() => p.setStopAfterCurrent(!p.stopAfterCurrent)}>

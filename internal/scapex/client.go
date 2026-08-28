@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -15,21 +16,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// Client pings the ScapeX sidecar on the Docker network.
+// Client talks to in-process YouTube fetch, or an optional leftover HTTP sidecar.
 type Client struct {
 	base string
 	http *http.Client
-}
-
-type Hit struct {
-	Type       string `json:"type"`
-	ID         string `json:"id"`
-	Title      string `json:"title"`
-	Artist     string `json:"artist,omitempty"`
-	Album      string `json:"album,omitempty"`
-	DurationMS int    `json:"duration_ms,omitempty"`
-	StreamURL  string `json:"stream_url,omitempty"`
-	ArtworkURL string `json:"artwork_url,omitempty"`
+	svc  *Service
 }
 
 func New(base string) *Client {
@@ -43,9 +34,21 @@ func New(base string) *Client {
 	}
 }
 
+// NewLocal runs YouTube search and fetch inside SoundDock (no sidecar).
+func NewLocal(svc *Service) *Client {
+	if svc == nil {
+		return nil
+	}
+	return &Client{svc: svc, http: &http.Client{Timeout: 0}}
+}
+
 func (c *Client) Ready(ctx context.Context) bool {
 	if c == nil {
 		return false
+	}
+	if c.svc != nil {
+		_, err := exec.LookPath("yt-dlp")
+		return err == nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 400*time.Millisecond)
 	defer cancel()
@@ -65,6 +68,9 @@ func (c *Client) Ready(ctx context.Context) bool {
 func (c *Client) Search(ctx context.Context, q string, limit int) ([]Hit, error) {
 	if c == nil {
 		return nil, nil
+	}
+	if c.svc != nil {
+		return c.svc.Search(ctx, q, limit)
 	}
 	if limit <= 0 {
 		limit = 8
@@ -101,7 +107,18 @@ func (c *Client) Search(ctx context.Context, q string, limit int) ([]Hit, error)
 
 func (c *Client) Fetch(ctx context.Context, refs []string) ([]uuid.UUID, error) {
 	if c == nil {
-		return nil, fmt.Errorf("ScapeX is not running")
+		return nil, fmt.Errorf("YouTube fetch is not available")
+	}
+	if c.svc != nil {
+		var ids []uuid.UUID
+		for _, ref := range refs {
+			got, err := c.svc.Fetch(ctx, ref)
+			if err != nil {
+				return ids, err
+			}
+			ids = append(ids, got...)
+		}
+		return ids, nil
 	}
 	body, _ := json.Marshal(map[string]any{"urls": refs})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/fetch", bytes.NewReader(body))

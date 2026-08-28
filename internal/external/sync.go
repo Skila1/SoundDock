@@ -11,7 +11,6 @@ import (
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/matcher"
-	"github.com/sounddock/sounddock/internal/scapex"
 	"github.com/sounddock/sounddock/internal/webhooks"
 )
 
@@ -32,7 +31,7 @@ func (p ImportPayload) shouldFill() bool {
 	return p.FillYouTube == nil || *p.FillYouTube
 }
 
-func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx *scapex.Client) jobs.Handler {
+func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Filler) jobs.Handler {
 	return func(ctx context.Context, job jobs.Job) error {
 		var p ImportPayload
 		if err := json.Unmarshal(job.Payload, &p); err != nil {

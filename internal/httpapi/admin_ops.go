@@ -160,7 +160,23 @@ func (s *Server) adminHealthDetail(w http.ResponseWriter, r *http.Request) {
 		"maintenance":            s.maintenanceEnabled(ctx),
 		"redis_configured":       s.Cfg.RedisURL != "",
 		"meilisearch_configured": s.Cfg.MeiliURL != "",
+		"worker_pools":           s.workerPoolHealth(ctx),
 	})
+}
+
+func (s *Server) workerPoolHealth(ctx context.Context) []map[string]any {
+	if s.Jobs == nil {
+		return []map[string]any{}
+	}
+	var out []map[string]any
+	for _, p := range s.Jobs.Status(ctx) {
+		out = append(out, map[string]any{
+			"id": p.ID, "name": p.Name, "enabled": p.Enabled,
+			"active_workers": p.Live.ActiveWorkers, "busy": p.Live.Busy,
+			"queue_depth": p.Live.QueueDepth, "reserved": p.Reserved,
+		})
+	}
+	return out
 }
 
 func (s *Server) publicAnnouncement(w http.ResponseWriter, r *http.Request) {

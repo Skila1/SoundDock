@@ -107,7 +107,7 @@ export function UploadPage() {
 
   return (
     <div>
-      <PageHeader title="Upload" description="Drop a folder, many files, or a zip. Up to 100 files upload at once. WAV and AIFF are stored as FLAC." />
+      <PageHeader title="Add music" description="Drop a folder, many files, or a zip. Up to 100 files upload at once. WAV and AIFF are stored as FLAC." />
       <div
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => { e.preventDefault(); addFiles(e.dataTransfer.files); }}

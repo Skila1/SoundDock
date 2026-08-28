@@ -32,7 +32,7 @@ export function AdminOverview() {
   const fp = h.fingerprint as string | undefined;
   return (
     <div>
-      <PageHeader title="Administration" description="Server health and library status." />
+      <PageHeader title="Administration" description="System, Access, and Media. SoundDock permissions stay authoritative even if Discord is offline." />
       <div className="mb-4 flex flex-wrap gap-2">
         <Badge tone={h.postgres ? "success" : "danger"}>{h.postgres ? "Postgres healthy" : "Postgres down"}</Badge>
         <Badge tone={h.ffmpeg ? "success" : "warning"}>{h.ffmpeg ? "FFmpeg" : "FFmpeg missing"}</Badge>

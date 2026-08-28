@@ -6,7 +6,7 @@ export function QueueSheet() {
   const ui = useUi();
   return (
     <Sheet open={ui.queueOpen} onOpenChange={(v) => ui.set({ queueOpen: v })}>
-      <SheetContent title="Queue" side={typeof window !== "undefined" && window.innerWidth < 768 ? "bottom" : "right"} className="p-0">
+      <SheetContent side={typeof window !== "undefined" && window.innerWidth < 768 ? "bottom" : "right"} className="p-0" hideClose>
         <QueuePanel onClose={() => ui.set({ queueOpen: false })} />
       </SheetContent>
     </Sheet>

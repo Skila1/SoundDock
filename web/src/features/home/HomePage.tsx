@@ -9,7 +9,6 @@ import { LayoutToggle } from "@/components/media/LayoutToggle";
 import { EmptyState } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
-import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 import { usePlayer } from "@/stores/player";
 import { useUi } from "@/stores/ui";
 import type { Track } from "@/types/api";
@@ -51,13 +50,11 @@ export function HomePage() {
         <EmptyState
           icon={Disc3}
           title="Nothing played yet."
-          description="Home only lists the last 15 tracks you actually played. Start from Search or Tracks."
+          description="Home only lists the last 15 tracks you actually played. Start from Search or Library."
           action={{ label: "Search", onClick: () => nav("/search") }}
         />
         <div className="mt-4 flex justify-center gap-2">
-          <Button variant="secondary" onClick={() => nav("/tracks")}>Browse tracks</Button>
-          <HelpButton variant="secondary" />
-          <DiscordServerButton />
+          <Button variant="secondary" onClick={() => nav("/library")}>Browse library</Button>
         </div>
       </>
     );
@@ -114,7 +111,7 @@ function TrackSection({
         <MediaCard
           key={t.id}
           className="max-w-none min-w-0 w-full"
-          to={t.album_id ? `/albums/${t.album_id}` : "/tracks"}
+          to={t.album_id ? `/albums/${t.album_id}` : "/library"}
           id={t.id}
           title={t.title}
           subtitle={t.artist || t.album || "Unknown artist"}

@@ -252,13 +252,21 @@ func (s *Server) patchTrack(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) bulkTracks(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		IDs   []uuid.UUID `json:"ids"`
-		Genre *string     `json:"genre"`
-		Year  *int        `json:"year"`
+		IDs         []uuid.UUID `json:"ids"`
+		Genre       *string     `json:"genre"`
+		Year        *int        `json:"year"`
+		Delete      bool        `json:"delete"`
+		All         bool        `json:"all"`
+		LibraryID   uuid.UUID   `json:"library_id"`
+		DeleteFiles bool        `json:"delete_files"`
 	}
 	_ = decodeJSON(r, &body)
 	if !currentUser(r).IsAdmin {
 		writeErr(w, 403, "forbidden", "admin required")
+		return
+	}
+	if body.Delete || body.All || r.Method == http.MethodDelete {
+		s.deleteTracks(w, r, body.IDs, body.All, body.LibraryID, body.DeleteFiles)
 		return
 	}
 	for _, id := range body.IDs {
@@ -270,6 +278,42 @@ func (s *Server) bulkTracks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]int{"updated": len(body.IDs)})
+}
+
+func (s *Server) deleteTracks(w http.ResponseWriter, r *http.Request, ids []uuid.UUID, all bool, lib uuid.UUID, deleteFiles bool) {
+	ctx := r.Context()
+	if !all && len(ids) == 0 {
+		writeJSON(w, 200, map[string]int{"deleted": 0})
+		return
+	}
+	if deleteFiles && !all {
+		for _, id := range ids {
+			var libID uuid.UUID
+			_ = s.Pool.QueryRow(ctx, `SELECT library_id FROM tracks WHERE id=$1`, id).Scan(&libID)
+			if !managedStorage(s.libraryStorageType(ctx, libID)) {
+				writeErr(w, 400, "storage", "physical delete is only offered for SoundDock-managed tracks")
+				return
+			}
+		}
+	}
+	if s.Jobs == nil {
+		n, err := s.deleteTrackIDs(ctx, ids, all, lib, deleteFiles)
+		if err != nil {
+			writeErr(w, 400, "delete", err.Error())
+			return
+		}
+		s.Audit.Event(ctx, &currentUser(r).ID, "tracks.delete", "", r.RemoteAddr, nil)
+		writeJSON(w, 200, map[string]any{"deleted": n, "deleted_files": deleteFiles})
+		return
+	}
+	jid, err := s.Jobs.Enqueue(ctx, "tracks.bulk_delete", tracksDeletePayload{
+		IDs: ids, All: all, LibraryID: lib, DeleteFiles: deleteFiles, ActorID: currentUser(r).ID,
+	})
+	if err != nil {
+		s.writeJobErr(w, err)
+		return
+	}
+	writeJSON(w, 202, map[string]any{"queued": true, "job_id": jid, "deleted_files": deleteFiles})
 }
 
 func (s *Server) serveArtwork(w http.ResponseWriter, r *http.Request, ownerType string, ownerID uuid.UUID) {
@@ -455,7 +499,7 @@ func (s *Server) listGenres(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 	ids := s.libraryIDs(r.Context(), currentUser(r))
 	rows, err := s.Pool.Query(r.Context(), `
-		SELECT l.id, l.name, l.kind, l.read_only, l.organisation_mode, sp.type,
+		SELECT l.id, l.name, l.kind, l.read_only, l.organisation_mode, l.is_default, sp.type,
 		       (SELECT count(*) FROM tracks t WHERE t.library_id=l.id)
 		FROM libraries l
 		LEFT JOIN storage_providers sp ON sp.id=l.storage_provider_id
@@ -465,7 +509,7 @@ func (s *Server) listLibraries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "name", "kind", "read_only", "organisation_mode", "storage_type", "track_count"))
+	writeJSON(w, 200, scanMaps(rows, "id", "name", "kind", "read_only", "organisation_mode", "is_default", "storage_type", "track_count"))
 }
 
 func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
@@ -498,7 +542,7 @@ func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
 	body.Extra = list
 	id, err := s.Jobs.Enqueue(r.Context(), "ingest.url", body)
 	if err != nil {
-		writeErr(w, 500, "job", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	writeJSON(w, 202, map[string]any{"job_id": id, "count": len(list)})
@@ -578,7 +622,7 @@ func (s *Server) completeUpload(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, ingest.ErrZipQueued) {
 			jid, qerr := s.Jobs.Enqueue(r.Context(), "ingest.zip", ingest.ZipPayload{SessionID: id})
 			if qerr != nil {
-				writeErr(w, 500, "upload", qerr.Error())
+				s.writeJobErr(w, qerr)
 				return
 			}
 			writeJSON(w, 202, map[string]any{"ok": true, "zip": true, "job_id": jid})
@@ -603,7 +647,7 @@ func (s *Server) finalizeUploads(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.Jobs.Enqueue(r.Context(), "library.scan", scan.Payload{LibraryID: libID, Kind: "upload"})
 	if err != nil {
-		writeErr(w, 500, "scan", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	writeJSON(w, 202, map[string]any{"ok": true, "job_id": id})

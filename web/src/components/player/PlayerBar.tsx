@@ -185,13 +185,8 @@ export function PlayerBar() {
           <Button
             size="icon"
             variant="ghost"
-            onClick={() => {
-              if (typeof window !== "undefined" && window.matchMedia("(min-width: 1280px)").matches) {
-                ui.set({ queueCollapsed: !ui.queueCollapsed });
-              } else {
-                ui.set({ queueOpen: true });
-              }
-            }}
+            className={ui.queuePinned || !ui.queueCollapsed || ui.queueOpen ? "text-accent" : ""}
+            onClick={() => ui.toggleQueue()}
             aria-label="Queue"
           >
             <ListMusic />

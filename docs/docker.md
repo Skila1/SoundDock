@@ -12,7 +12,7 @@ curl -fsSL https://raw.githubusercontent.com/sounddock/sounddock/main/install.sh
 
 or copy `docker-compose.yml` + `.env` and run `docker compose pull && docker compose up -d`.
 
-This repo: `docker compose up -d --build` still builds a local image tagged as the published name. ScapeX builds from the sibling `../ScapeX` folder and is not published on a host port. SoundDock reaches it at `http://scapex:7788`.
+This repo: `docker compose up -d --build` still builds a local image tagged as the published name. YouTube search and download run inside the SoundDock container (yt-dlp + ffmpeg). There is no separate ScapeX sidecar.
 
 Profiles:
 

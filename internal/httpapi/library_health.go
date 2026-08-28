@@ -111,7 +111,7 @@ func (s *Server) libraryIntegrityScan(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.Jobs.Enqueue(r.Context(), integrity.JobName, integrity.Payload{LibraryID: body.LibraryID})
 	if err != nil {
-		writeErr(w, 500, "job", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	writeJSON(w, 202, map[string]any{"ok": true, "job_id": id, "job": integrity.JobName})

@@ -31,23 +31,21 @@ const PartyPage = lazy(() => import("@/features/devices/PartyPage").then((m) => 
 const AdminHealth = lazy(() => import("@/features/admin/AdminHealth").then((m) => ({ default: m.AdminHealth })));
 const AdminQuotas = lazy(() => import("@/features/admin/AdminQuotas").then((m) => ({ default: m.AdminQuotas })));
 const AdminMaintenance = lazy(() => import("@/features/admin/AdminMaintenance").then((m) => ({ default: m.AdminMaintenance })));
-const AdminBackupPreview = lazy(() => import("@/features/admin/AdminBackupPreview").then((m) => ({ default: m.AdminBackupPreview })));
 const AdminDiagnostics = lazy(() => import("@/features/admin/AdminDiagnostics").then((m) => ({ default: m.AdminDiagnostics })));
-const AdminDemo = lazy(() => import("@/features/admin/AdminDemo").then((m) => ({ default: m.AdminDemo })));
-const AdminGrants = lazy(() => import("@/features/admin/AdminGrants").then((m) => ({ default: m.AdminGrants })));
 const ConnectedServicesPage = lazy(() => import("@/features/settings/ConnectedServicesPage").then((m) => ({ default: m.ConnectedServicesPage })));
 const FavouritesPage = lazy(() => import("@/features/favourites/FavouritesPage").then((m) => ({ default: m.FavouritesPage })));
 const LibrariesPage = lazy(() => import("@/features/library/LibrariesPage").then((m) => ({ default: m.LibrariesPage })));
+const LibraryLayout = lazy(() => import("@/features/library/LibraryPage").then((m) => ({ default: m.LibraryLayout })));
 const UploadPage = lazy(() => import("@/features/upload/UploadPage").then((m) => ({ default: m.UploadPage })));
 const ImportPage = lazy(() => import("@/features/imports/ImportPage").then((m) => ({ default: m.ImportPage })));
 const ProfilePage = lazy(() => import("@/features/profile/ProfilePage").then((m) => ({ default: m.ProfilePage })));
 const AdminLayout = lazy(() => import("@/features/admin/AdminLayout").then((m) => ({ default: m.AdminLayout })));
 const AdminOverview = lazy(() => import("@/features/admin/AdminOverview").then((m) => ({ default: m.AdminOverview })));
 const AdminUsers = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminUsers })));
-const AdminRoles = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminRoles })));
+const AdminRoles = lazy(() => import("@/features/admin/AdminRoles").then((m) => ({ default: m.AdminRoles })));
 const AdminStorage = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminStorage })));
-const AdminLibraries = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminLibraries })));
-const AdminJobs = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminJobs })));
+const AdminLibraries = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminLibraries })));
+const AdminWorkers = lazy(() => import("@/features/admin/AdminWorkers").then((m) => ({ default: m.AdminWorkers })));
 const AdminBackups = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminBackups })));
 const AdminDatabase = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminDatabase })));
 const AdminDiscord = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminDiscord })));
@@ -59,7 +57,6 @@ const AdminTranscode = lazy(() => import("@/features/admin/AdminPages").then((m)
 const AdminRetention = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminRetention })));
 const AdminSecurity = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminSecurity })));
 const AdminLogs = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminLogs })));
-const AdminCloudflare = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminCloudflare })));
 const AdminUpdates = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminUpdates })));
 
 function Fallback() {
@@ -98,12 +95,24 @@ export function AppRouter() {
         <Route element={<AppShell user={user} />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/search" element={<SearchPage />} />
-          <Route path="/artists" element={<ArtistsPage />} />
           <Route path="/artists/:id" element={<ArtistPage />} />
-          <Route path="/albums" element={<AlbumsPage />} />
           <Route path="/albums/:id" element={<AlbumPage />} />
-          <Route path="/tracks" element={<TracksPage />} />
           <Route path="/tracks/:id" element={<TrackPage />} />
+          <Route path="/artists" element={<Navigate to="/library/artists" replace />} />
+          <Route path="/albums" element={<Navigate to="/library/albums" replace />} />
+          <Route path="/tracks" element={<Navigate to="/library" replace />} />
+          <Route path="/favourites" element={<Navigate to="/library/favourites" replace />} />
+          <Route path="/upload" element={<Navigate to="/library/add" replace />} />
+          <Route path="/import" element={<Navigate to="/library/import" replace />} />
+          <Route path="/library" element={<LibraryLayout />}>
+            <Route index element={<TracksPage />} />
+            <Route path="albums" element={<AlbumsPage />} />
+            <Route path="artists" element={<ArtistsPage />} />
+            <Route path="favourites" element={<FavouritesPage />} />
+            <Route path="add" element={<UploadPage />} />
+            <Route path="import" element={<ImportPage />} />
+            <Route path="sources" element={<LibrariesPage user={user} />} />
+          </Route>
           <Route path="/playlists" element={<PlaylistsPage />} />
           <Route path="/playlists/invite" element={<PlaylistInvitePage />} />
           <Route path="/playlists/:id" element={<PlaylistPage />} />
@@ -116,10 +125,6 @@ export function AppRouter() {
           <Route path="/stats" element={<StatsPage />} />
           <Route path="/wrapped" element={<WrappedPage />} />
           <Route path="/settings/connected" element={<ConnectedServicesPage />} />
-          <Route path="/favourites" element={<FavouritesPage />} />
-          <Route path="/library" element={<LibrariesPage user={user} />} />
-          <Route path="/upload" element={<UploadPage />} />
-          <Route path="/import" element={<ImportPage />} />
           <Route path="/profile" element={<ProfilePage user={user} onRefresh={() => me.refetch()} />} />
           <Route path="/profile/devices" element={<DevicesPage />} />
           <Route path="/profile/party" element={<PartyPage />} />
@@ -128,15 +133,16 @@ export function AppRouter() {
             <Route path="health" element={<AdminHealth />} />
             <Route path="quotas" element={<AdminQuotas />} />
             <Route path="maintenance" element={<AdminMaintenance />} />
-            <Route path="backup-preview" element={<AdminBackupPreview />} />
+            <Route path="backup-preview" element={<Navigate to="/admin" replace />} />
             <Route path="diagnostics" element={<AdminDiagnostics />} />
-            <Route path="demo" element={<AdminDemo />} />
-            <Route path="grants" element={<AdminGrants />} />
+            <Route path="demo" element={<Navigate to="/admin" replace />} />
+            <Route path="grants" element={<Navigate to="/admin/roles" replace />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="roles" element={<AdminRoles />} />
             <Route path="storage" element={<AdminStorage />} />
             <Route path="libraries" element={<AdminLibraries />} />
-            <Route path="jobs" element={<AdminJobs />} />
+            <Route path="workers" element={<AdminWorkers />} />
+            <Route path="jobs" element={<Navigate to="/admin/workers" replace />} />
             <Route path="backups" element={<AdminBackups />} />
             <Route path="database" element={<AdminDatabase />} />
             <Route path="discord" element={<AdminDiscord />} />
@@ -148,7 +154,7 @@ export function AppRouter() {
             <Route path="retention" element={<AdminRetention />} />
             <Route path="security" element={<AdminSecurity />} />
             <Route path="logs" element={<AdminLogs />} />
-            <Route path="cloudflare" element={<AdminCloudflare />} />
+            <Route path="cloudflare" element={<Navigate to="/admin" replace />} />
             <Route path="updates" element={<AdminUpdates />} />
           </Route>
           <Route path="*" element={<NotFoundPage />} />

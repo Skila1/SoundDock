@@ -30,7 +30,13 @@ export const api = {
     fetch(p, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(parse) as Promise<T>,
   patch: <T = any>(p: string, body?: unknown, headers?: HeadersInit) =>
     fetch(p, { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json", ...headers }, body: body instanceof Blob ? body : JSON.stringify(body) }).then(parse) as Promise<T>,
-  del: <T = any>(p: string) => fetch(p, { method: "DELETE", credentials: "include" }).then(parse) as Promise<T>
+  del: <T = any>(p: string, body?: unknown) =>
+    fetch(p, {
+      method: "DELETE",
+      credentials: "include",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined
+    }).then(parse) as Promise<T>
 };
 
 export const streamUrl = (id: string, quality = "original") => `/api/v1/tracks/${id}/stream?quality=${quality}`;

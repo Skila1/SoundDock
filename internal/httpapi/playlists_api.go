@@ -83,7 +83,7 @@ func (s *Server) listPlaylists(w http.ResponseWriter, r *http.Request) {
 	folder := r.URL.Query().Get("folder")
 	q := `
 		SELECT p.id, p.name, p.description, p.collaborative, p.public, p.folder, p.created_at,
-			ep.provider, ep.sync_mode, ep.last_sync_status,
+			ep.provider, ep.sync_mode, ep.last_sync_status, ep.external_playlist_id,
 			EXISTS(SELECT 1 FROM smart_playlist_rules s WHERE s.playlist_id=p.id)
 		FROM playlists p
 		LEFT JOIN external_playlists ep ON ep.sounddock_playlist_id = p.id
@@ -100,7 +100,7 @@ func (s *Server) listPlaylists(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "name", "description", "collaborative", "public", "folder", "created_at", "provider", "sync_mode", "last_sync_status", "is_smart"))
+	writeJSON(w, 200, scanMaps(rows, "id", "name", "description", "collaborative", "public", "folder", "created_at", "provider", "sync_mode", "last_sync_status", "external_id", "is_smart"))
 }
 
 func (s *Server) listPlaylistFolders(w http.ResponseWriter, r *http.Request) {
@@ -185,16 +185,19 @@ func (s *Server) getPlaylist(w http.ResponseWriter, r *http.Request) {
 		"collaborative": a.Collab, "public": a.Public, "user_id": a.Owner,
 		"is_owner": a.IsOwner, "can_edit": a.CanEdit, "tracks": tracks,
 	}
-	var prov, mode, status string
+	var prov, mode, status, extID string
 	var last *time.Time
 	var matched, unmatched int
 	err := s.Pool.QueryRow(r.Context(), `
-		SELECT provider, sync_mode, last_sync_status, last_sync_at,
+		SELECT provider, sync_mode, last_sync_status, last_sync_at, external_playlist_id,
 			(SELECT count(*) FROM external_playlist_items i WHERE i.external_playlist_id=e.id AND i.mapped_track_id IS NOT NULL),
 			(SELECT count(*) FROM external_playlist_items i WHERE i.external_playlist_id=e.id AND i.mapped_track_id IS NULL AND NOT i.ignored)
-		FROM external_playlists e WHERE sounddock_playlist_id=$1`, id).Scan(&prov, &mode, &status, &last, &matched, &unmatched)
+		FROM external_playlists e WHERE sounddock_playlist_id=$1`, id).Scan(&prov, &mode, &status, &last, &extID, &matched, &unmatched)
 	if err == nil {
-		out["external"] = map[string]any{"provider": prov, "sync_mode": mode, "status": status, "last_sync_at": last, "matched": matched, "unmatched": unmatched}
+		out["external"] = map[string]any{
+			"provider": prov, "sync_mode": mode, "status": status, "last_sync_at": last,
+			"external_id": extID, "matched": matched, "unmatched": unmatched,
+		}
 	}
 	var raw []byte
 	var interval int
@@ -557,7 +560,7 @@ func (s *Server) refreshSmartPlaylist(w http.ResponseWriter, r *http.Request) {
 	}
 	jid, err := s.Jobs.Enqueue(r.Context(), "smart_playlist.refresh", radio.SmartPayload{PlaylistID: id})
 	if err != nil {
-		writeErr(w, 500, "job", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	writeJSON(w, 202, map[string]any{"job_id": jid, "ok": true})

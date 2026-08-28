@@ -123,13 +123,13 @@ export function PlaylistPage() {
                 variant="secondary"
                 onClick={async () => {
                   await api.post(`/api/v1/playlists/${id}/external-sync`);
-                  toast.success("Sync queued");
+                  toast.success("Sync queued. Missing songs download from YouTube.");
                   qc.invalidateQueries({ queryKey: ["playlist", id] });
                   qc.invalidateQueries({ queryKey: ["unmatched", id] });
                   qc.invalidateQueries({ queryKey: ["sync-diff", id] });
                 }}
               >
-                Sync now
+                Sync{p.external.provider === "spotify" ? " from Spotify" : ""}
               </Button>
             )}
             {isOwner && (

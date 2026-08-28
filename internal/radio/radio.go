@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sounddock/sounddock/internal/jobs"
+	"github.com/sounddock/sounddock/internal/matcher"
 )
 
 var (
@@ -37,6 +38,8 @@ type Request struct {
 	UserID  uuid.UUID
 	Libs    []uuid.UUID
 	AllLibs bool
+	Exclude []uuid.UUID `json:"exclude,omitempty"`
+	Recent  int         `json:"recent,omitempty"`
 }
 
 type Result struct {
@@ -68,13 +71,13 @@ func ClampLimit(n int) int {
 	return n
 }
 
-// ClampFill is the 1–20 YouTube autoplay pull size.
+// ClampFill is the YouTube autoplay pull size.
 func ClampFill(n int) int {
 	if n <= 0 {
-		return 12
+		return 6
 	}
-	if n > 20 {
-		return 20
+	if n > 10 {
+		return 10
 	}
 	return n
 }
@@ -145,7 +148,8 @@ func (s *Service) Select(ctx context.Context, req Request) (Result, error) {
 		if req.SeedID == uuid.Nil {
 			return Result{}, ErrSeed
 		}
-		ids, err = s.trackRadio(ctx, req.SeedID, libs, limit)
+		recent := s.recentListenIDs(ctx, req.UserID, ClampRecent(req.Recent))
+		ids, err = s.trackRadio(ctx, req.SeedID, libs, limit, req.Exclude, recent)
 	case "genre":
 		ids, err = s.genreRadio(ctx, req.SeedID, req.Genre, libs, limit)
 	case "decade":
@@ -164,6 +168,7 @@ func (s *Service) Select(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	ids = subtractIDs(ids, req.Exclude)
 	out.TrackIDs = idsOrEmpty(ids)
 	return out, nil
 }
@@ -215,25 +220,104 @@ func (s *Service) albumRadio(ctx context.Context, albumID uuid.UUID, libs []uuid
 	return uniqueAppend(ids, more, limit), nil
 }
 
-func (s *Service) trackRadio(ctx context.Context, trackID uuid.UUID, libs []uuid.UUID, limit int) ([]uuid.UUID, error) {
+func ClampRecent(n int) int {
+	if n <= 0 {
+		return 40
+	}
+	if n > 200 {
+		return 200
+	}
+	return n
+}
+
+func (s *Service) recentListenIDs(ctx context.Context, userID uuid.UUID, n int) []uuid.UUID {
+	if userID == uuid.Nil || n <= 0 {
+		return nil
+	}
+	ids, err := s.queryIDs(ctx, `
+		SELECT track_id FROM listen_history
+		WHERE user_id=$1
+		ORDER BY played_at DESC
+		LIMIT $2`, userID, n)
+	if err != nil {
+		return nil
+	}
+	return ids
+}
+
+func (s *Service) trackRadio(ctx context.Context, trackID uuid.UUID, libs []uuid.UUID, limit int, queue, recent []uuid.UUID) ([]uuid.UUID, error) {
+	if _, err := s.TrackMeta(ctx, trackID); err != nil {
+		return nil, err
+	}
+	seeds := uniqueAppend([]uuid.UUID{trackID}, recent, 6)
+	queueSkip := uniqueAppend([]uuid.UUID{trackID}, queue, len(queue)+1)
+	strict := uniqueAppend(append([]uuid.UUID{}, queueSkip...), recent, len(queueSkip)+len(recent))
+
+	ids, err := s.fillFromSeeds(ctx, seeds, libs, limit, strict, true)
+	if err != nil {
+		return nil, err
+	}
+	need := limit / 2
+	if need < 3 {
+		need = 3
+	}
+	if len(ids) < need {
+		ids, err = s.fillFromSeeds(ctx, seeds, libs, limit, queueSkip, true)
+		if err != nil {
+			return ids, err
+		}
+	}
+	if len(ids) < 3 {
+		ids, err = s.fillFromSeeds(ctx, seeds, libs, limit, queueSkip, false)
+	}
+	return ids, err
+}
+
+func (s *Service) fillFromSeeds(ctx context.Context, seeds []uuid.UUID, libs []uuid.UUID, limit int, skip []uuid.UUID, dropSame bool) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	blocked := append([]uuid.UUID{}, skip...)
+	for _, seed := range seeds {
+		if len(ids) >= limit {
+			break
+		}
+		more, err := s.similarFromSeed(ctx, seed, libs, limit-len(ids), uniqueAppend(blocked, ids, 4096))
+		if err != nil {
+			return ids, err
+		}
+		if dropSame {
+			meta, merr := s.TrackMeta(ctx, seed)
+			if merr == nil {
+				more, _ = s.dropSameSongs(ctx, meta.Title, more)
+			}
+		}
+		ids = uniqueAppend(ids, more, limit)
+	}
+	if dropSame {
+		ids, _ = s.dedupeSameSongs(ctx, ids)
+	}
+	return ids, nil
+}
+
+func (s *Service) similarFromSeed(ctx context.Context, trackID uuid.UUID, libs []uuid.UUID, limit int, skip []uuid.UUID) ([]uuid.UUID, error) {
 	meta, err := s.TrackMeta(ctx, trackID)
 	if err != nil {
 		return nil, err
 	}
+	blocked := idsOrDummy(uniqueAppend([]uuid.UUID{trackID}, skip, len(skip)+1))
 	ids, err := s.queryIDs(ctx, `
 		SELECT t.id FROM tracks t
 		JOIN track_artists ta ON ta.track_id=t.id
-		WHERE t.library_id = ANY($1) AND t.id<>$2
-		  AND ta.artist_id IN (SELECT artist_id FROM track_artists WHERE track_id=$2 AND role='primary')
-		ORDER BY random() LIMIT $3`, libs, trackID, limit)
+		WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
+		  AND ta.artist_id IN (SELECT artist_id FROM track_artists WHERE track_id=$3 AND role='primary')
+		ORDER BY random() LIMIT $4`, libs, blocked, trackID, limit)
 	if err != nil {
 		return nil, err
 	}
 	if len(ids) < limit && meta.AlbumID != nil {
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
-			WHERE t.album_id=$1 AND t.library_id = ANY($2) AND t.id<>$3 AND t.id <> ALL($4)
-			ORDER BY random() LIMIT $5`, *meta.AlbumID, libs, trackID, idsOrDummy(ids), limit-len(ids))
+			WHERE t.album_id=$1 AND t.library_id = ANY($2) AND t.id <> ALL($3)
+			ORDER BY random() LIMIT $4`, *meta.AlbumID, libs, idsOrDummy(append(blocked, ids...)), limit-len(ids))
 		if err != nil {
 			return ids, err
 		}
@@ -243,9 +327,9 @@ func (s *Service) trackRadio(ctx context.Context, trackID uuid.UUID, libs []uuid
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
 			JOIN track_genres tg ON tg.track_id=t.id
-			WHERE t.library_id = ANY($1) AND t.id<>$2 AND t.id <> ALL($3)
-			  AND tg.genre_id IN (SELECT genre_id FROM track_genres WHERE track_id=$2)
-			ORDER BY random() LIMIT $4`, libs, trackID, idsOrDummy(ids), limit-len(ids))
+			WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
+			  AND tg.genre_id IN (SELECT genre_id FROM track_genres WHERE track_id=$3)
+			ORDER BY random() LIMIT $4`, libs, idsOrDummy(append(blocked, ids...)), trackID, limit-len(ids))
 		if err != nil {
 			return ids, err
 		}
@@ -255,41 +339,82 @@ func (s *Service) trackRadio(ctx context.Context, trackID uuid.UUID, libs []uuid
 	if len(ids) < limit && genre != "" {
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
-			WHERE t.library_id = ANY($1) AND t.id<>$2 AND t.id <> ALL($3)
-			  AND (t.genre_text ILIKE $4 OR EXISTS (
+			WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
+			  AND (t.genre_text ILIKE $3 OR EXISTS (
 				SELECT 1 FROM track_genres tg JOIN genres g ON g.id=tg.genre_id
-				WHERE tg.track_id=t.id AND g.name ILIKE $4
+				WHERE tg.track_id=t.id AND g.name ILIKE $3
 			  ))
-			ORDER BY random() LIMIT $5`, libs, trackID, idsOrDummy(ids), genre, limit-len(ids))
-		if err != nil {
-			return ids, err
-		}
-		ids = uniqueAppend(ids, more, limit)
-	}
-	if len(ids) < limit && meta.Year != nil {
-		d := DecadeStart(*meta.Year)
-		more, err := s.queryIDs(ctx, `
-			SELECT t.id FROM tracks t
-			WHERE t.library_id = ANY($1) AND t.id<>$2 AND t.id <> ALL($3)
-			  AND t.year >= $4 AND t.year < $5
-			ORDER BY random() LIMIT $6`, libs, trackID, idsOrDummy(ids), d, d+10, limit-len(ids))
-		if err != nil {
-			return ids, err
-		}
-		ids = uniqueAppend(ids, more, limit)
-	}
-	if len(ids) < limit && meta.Title != "" {
-		more, err := s.queryIDs(ctx, `
-			SELECT t.id FROM tracks t
-			WHERE t.library_id = ANY($1) AND t.id<>$2 AND t.id <> ALL($3)
-			  AND similarity(t.title, $4) > 0.18
-			ORDER BY similarity(t.title, $4) DESC, random() LIMIT $5`, libs, trackID, idsOrDummy(ids), meta.Title, limit-len(ids))
+			ORDER BY random() LIMIT $4`, libs, idsOrDummy(append(blocked, ids...)), genre, limit-len(ids))
 		if err != nil {
 			return ids, err
 		}
 		ids = uniqueAppend(ids, more, limit)
 	}
 	return ids, nil
+}
+
+func (s *Service) dropSameSongs(ctx context.Context, seedTitle string, ids []uuid.UUID) ([]uuid.UUID, error) {
+	key := matcher.NormaliseTitle(seedTitle)
+	if key == "" || len(ids) == 0 {
+		return ids, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id, title FROM tracks WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return ids, err
+	}
+	defer rows.Close()
+	drop := map[uuid.UUID]struct{}{}
+	for rows.Next() {
+		var id uuid.UUID
+		var title string
+		if err := rows.Scan(&id, &title); err != nil {
+			continue
+		}
+		if matcher.NormaliseTitle(title) == key {
+			drop[id] = struct{}{}
+		}
+	}
+	var out []uuid.UUID
+	for _, id := range ids {
+		if _, ok := drop[id]; ok {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+func (s *Service) dedupeSameSongs(ctx context.Context, ids []uuid.UUID) ([]uuid.UUID, error) {
+	if len(ids) == 0 {
+		return ids, nil
+	}
+	rows, err := s.pool.Query(ctx, `SELECT id, title FROM tracks WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return ids, err
+	}
+	defer rows.Close()
+	titleOf := map[uuid.UUID]string{}
+	for rows.Next() {
+		var id uuid.UUID
+		var title string
+		if err := rows.Scan(&id, &title); err != nil {
+			continue
+		}
+		titleOf[id] = title
+	}
+	seen := map[string]struct{}{}
+	var out []uuid.UUID
+	for _, id := range ids {
+		key := matcher.NormaliseTitle(titleOf[id])
+		if key != "" {
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 type TrackMeta struct {
@@ -348,14 +473,8 @@ func SimilarQuery(title, artist, genre string) string {
 }
 
 func SameSong(a, b string) bool {
-	na, nb := normSong(a), normSong(b)
+	na, nb := matcher.NormaliseTitle(a), matcher.NormaliseTitle(b)
 	return na != "" && na == nb
-}
-
-func normSong(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	s = strings.ReplaceAll(s, "’", "'")
-	return s
 }
 
 func (s *Service) genreRadio(ctx context.Context, seed uuid.UUID, name string, libs []uuid.UUID, limit int) ([]uuid.UUID, error) {
@@ -569,6 +688,24 @@ func idsOrDummy(ids []uuid.UUID) []uuid.UUID {
 		return []uuid.UUID{uuid.Nil}
 	}
 	return ids
+}
+
+func subtractIDs(ids, exclude []uuid.UUID) []uuid.UUID {
+	if len(exclude) == 0 {
+		return ids
+	}
+	skip := map[uuid.UUID]struct{}{}
+	for _, id := range exclude {
+		skip[id] = struct{}{}
+	}
+	var out []uuid.UUID
+	for _, id := range ids {
+		if _, ok := skip[id]; ok {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
 }
 
 type pairRow interface {

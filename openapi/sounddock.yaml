@@ -46,7 +46,7 @@ paths:
           schema: { type: string }
   /search/youtube:
     get:
-      summary: YouTube search via the ScapeX sidecar (empty if ScapeX is down)
+      summary: YouTube search via yt-dlp inside SoundDock (empty if yt-dlp is missing)
       parameters:
         - in: query
           name: q

@@ -60,6 +60,7 @@ export type Playlist = {
     sync_mode: string;
     status: string;
     last_sync_at?: string;
+    external_id?: string;
     matched: number;
     unmatched: number;
   };
@@ -74,6 +75,7 @@ export type Library = {
   organisation_mode: string;
   storage_type?: string;
   track_count?: number;
+  is_default?: boolean;
 };
 
 export type SearchHit = {

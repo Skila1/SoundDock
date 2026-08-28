@@ -40,9 +40,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
     && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
     && apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates ffmpeg wget libopus0 \
+        ca-certificates ffmpeg wget libopus0 python3 \
+    && wget -qO /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp \
+    && chmod a+rx /usr/local/bin/yt-dlp \
     && useradd --system --home /data --uid 1000 sounddock \
-    && mkdir -p /data/cache /data/backups /data/managed /libraries \
+    && mkdir -p /data/cache /data/backups /data/managed /data/managed/inbox /libraries \
     && chown -R sounddock:sounddock /data /libraries
 COPY --from=build /out/sounddock /usr/local/bin/sounddock
 USER sounddock

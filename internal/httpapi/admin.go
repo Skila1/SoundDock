@@ -60,9 +60,9 @@ func (s *Server) adminDatabase(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminJobs(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT id, type, status, progress, last_error, created_at FROM jobs ORDER BY created_at DESC LIMIT 100`)
+	rows, _ := s.Pool.Query(r.Context(), `SELECT id, type, pool, status, progress, last_error, created_at FROM jobs ORDER BY created_at DESC LIMIT 100`)
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "type", "status", "progress", "last_error", "created_at"))
+	writeJSON(w, 200, scanMaps(rows, "id", "type", "pool", "status", "progress", "last_error", "created_at"))
 }
 
 func (s *Server) adminScans(w http.ResponseWriter, r *http.Request) {
@@ -107,11 +107,16 @@ const adminUserSQL = `
 				WHERE ur.user_id = u.id
 				ORDER BY CASE r.name WHEN 'Administrator' THEN 0 ELSE 1 END
 				LIMIT 1
-			), 'User')
+			), 'User'),
+			COALESCE((
+				SELECT array_agg(r.name ORDER BY CASE r.name WHEN 'Administrator' THEN 0 ELSE 1 END, r.name)
+				FROM user_roles ur JOIN roles r ON r.id = ur.role_id
+				WHERE ur.user_id = u.id
+			), ARRAY[]::text[])
 		FROM users u
 		LEFT JOIN user_identities i ON i.user_id = u.id AND i.provider = 'discord'`
 
-var adminUserCols = []string{"id", "username", "display_name", "email", "disabled", "created_at", "discord_id", "discord_username", "role"}
+var adminUserCols = []string{"id", "username", "display_name", "email", "disabled", "created_at", "discord_id", "discord_username", "role", "roles"}
 
 func (s *Server) adminGetUser(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
@@ -172,8 +177,9 @@ func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Disabled *bool   `json:"disabled"`
-		Role     *string `json:"role"`
+		Disabled *bool       `json:"disabled"`
+		Role     *string     `json:"role"`
+		RoleIDs  []uuid.UUID `json:"role_ids"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, 400, "invalid", err.Error())
@@ -201,6 +207,21 @@ func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if body.RoleIDs != nil {
+		losingAdmin := true
+		for _, rid := range body.RoleIDs {
+			var n string
+			_ = s.Pool.QueryRow(r.Context(), `SELECT name FROM roles WHERE id=$1`, rid).Scan(&n)
+			if n == "Administrator" {
+				losingAdmin = false
+				break
+			}
+		}
+		if losingAdmin && s.isLastAdministrator(r.Context(), id) {
+			writeErr(w, 409, "last_admin", "cannot remove the last administrator")
+			return
+		}
+	}
 	if body.Disabled != nil {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE users SET disabled=$2, updated_at=now() WHERE id=$1`, id, *body.Disabled)
 		if *body.Disabled {
@@ -208,7 +229,13 @@ func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Audit.Event(r.Context(), &currentUser(r).ID, "user.disable", id.String(), r.RemoteAddr, nil)
 	}
-	if body.Role != nil {
+	if body.RoleIDs != nil {
+		_, _ = s.Pool.Exec(r.Context(), `DELETE FROM user_roles WHERE user_id=$1`, id)
+		for _, rid := range body.RoleIDs {
+			_, _ = s.Pool.Exec(r.Context(), `INSERT INTO user_roles (user_id, role_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, id, rid)
+		}
+		s.Audit.Event(r.Context(), &currentUser(r).ID, "user.roles", id.String(), r.RemoteAddr, nil)
+	} else if body.Role != nil {
 		role := strings.TrimSpace(*body.Role)
 		_, _ = s.Pool.Exec(r.Context(), `DELETE FROM user_roles WHERE user_id=$1`, id)
 		_, _ = s.Pool.Exec(r.Context(), `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name=$2`, id, role)
@@ -324,7 +351,8 @@ func (s *Server) adminCreateLibrary(w http.ResponseWriter, r *http.Request) {
 		body.Kind = "music"
 	}
 	var id uuid.UUID
-	err := s.Pool.QueryRow(r.Context(), `INSERT INTO libraries (name, kind, storage_provider_id, root_prefix, read_only, organisation_mode) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+	err := s.Pool.QueryRow(r.Context(), `INSERT INTO libraries (name, kind, storage_provider_id, root_prefix, read_only, organisation_mode, is_default)
+		VALUES ($1,$2,$3,$4,$5,$6, NOT EXISTS (SELECT 1 FROM libraries WHERE is_default)) RETURNING id`,
 		body.Name, body.Kind, body.StorageID, body.Prefix, body.ReadOnly, body.Org).Scan(&id)
 	if err != nil {
 		writeErr(w, 400, "library", err.Error())
@@ -358,7 +386,7 @@ func (s *Server) adminScan(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
 	jid, err := s.Jobs.Enqueue(r.Context(), "library.scan", scan.Payload{LibraryID: id, Kind: "full"})
 	if err != nil {
-		writeErr(w, 500, "job", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO scan_runs (library_id, job_id, kind) VALUES ($1,$2,'full')`, id, jid)
@@ -375,7 +403,7 @@ func (s *Server) adminMigrate(w http.ResponseWriter, r *http.Request) {
 	_ = decodeJSON(r, &body)
 	jid, err := s.Jobs.Enqueue(r.Context(), "library.migrate", ingest.MigratePayload{Source: src, Dest: body.Dest, Mode: body.Mode, Dedupe: body.Dedupe})
 	if err != nil {
-		writeErr(w, 500, "job", err.Error())
+		s.writeJobErr(w, err)
 		return
 	}
 	writeJSON(w, 202, map[string]any{"job_id": jid})

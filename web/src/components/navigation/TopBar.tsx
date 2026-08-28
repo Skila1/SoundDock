@@ -72,7 +72,7 @@ export function TopBar({ title, user }: { title?: string; user: User }) {
         </DropdownMenuTrigger>
         <DropdownMenuContent>
           <DropdownMenuItem onSelect={() => nav("/profile")}>Profile</DropdownMenuItem>
-          {user.is_admin && <DropdownMenuItem onSelect={() => nav("/admin")}>Administration</DropdownMenuItem>}
+          <DropdownMenuItem onSelect={() => nav("/profile/devices")}>Devices</DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem asChild>
             <a href={SOUNDDOCK_DISCORD_INVITE} target="_blank" rel="noopener noreferrer">Help</a>

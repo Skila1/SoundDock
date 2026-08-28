@@ -45,6 +45,45 @@
       "payload": {
         "session_id": "00000000-0000-4000-8000-000000000070"
       }
+    },
+    {
+      "name": "scapex.fetch",
+      "owner": "workers",
+      "payload": {
+        "urls": ["dQw4w9WgXcQ"]
+      }
+    },
+    {
+      "name": "library.merge",
+      "owner": "workers",
+      "payload": {
+        "dest": "00000000-0000-4000-8000-000000000020",
+        "source_ids": ["00000000-0000-4000-8000-000000000021"]
+      }
+    },
+    {
+      "name": "library.delete",
+      "owner": "workers",
+      "payload": {
+        "id": "00000000-0000-4000-8000-000000000021",
+        "delete_files": false
+      }
+    },
+    {
+      "name": "tracks.bulk_delete",
+      "owner": "workers",
+      "payload": {
+        "ids": ["00000000-0000-4000-8000-000000000050"],
+        "delete_files": false
+      }
+    },
+    {
+      "name": "tracks.metadata",
+      "owner": "workers",
+      "payload": {
+        "ids": ["00000000-0000-4000-8000-000000000050"],
+        "genre": "Rock"
+      }
     }
   ]
 }

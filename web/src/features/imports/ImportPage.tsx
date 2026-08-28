@@ -27,7 +27,7 @@ export function ImportPage() {
 
   return (
     <div>
-      <PageHeader title="Remote Import" description="Paste one or many direct audio or zip URLs, one per line. Streaming-service pages are not fetched." />
+      <PageHeader title="Import" description="Paste one or many direct audio or zip URLs, one per line. Streaming-service pages are not fetched." />
       <form
         className="max-w-xl space-y-4 rounded-xl border border-border bg-surface-1 p-5"
         onSubmit={async (e) => {
@@ -35,7 +35,7 @@ export function ImportPage() {
           const urls = splitURLs(url);
           if (!urls.length) return toast.error("Paste at least one audio URL");
           if (urls.some((u) => /open\.spotify\.com\/playlist|youtube\.com\/playlist|soundcloud\.com\/.+\/sets\/|music\.apple\.com\/.+\/playlist/.test(u))) {
-            toast.error("Playlist URLs go to Playlists → Import from URL. Remote Import is for direct audio files only.");
+            toast.error("Playlist URLs go to Playlists → Import from URL. Import is for direct audio files only.");
             return;
           }
           setBusy(true);

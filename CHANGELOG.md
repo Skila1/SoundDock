@@ -22,7 +22,14 @@
 - Library search requires the real words you typed (title, artist, or album). Weak lookalike matches no longer appear.
 - Home shows only the last 15 tracks you actually played, not the rest of the library.
 - Spotify playlist import creates SoundDock playlists and downloads missing songs from YouTube via ScapeX. Connect Spotify or paste a playlist URL.
-- Autoplay is off unless you turn it on. It queues similar library tracks by artist, album, genre, and decade, then pulls 1 to 20 similar YouTube tracks when the library runs dry.
+- Autoplay is off unless you turn it on. It seeds from recent listening, skips the current queue and a recent-history window, and only relaxes those exclusions if the similar-track pool is too small. YouTube is a fallback, not a duplicate mill.
+- The user sidebar is Home, Search, Library, Playlists, Radio, and Connected Services. Library holds Tracks, Albums, Artists, and Favourites, plus Add music and Import. History, stats, Wrapped, and Party sit in a small Listening group. Administration appears in the sidebar only for admins. Account, devices, help, and Discord live in the profile menu.
+- The queue is a collapsible drawer opened from the player. It shows Now playing and Up next, with History behind a header control. Queued tracks can be removed individually. Clear only drops Up next.
+- Administration is grouped into System, Access, and Media. Groups (RBAC) assign SoundDock permissions; Discord role links are optional membership mapping and never override local permissions.
+- Admins can rename, delete, merge, and set a default library. Catalogue delete does not touch NAS or local source files. Managed-file deletion is a separate confirmation.
+- Tracks can be bulk-deleted or cleared. Spotify playlists keep their Spotify id and can be synced again; missing songs still come through YouTube inside SoundDock.
+- YouTube search and fetch run inside SoundDock. There is no separate ScapeX service.
+- Administration > System > Workers exposes playback, search, acquisition, sync, and maintenance pools with reserved capacity for playback and search. Hung yt-dlp, Spotify imports, scans, merges, deletes, and metadata jobs are queued and cannot starve the API.
 - Clear queue keeps the song that is playing. Play on a track while something is already playing adds it to the queue instead of replacing the current song.
 - Help and Discord server buttons open the SoundDock community invite.
 

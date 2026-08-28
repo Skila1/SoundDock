@@ -8,13 +8,13 @@ import (
 type Class string
 
 const (
-	ClassAuth         Class = "auth"
-	ClassSearch       Class = "search"
-	ClassMetadata     Class = "metadata"
-	ClassAdmin        Class = "admin"
-	ClassIntegration  Class = "integration"
-	ClassExternal     Class = "external"
-	ClassStreamSlot   Class = "stream"
+	ClassAuth        Class = "auth"
+	ClassSearch      Class = "search"
+	ClassMetadata    Class = "metadata"
+	ClassAdmin       Class = "admin"
+	ClassIntegration Class = "integration"
+	ClassExternal    Class = "external"
+	ClassStreamSlot  Class = "stream"
 )
 
 type window struct {

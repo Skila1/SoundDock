@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
-import { PanelRightOpen } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Sidebar } from "@/components/navigation/Sidebar";
 import { TopBar } from "@/components/navigation/TopBar";
@@ -10,9 +9,7 @@ import { QueuePanel } from "@/components/player/QueuePanel";
 import { QueueSheet } from "@/components/player/QueueSheet";
 import { NowPlaying } from "@/components/player/NowPlaying";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { Sidebar as Side } from "@/components/navigation/Sidebar";
 import { Button } from "@/components/ui/button";
-import { Tooltip } from "@/components/ui/tooltip";
 import { PrefsSync } from "@/stores/prefs";
 import { attachAudioListeners, usePlayer } from "@/stores/player";
 import { ensureDiscordPresence } from "@/features/settings/discordPresence";
@@ -23,21 +20,18 @@ import type { User } from "@/types/api";
 const titles: Record<string, string> = {
   "/": "Home",
   "/search": "Search",
-  "/artists": "Artists",
-  "/albums": "Albums",
-  "/tracks": "Tracks",
+  "/library/add": "Add music",
+  "/library/import": "Import",
+  "/library": "Library",
   "/playlists": "Playlists",
-  "/favourites": "Favourites",
-  "/library": "Libraries",
-  "/upload": "Upload",
-  "/import": "Remote Import",
-  "/profile": "Profile",
+  "/radio": "Radio",
   "/profile/devices": "Devices",
   "/profile/party": "Party",
+  "/profile": "Profile",
   "/history": "History",
   "/stats": "Stats",
   "/wrapped": "Wrapped",
-  "/radio": "Radio",
+  "/settings/connected": "Connected Services",
   "/admin": "Administration"
 };
 
@@ -50,6 +44,7 @@ export function AppShell({ user }: { user: User }) {
     ensureDiscordPresence();
   }, []);
   const title = Object.entries(titles).find(([k]) => (k === "/" ? loc.pathname === "/" : loc.pathname.startsWith(k)))?.[1];
+  const queueOpen = ui.queuePinned || !ui.queueCollapsed;
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -63,17 +58,9 @@ export function AppShell({ user }: { user: User }) {
             <Outlet />
           </main>
         </div>
-        {ui.queueCollapsed ? (
-          <aside className="hidden h-full min-h-0 w-12 shrink-0 flex-col items-center border-l border-border bg-surface-1/80 pt-3 xl:flex">
-            <Tooltip label="Show queue">
-              <Button size="icon" variant="ghost" onClick={() => ui.set({ queueCollapsed: false })} aria-label="Show queue">
-                <PanelRightOpen className="h-4 w-4" />
-              </Button>
-            </Tooltip>
-          </aside>
-        ) : (
+        {queueOpen && (
           <aside className="hidden h-full min-h-0 w-[300px] shrink-0 flex-col overflow-hidden border-l border-border bg-surface-1/80 xl:flex">
-            <QueuePanel onCollapse={() => ui.set({ queueCollapsed: true })} />
+            <QueuePanel onCollapse={() => ui.closeQueue()} />
           </aside>
         )}
       </div>
@@ -84,7 +71,7 @@ export function AppShell({ user }: { user: User }) {
       <Sheet open={ui.mobileNav} onOpenChange={(v) => ui.set({ mobileNav: v })}>
         <SheetContent side="left" title="Menu">
           <div className="mt-8" onClick={() => ui.set({ mobileNav: false })}>
-            <Side user={user} collapsed={false} className="flex w-full border-0 bg-transparent" />
+            <Sidebar user={user} collapsed={false} className="flex w-full border-0 bg-transparent" />
           </div>
         </SheetContent>
       </Sheet>
