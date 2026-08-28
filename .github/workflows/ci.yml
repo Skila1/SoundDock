@@ -33,19 +33,21 @@ jobs:
         env:
           PGPASSWORD: sounddock
         run: psql -h 127.0.0.1 -p 55432 -U sounddock -d sounddock_w0 -c "CREATE DATABASE sounddock_mig;"
-      - name: Go tests
-        env:
-          SD_TEST_DATABASE_URL: postgres://sounddock:sounddock@127.0.0.1:55432/sounddock_w0?sslmode=disable
-          SD_TEST_MIGRATE_URL: postgres://sounddock:sounddock@127.0.0.1:55432/sounddock_mig?sslmode=disable
-        run: go test ./...
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Web tests
+      - name: Web checks
         working-directory: web
         run: |
           npm ci
           npm test -- --run
           npx tsc --noEmit
+          npx eslint .
+          npm run build
+      - name: Go tests
+        env:
+          SD_TEST_DATABASE_URL: postgres://sounddock:sounddock@127.0.0.1:55432/sounddock_w0?sslmode=disable
+          SD_TEST_MIGRATE_URL: postgres://sounddock:sounddock@127.0.0.1:55432/sounddock_mig?sslmode=disable
+        run: go test ./...

@@ -3,7 +3,6 @@ package storage
 import (
 	"path"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -13,14 +12,8 @@ func SanitizeKey(key string) (string, error) {
 	if strings.ContainsRune(key, 0) {
 		return "", ErrEscape
 	}
-	if strings.Contains(key, ":") && runtime.GOOS == "windows" {
-		// Drive letters and ADS (file:stream)
-		if len(key) >= 2 && key[1] == ':' {
-			return "", ErrEscape
-		}
-		if strings.Contains(key, ":") {
-			return "", ErrEscape
-		}
+	if strings.Contains(key, ":") {
+		return "", ErrEscape
 	}
 	if path.IsAbs(key) || strings.HasPrefix(key, "/") {
 		return "", ErrEscape

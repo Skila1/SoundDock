@@ -60,12 +60,6 @@ func apply(dsn string) error {
 	}
 	defer func() { _, _ = pool.Exec(context.Background(), `SELECT pg_advisory_unlock(829145)`) }()
 
-	var ver int64
-	err = pool.QueryRow(ctx, `SELECT version FROM schema_migrations`).Scan(&ver)
-	if err == nil && ver >= migrations.Head() {
-		return nil
-	}
-
 	src, err := iofs.New(migrations.FS, ".")
 	if err != nil {
 		return err

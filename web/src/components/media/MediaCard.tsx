@@ -5,7 +5,6 @@ import { Artwork } from "./Artwork";
 import { cn, artworkUrl } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/misc";
-import { api } from "@/lib/api";
 import { addTracksToPlaylist, TRACK_DND_MIME } from "./TrackList";
 import { toast } from "sonner";
 

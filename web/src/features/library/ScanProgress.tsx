@@ -47,14 +47,16 @@ export function ScanProgressBar({ scan }: { scan?: ScanRun | null }) {
   const failed = Number(scan.files_failed) || 0;
   const err = scan.last_error;
   const failedStatus = (scan.status || "").toLowerCase() === "failed";
-  let label = "";
-  if (failedStatus || err) {
-    label = err || "Scan failed";
-  } else if (active) {
-    label = total ? `Scanning ${seen} / ${total}` : "Listing files…";
-  } else {
-    label = failed ? `Scan finished · ${seen} files · ${failed} failed` : `Scan finished · ${seen} files`;
-  }
+  const label =
+    failedStatus || err
+      ? err || "Scan failed"
+      : active
+        ? total
+          ? `Scanning ${seen} / ${total}`
+          : "Listing files…"
+        : failed
+          ? `Scan finished · ${seen} files · ${failed} failed`
+          : `Scan finished · ${seen} files`;
   return (
     <div className="mt-3 w-full min-w-[12rem] space-y-1">
       <Progress value={failedStatus ? pct : active ? Math.max(pct, 1) : 100} />

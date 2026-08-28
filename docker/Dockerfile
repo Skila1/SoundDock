@@ -32,15 +32,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     ver="${VERSION}"; \
     if [ -z "${ver}" ] && [ -f VERSION ]; then ver="$(tr -d '[:space:]' < VERSION)"; fi; \
     if [ -z "${ver}" ]; then ver=0.0.1; fi; \
-    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/sounddock/sounddock/internal/version.Version=${ver}" -o /out/sounddock ./cmd/sounddock; \
-    max=0; \
-    for f in migrations/*.up.sql; do \
-      n=$$(basename "$$f" | cut -c1-4); \
-      n=$$((10#$$n)); \
-      if [ "$$n" -gt "$$max" ]; then max=$$n; fi; \
-    done; \
-    mkdir -p /out; \
-    printf '%s\n' "$$max" > /out/schema-head
+    mkdir -p /out && \
+    CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X github.com/sounddock/sounddock/internal/version.Version=${ver}" -o /out/sounddock ./cmd/sounddock && \
+    CGO_ENABLED=0 go run ./cmd/schemahead > /out/schema-head
 
 FROM debian:bookworm-slim
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \

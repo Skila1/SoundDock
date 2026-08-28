@@ -184,12 +184,23 @@ func TestCorruptionNoWipe(t *testing.T) {
 }
 
 func TestWipeAndApplyTestdb(t *testing.T) {
-	pool := testPool(t)
+	dsn := os.Getenv("SD_TEST_MIGRATE_URL")
+	if dsn == "" {
+		t.Skip("SD_TEST_MIGRATE_URL not set")
+	}
 	if _, err := exec.LookPath("psql"); err != nil {
 		t.Skip("psql not available")
 	}
-	dsn := os.Getenv("SD_TEST_DATABASE_URL")
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	if err := pool.Ping(ctx); err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
 	s := New(pool, dir, dsn)
 	s.Restart = func() {}

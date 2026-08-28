@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { ChevronDown, ChevronUp, Copy, Heart, Pencil, Play, Radio as RadioIcon, Shuffle, Trash2 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { Artwork } from "@/components/media/Artwork";
 import { TrackList } from "@/components/media/TrackList";
@@ -66,15 +66,24 @@ export function PlaylistPage() {
   const [edit, setEdit] = useState(false);
   const [del, setDel] = useState(false);
   const [smartOpen, setSmartOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [folder, setFolder] = useState("");
+  const [isPublic, setIsPublic] = useState(false);
+  const [isCollab, setIsCollab] = useState(false);
+  useEffect(() => {
+    if (!q.data) return;
+    const { p } = q.data;
+    setName(p.name);
+    setDesc(p.description || "");
+    setFolder(p.folder || "");
+    setIsPublic(!!p.public);
+    setIsCollab(!!p.collaborative);
+  }, [q.data]);
   if (!q.data) return <div className="h-48 animate-pulse rounded-xl bg-surface-2" />;
   const { p, tracks } = q.data;
   const ids = tracks.map((t) => t.id);
   const total = tracks.reduce((s, t) => s + (t.duration_ms || 0), 0);
-  const [name, setName] = useState(p.name);
-  const [desc, setDesc] = useState(p.description || "");
-  const [folder, setFolder] = useState(p.folder || "");
-  const [isPublic, setIsPublic] = useState(!!p.public);
-  const [isCollab, setIsCollab] = useState(!!p.collaborative);
   const canEdit = p.can_edit !== false;
   const isOwner = p.is_owner !== false;
 

@@ -138,7 +138,6 @@ let queueGate: Promise<unknown> = Promise.resolve();
 let lastQueueMutAt = 0;
 let session: SessionView = initialSession();
 let lastClock: ClockSample | null = null;
-let rendererGeneration = 0;
 let queueSse: QueueSseClient | null = null;
 
 const commands = createCommandClient((body) => api.post<PlayerQueue>("/api/v1/me/queue/control", body));
@@ -430,13 +429,6 @@ function markProgress(id: string, pos: number, dur: number) {
   }
 }
 
-function markSkip(id: string, pos: number, dur: number, stopAfter: boolean) {
-  if (stopAfter) return;
-  if (!listen || listen.id !== id || listen.counted || listen.skipped) return;
-  listen.skipped = true;
-  postListen(id, pos, dur, "skip");
-}
-
 function publishMediaPosition() {
   const s = usePlayer.getState();
   updateMediaPosition({
@@ -522,7 +514,6 @@ function ingestQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kind?: "
     kind: opts?.kind
   });
   if (opts?.clock) lastClock = opts.clock;
-  if (typeof snap.generation === "number" && snap.generation > 0) rendererGeneration = snap.generation;
   if (session.stopAudio || shouldStopHtmlAudio(session.queue, tabId())) pauseAll();
   const listeners = pickListeners(snap);
   if (listeners) usePlayer.setState({ listeners });
@@ -1173,7 +1164,7 @@ export const usePlayer = create<PlayerStore>()(
         }
         const localRemoved =
           action === "remove" || action === "clear" ? snapshotRemovedItems(action, extra, get().queue) : [];
-        let q: PlayerQueue | null = null;
+        let q: PlayerQueue | null;
         try {
           q = (await commands.control(action, extra || {}, getDeviceId())) as PlayerQueue | null;
         } catch (e) {
@@ -1636,7 +1627,6 @@ export function resetPlayerSessionForTests(view?: SessionView) {
   queueSse?.stop();
   session = view ? { ...initialSession(), ...view } : initialSession();
   lastClock = null;
-  rendererGeneration = 0;
   commands.reset();
   lastQueueMutAt = 0;
   usePlayer.setState({ listeners: [], pendingUndo: null });
