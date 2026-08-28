@@ -29,6 +29,15 @@ export type PlaylistListItem = {
   is_smart?: boolean;
 };
 
+export type ProviderPlaylist = {
+  id: string;
+  name: string;
+  description?: string;
+  owner?: string;
+  track_count?: number;
+  artwork?: string;
+};
+
 export type SmartRules = {
   limit?: number;
   match?: string;

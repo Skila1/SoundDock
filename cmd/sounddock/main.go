@@ -132,7 +132,7 @@ func main() {
 	runner.Register("ingest.zip", ing.ZipHandler(srv.ProviderFor))
 	runner.Register("library.migrate", ing.MigrateHandler(srv.ProviderFor))
 	runner.Register("maintenance.retention", retention.Handler(pool))
-	runner.Register("external.playlist.import", external.Handler(pool, box, hooks))
+	runner.Register("external.playlist.import", external.Handler(pool, box, hooks, srv.ScapeX))
 	runner.Register("external.playlist.tick", external.TickHandler(pool, runner.Enqueue))
 	runner.Register("backup.run", func(ctx context.Context, job jobs.Job) error {
 		_, err := bk.Run(ctx)

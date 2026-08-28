@@ -35,6 +35,8 @@ func TestWave1RoutesRegistered(t *testing.T) {
 		"GET /api/v1/radio",
 		"GET /api/v1/playlists/folders",
 		"GET /api/v1/playlists/invite",
+		"POST /api/v1/providers/{provider}/import-all",
+		"POST /api/v1/playlists/{id}/items/{itemID}/youtube",
 		"GET /api/v1/me/history",
 		"GET /api/v1/me/never-played",
 		"GET /api/v1/me/stats",

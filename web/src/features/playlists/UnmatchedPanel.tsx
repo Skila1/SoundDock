@@ -33,7 +33,7 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
   return (
     <section className="mb-8 rounded-xl border border-border bg-surface-1 p-4">
       <h2 className="mb-1 font-semibold">Needs review</h2>
-      <p className="mb-4 text-sm text-muted">{items.length} items are not in your SoundDock library. Playback skips them.</p>
+      <p className="mb-4 text-sm text-muted">{items.length} items are not in your SoundDock library. Playback skips them until they match or download from YouTube.</p>
       <ul className="space-y-3">
         {items.map((it) => (
           <li key={it.id} className="rounded-lg bg-surface-2 p-3">
@@ -46,6 +46,23 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
                   <span className="text-xs tabular-nums text-muted">match_confidence {confidenceLabel(it.match_confidence)}</span>
                 </div>
               </div>
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={async () => {
+                  try {
+                    await api.post(`/api/v1/playlists/${playlistId}/items/${it.id}/youtube`);
+                    toast.success("Downloaded from YouTube");
+                    qc.invalidateQueries({ queryKey: ["playlist", playlistId] });
+                    qc.invalidateQueries({ queryKey: ["unmatched", playlistId] });
+                    qc.invalidateQueries({ queryKey: ["sync-diff", playlistId] });
+                  } catch (err: any) {
+                    toast.error(err?.message || "YouTube fill failed");
+                  }
+                }}
+              >
+                Get from YouTube
+              </Button>
             </div>
             <MatchSearch
               onPick={async (trackId) => {

@@ -66,7 +66,7 @@ export function ConnectedServicesPage() {
     <div className="max-w-2xl">
       <PageHeader
         title="Connected Services"
-        description="Link playlist providers to import and keep playlists in sync. SoundDock never downloads their audio."
+        description="Link Spotify to import playlists. SoundDock matches your library first, then downloads missing songs from YouTube."
       />
       <div className="space-y-3">
         {(q.data || []).map((p) => (
@@ -93,6 +93,18 @@ export function ConnectedServicesPage() {
                     }}
                   >
                     {p.connected ? "Reconnect" : "Connect"}
+                  </Button>
+                )}
+                {p.connected && p.provider === "spotify" && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={async () => {
+                      const r = await api.post<{ count: number }>("/api/v1/providers/spotify/import-all", { mode: "once" });
+                      toast.success(`Queued ${r.count} playlists. Missing songs come from YouTube.`);
+                    }}
+                  >
+                    Import playlists
                   </Button>
                 )}
                 {p.connected && (

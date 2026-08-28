@@ -179,6 +179,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/playlists/{id}/unmatched", s.playlistUnmatched)
 			r.Post("/playlists/{id}/items/{itemID}/match", s.matchExternalItem)
 			r.Delete("/playlists/{id}/items/{itemID}/match", s.matchExternalItem)
+			r.Post("/playlists/{id}/items/{itemID}/youtube", s.youtubeFillExternalItem)
 
 			r.Get("/radio", s.getRadio)
 			r.Get("/radio/seeds", s.radioSeeds)
@@ -190,6 +191,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/providers/{provider}/playlists", s.listProviderPlaylists)
 			r.Get("/providers/{provider}/playlists/{id}", s.getProviderPlaylist)
 			r.With(s.limit(ratelimit.ClassExternal)).Post("/providers/{provider}/playlists/{id}/import", s.importProviderPlaylist)
+			r.With(s.limit(ratelimit.ClassExternal)).Post("/providers/{provider}/import-all", s.importAllProviderPlaylists)
 			r.With(s.limit(ratelimit.ClassExternal)).Post("/providers/import-url", s.importPlaylistURL)
 			r.Post("/favourites", s.setFavourite)
 			r.Get("/favourites", s.listFavourites)

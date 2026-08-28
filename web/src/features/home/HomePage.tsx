@@ -35,9 +35,7 @@ export function HomePage() {
   const layout = useUi((s) => s.libraryLayout);
   const home = useQuery({ queryKey: ["home"], queryFn: () => api.get<any>("/api/v1/home") });
 
-  const recent = useMemo(() => asTracks(home.data?.continue?.length ? home.data.continue : home.data?.recently_added), [home.data]);
-  const added = useMemo(() => asTracks(home.data?.recently_added), [home.data]);
-  const played = useMemo(() => asTracks(home.data?.most_played), [home.data]);
+  const recent = useMemo(() => asTracks(home.data?.continue).slice(0, 15), [home.data]);
 
   if (home.isLoading) {
     return (
@@ -47,16 +45,17 @@ export function HomePage() {
     );
   }
 
-  if (!recent.length && !added.length) {
+  if (!recent.length) {
     return (
       <>
         <EmptyState
           icon={Disc3}
-          title="Your library is empty."
-          description="Upload music or import a file you host. Sign-in is Discord-only."
-          action={{ label: "Upload music", onClick: () => nav("/upload") }}
+          title="Nothing played yet."
+          description="Home only lists the last 15 tracks you actually played. Start from Search or Tracks."
+          action={{ label: "Search", onClick: () => nav("/search") }}
         />
         <div className="mt-4 flex justify-center gap-2">
+          <Button variant="secondary" onClick={() => nav("/tracks")}>Browse tracks</Button>
           <HelpButton variant="secondary" />
           <DiscordServerButton />
         </div>
@@ -64,17 +63,14 @@ export function HomePage() {
     );
   }
 
-  const heading = home.data?.continue?.length ? "Recently played" : "Recently added";
   const playNext = (t: HomeTrack) => add([t.id], true).then(() => toast.success("Playing next"));
 
   return (
     <div>
       <div className="mb-6 flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-3">
-          <h1 className="text-3xl font-semibold">{heading}</h1>
-          {home.data?.continue?.length > 0 && (
-            <Link to="/history" className="text-sm text-muted hover:underline">See all</Link>
-          )}
+          <h1 className="text-3xl font-semibold">Recently played</h1>
+          <Link to="/history" className="text-sm text-muted hover:underline">See all</Link>
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="secondary" onClick={() => nav("/playlists")}>
@@ -84,23 +80,6 @@ export function HomePage() {
         </div>
       </div>
       <TrackSection tracks={recent} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
-      {played.length > 0 && (
-        <>
-          <div className="mb-4 mt-10 flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Most played</h2>
-            <Link to="/stats" className="text-sm text-muted hover:underline">See all</Link>
-          </div>
-          <TrackSection tracks={played} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
-        </>
-      )}
-      {added.length > 0 && home.data?.continue?.length > 0 && (
-        <>
-          <div className="mb-4 mt-10 flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Recently added</h2>
-          </div>
-          <TrackSection tracks={added} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
-        </>
-      )}
     </div>
   );
 }

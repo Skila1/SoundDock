@@ -19,6 +19,9 @@
 - When output is Discord, the web player uses that guild queue (`?target=discord`): pause, resume, seek, and time stay in sync. Resume no longer restarts the track from the beginning.
 - Administration can enable or disable an invited Discord server without a second bot token.
 - Header search is a dropdown from the top bar, not a modal. It shows two library matches and five YouTube matches. Choosing a result adds it to the queue without skipping the current song. YouTube hits download into the library first.
+- Library search requires the real words you typed (title, artist, or album). Weak lookalike matches no longer appear.
+- Home shows only the last 15 tracks you actually played, not the rest of the library.
+- Spotify playlist import creates SoundDock playlists and downloads missing songs from YouTube via ScapeX. Connect Spotify or paste a playlist URL.
 - Autoplay is off unless you turn it on. It queues similar library tracks by artist, album, genre, and decade, then pulls 1 to 20 similar YouTube tracks when the library runs dry.
 - Clear queue keeps the song that is playing. Play on a track while something is already playing adds it to the queue instead of replacing the current song.
 - Help and Discord server buttons open the SoundDock community invite.

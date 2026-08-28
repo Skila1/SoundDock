@@ -11,22 +11,28 @@ import (
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/matcher"
+	"github.com/sounddock/sounddock/internal/scapex"
 	"github.com/sounddock/sounddock/internal/webhooks"
 )
 
 type ImportPayload struct {
-	UserID       uuid.UUID `json:"user_id"`
-	Provider     string    `json:"provider"`
-	ExternalID   string    `json:"external_id"`
-	Mode         string    `json:"mode"`
-	Name         string    `json:"name"`
-	Interval     string    `json:"sync_interval"`
-	Removal      string    `json:"removal_policy"`
-	PlaylistUUID uuid.UUID `json:"sounddock_playlist_id"`
+	UserID       uuid.UUID   `json:"user_id"`
+	Provider     string      `json:"provider"`
+	ExternalID   string      `json:"external_id"`
+	Mode         string      `json:"mode"`
+	Name         string      `json:"name"`
+	Interval     string      `json:"sync_interval"`
+	Removal      string      `json:"removal_policy"`
+	PlaylistUUID uuid.UUID   `json:"sounddock_playlist_id"`
 	LibraryIDs   []uuid.UUID `json:"library_ids"`
+	FillYouTube  *bool       `json:"fill_youtube,omitempty"`
 }
 
-func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus) jobs.Handler {
+func (p ImportPayload) shouldFill() bool {
+	return p.FillYouTube == nil || *p.FillYouTube
+}
+
+func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx *scapex.Client) jobs.Handler {
 	return func(ctx context.Context, job jobs.Job) error {
 		var p ImportPayload
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
@@ -92,7 +98,12 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus) jobs.Han
 		_, _ = pool.Exec(ctx, `DELETE FROM external_playlist_items WHERE external_playlist_id=$1`, epid)
 		matched, unmatched, amb := 0, 0, 0
 		var keepIDs []uuid.UUID
+		total := len(tracks)
+		if total == 0 {
+			total = 1
+		}
 		for i, tr := range tracks {
+			touchJob(ctx, pool, job.ID, (i*90)/total)
 			tr.Provider = p.Provider
 			res := matcher.Match(ctx, pool, p.LibraryIDs, matcher.Query{
 				Provider: p.Provider, ID: tr.ID, Title: tr.Title, Artists: tr.Artists, DurationMS: tr.DurationMS, ISRC: tr.ISRC,
@@ -100,12 +111,21 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus) jobs.Han
 			status := res.Status
 			if status == "possible" {
 				status = "unmatched"
-				unmatched++
 				res.TrackID = nil
 			} else if status == "ambiguous" {
 				amb++
 				res.TrackID = nil
-			} else if res.TrackID != nil && (status == "exact" || status == "high") {
+			}
+			if res.TrackID == nil && p.shouldFill() && sx != nil {
+				tid, ferr := FillTrack(ctx, sx, p.Provider, tr.ID, tr.Title, tr.Artists)
+				if ferr == nil && tid != uuid.Nil {
+					res.TrackID = &tid
+					status = "high"
+					res.Source = "youtube"
+					res.Confidence = 0.9
+				}
+			}
+			if res.TrackID != nil && (status == "exact" || status == "high") {
 				matched++
 				keepIDs = append(keepIDs, *res.TrackID)
 				_, _ = pool.Exec(ctx, `INSERT INTO external_track_mappings (provider, provider_track_id, isrc, sounddock_track_id, mapping_source, confidence)
@@ -113,6 +133,9 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus) jobs.Han
 					p.Provider, tr.ID, tr.ISRC, *res.TrackID, res.Source, res.Confidence)
 			} else {
 				unmatched++
+				if status == "" {
+					status = "unmatched"
+				}
 			}
 			arts := ""
 			if len(tr.Artists) > 0 {
@@ -166,7 +189,7 @@ func TickHandler(pool *pgxpool.Pool, enqueue func(context.Context, string, any) 
 		}
 		defer rows.Close()
 		type row struct {
-			uid, sd                  uuid.UUID
+			uid, sd            uuid.UUID
 			prov, ext, iv, rem string
 		}
 		var list []row
@@ -225,6 +248,16 @@ func parseInterval(s string) time.Duration {
 	default:
 		return 6 * time.Hour
 	}
+}
+
+func touchJob(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, progress int) {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 99 {
+		progress = 99
+	}
+	_, _ = pool.Exec(ctx, `UPDATE jobs SET locked_until=now()+interval '30 minutes', progress=$2, updated_at=now() WHERE id=$1`, id, progress)
 }
 
 func userToken(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box, userID uuid.UUID, provider string, st Settings) (access, extra string, err error) {

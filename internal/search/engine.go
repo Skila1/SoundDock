@@ -102,41 +102,87 @@ func libFilter(libs []uuid.UUID, alias string) (string, []any) {
 	return alias + ` IN (` + strings.Join(ph, ",") + `)`, args
 }
 
+// textMatchSQL requires every significant query token to appear in title, album, or artist.
+// A strong trigram on the full title or artist is allowed for typos. Weak similarity
+// (the old 0.15 cutoff) is not, because it ranked unrelated tracks as hits.
+func textMatchSQL(text, titleCol, albumCol, trackIDCol string, args []any) (string, []any) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "TRUE", args
+	}
+	tokens := SignificantTokens(text)
+	args = append(args, text)
+	textArg := len(args)
+	if len(tokens) == 0 {
+		args = append(args, likeContains(text))
+		n := len(args)
+		return fmt.Sprintf("unaccent(lower(%s)) LIKE unaccent(lower($%d)) ESCAPE '\\\\'", titleCol, n), args
+	}
+	parts := make([]string, 0, len(tokens))
+	for _, tok := range tokens {
+		args = append(args, likeContains(tok))
+		n := len(args)
+		parts = append(parts, fmt.Sprintf(`(
+			unaccent(lower(%s)) LIKE unaccent(lower($%d)) ESCAPE '\\'
+			OR unaccent(lower(coalesce(%s,''))) LIKE unaccent(lower($%d)) ESCAPE '\\'
+			OR EXISTS (
+				SELECT 1 FROM track_artists ta_s JOIN artists ar_s ON ar_s.id=ta_s.artist_id
+				WHERE ta_s.track_id=%s AND unaccent(lower(ar_s.name)) LIKE unaccent(lower($%d)) ESCAPE '\\'
+			)
+		)`, titleCol, n, albumCol, n, trackIDCol, n))
+	}
+	fuzzy := fmt.Sprintf(`similarity(unaccent(lower(%s)), unaccent(lower($%d))) >= 0.4
+		OR word_similarity(unaccent(lower($%d)), unaccent(lower(%s))) >= 0.5
+		OR EXISTS (
+			SELECT 1 FROM track_artists ta_f JOIN artists ar_f ON ar_f.id=ta_f.artist_id
+			WHERE ta_f.track_id=%s AND similarity(unaccent(lower(ar_f.name)), unaccent(lower($%d))) >= 0.45
+		)`, titleCol, textArg, textArg, titleCol, trackIDCol, textArg)
+	return "(" + strings.Join(parts, " AND ") + ") OR (" + fuzzy + ")", args
+}
+
 func (e *Engine) tracks(ctx context.Context, q Query, libs []uuid.UUID, limit int) ([]Hit, error) {
 	lf, args := libFilter(libs, "t.library_id")
-	off := len(args)
 	text := q.Text
 	if q.Title != "" {
 		text = strings.TrimSpace(text + " " + q.Title)
 	}
-	args = append(args, text, "%"+text+"%", limit)
+	textArg := 0
+	if strings.TrimSpace(text) != "" {
+		args = append(args, text)
+		textArg = len(args)
+	}
+	matchSQL, args := textMatchSQL(text, "t.title", "al.title", "t.id", args)
 	artistF := ""
 	if q.Artist != "" {
-		off++
-		args = append(args, "%"+q.Artist+"%")
-		artistF = fmt.Sprintf(" AND EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id WHERE ta.track_id=t.id AND ar.name ILIKE $%d)", len(args))
+		args = append(args, likeContains(q.Artist))
+		artistF = fmt.Sprintf(" AND EXISTS (SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id WHERE ta.track_id=t.id AND unaccent(lower(ar.name)) LIKE unaccent(lower($%d)) ESCAPE '\\')", len(args))
 	}
 	albumF := ""
 	if q.Album != "" {
-		args = append(args, "%"+q.Album+"%")
-		albumF = fmt.Sprintf(" AND al.title ILIKE $%d", len(args))
+		args = append(args, likeContains(q.Album))
+		albumF = fmt.Sprintf(" AND unaccent(lower(al.title)) LIKE unaccent(lower($%d)) ESCAPE '\\'", len(args))
 	}
 	playF, args := playFilterSQL(ctx, q, args)
+	args = append(args, limit)
+	rankSQL := "0"
+	if textArg > 0 {
+		rankSQL = fmt.Sprintf("ts_rank(t.search_vec, websearch_to_tsquery('simple', unaccent($%d))) + similarity(t.title, $%d)", textArg, textArg)
+	}
 	sql := fmt.Sprintf(`
 		SELECT t.id, t.title, coalesce(string_agg(DISTINCT ar.name, ', ') FILTER (WHERE ta.role='primary'), ''),
 		       coalesce(al.title,''), t.duration_ms, coalesce(tf.codec,''), t.explicit, t.year,
-		       ts_rank(t.search_vec, websearch_to_tsquery('simple', unaccent($%d))) + similarity(t.title, $%d) AS score
+		       %s AS score
 		FROM tracks t
 		LEFT JOIN track_artists ta ON ta.track_id=t.id
 		LEFT JOIN artists ar ON ar.id=ta.artist_id
 		LEFT JOIN albums al ON al.id=t.album_id
 		LEFT JOIN LATERAL (SELECT codec FROM track_files WHERE track_id=t.id LIMIT 1) tf ON TRUE
 		WHERE (%s)
-		  AND (t.search_vec @@ websearch_to_tsquery('simple', unaccent($%d)) OR t.title ILIKE $%d OR similarity(t.title, $%d) > 0.15)
+		  AND (%s)
 		  %s %s %s
 		GROUP BY t.id, al.title, tf.codec
 		ORDER BY score DESC
-		LIMIT $%d`, off+1, off+1, lf, off+1, off+2, off+1, artistF, albumF, playF, off+3)
+		LIMIT $%d`, rankSQL, lf, matchSQL, artistF, albumF, playF, len(args))
 	rows, err := e.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
@@ -156,22 +202,46 @@ func (e *Engine) tracks(ctx context.Context, q Query, libs []uuid.UUID, limit in
 
 func (e *Engine) albums(ctx context.Context, q Query, libs []uuid.UUID, limit int) ([]Hit, error) {
 	lf, args := libFilter(libs, "a.library_id")
-	off := len(args)
 	text := q.Text
 	if q.Album != "" {
 		text = q.Album
 	}
-	args = append(args, text, "%"+text+"%", limit)
+	textArg := 0
+	matchSQL := "TRUE"
+	if strings.TrimSpace(text) != "" {
+		args = append(args, text)
+		textArg = len(args)
+		var parts []string
+		for _, tok := range SignificantTokens(text) {
+			args = append(args, likeContains(tok))
+			n := len(args)
+			parts = append(parts, fmt.Sprintf(`(
+				unaccent(lower(a.title)) LIKE unaccent(lower($%d)) ESCAPE '\\'
+				OR EXISTS (
+					SELECT 1 FROM album_artists aa_s JOIN artists ar_s ON ar_s.id=aa_s.artist_id
+					WHERE aa_s.album_id=a.id AND unaccent(lower(ar_s.name)) LIKE unaccent(lower($%d)) ESCAPE '\\'
+				)
+			)`, n, n))
+		}
+		if len(parts) > 0 {
+			matchSQL = "(" + strings.Join(parts, " AND ") + fmt.Sprintf(`) OR similarity(unaccent(lower(a.title)), unaccent(lower($%d))) >= 0.4`, textArg)
+		}
+	}
+	args = append(args, limit)
+	rankSQL := "0"
+	if textArg > 0 {
+		rankSQL = fmt.Sprintf("ts_rank(a.search_vec, websearch_to_tsquery('simple', unaccent($%d))) + similarity(a.title, $%d)", textArg, textArg)
+	}
 	sql := fmt.Sprintf(`
 		SELECT a.id, a.title, coalesce(string_agg(ar.name, ', '), ''), a.year,
-		       ts_rank(a.search_vec, websearch_to_tsquery('simple', unaccent($%d))) + similarity(a.title, $%d)
+		       %s
 		FROM albums a
 		LEFT JOIN album_artists aa ON aa.album_id=a.id
 		LEFT JOIN artists ar ON ar.id=aa.artist_id
-		WHERE (%s) AND (a.search_vec @@ websearch_to_tsquery('simple', unaccent($%d)) OR a.title ILIKE $%d)
+		WHERE (%s) AND (%s)
 		GROUP BY a.id
 		ORDER BY 4 DESC
-		LIMIT $%d`, off+1, off+1, lf, off+1, off+2, off+3)
+		LIMIT $%d`, rankSQL, lf, matchSQL, len(args))
 	rows, err := e.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, err
@@ -193,11 +263,25 @@ func (e *Engine) artists(ctx context.Context, q Query, limit int) ([]Hit, error)
 	if q.Artist != "" {
 		text = q.Artist
 	}
-	rows, err := e.pool.Query(ctx, `
+	if strings.TrimSpace(text) == "" {
+		return nil, nil
+	}
+	args := []any{text}
+	match := "similarity(unaccent(lower(name)), unaccent(lower($1))) >= 0.4"
+	var parts []string
+	for _, tok := range SignificantTokens(text) {
+		args = append(args, likeContains(tok))
+		parts = append(parts, fmt.Sprintf("unaccent(lower(name)) LIKE unaccent(lower($%d)) ESCAPE '\\'", len(args)))
+	}
+	if len(parts) > 0 {
+		match = "(" + strings.Join(parts, " AND ") + ") OR " + match
+	}
+	args = append(args, limit)
+	rows, err := e.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, name, ts_rank(search_vec, websearch_to_tsquery('simple', unaccent($1))) + similarity(name, $1)
 		FROM artists
-		WHERE search_vec @@ websearch_to_tsquery('simple', unaccent($1)) OR name ILIKE $2
-		ORDER BY 3 DESC LIMIT $3`, text, "%"+text+"%", limit)
+		WHERE %s
+		ORDER BY 3 DESC LIMIT $%d`, match, len(args)), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -214,10 +298,25 @@ func (e *Engine) artists(ctx context.Context, q Query, limit int) ([]Hit, error)
 }
 
 func (e *Engine) playlists(ctx context.Context, q Query, limit int) ([]Hit, error) {
-	rows, err := e.pool.Query(ctx, `
+	text := strings.TrimSpace(q.Text)
+	if text == "" {
+		return nil, nil
+	}
+	args := []any{text}
+	match := "similarity(unaccent(lower(name)), unaccent(lower($1))) >= 0.4"
+	var parts []string
+	for _, tok := range SignificantTokens(text) {
+		args = append(args, likeContains(tok))
+		parts = append(parts, fmt.Sprintf("unaccent(lower(name)) LIKE unaccent(lower($%d)) ESCAPE '\\'", len(args)))
+	}
+	if len(parts) > 0 {
+		match = "(" + strings.Join(parts, " AND ") + ") OR " + match
+	}
+	args = append(args, limit)
+	rows, err := e.pool.Query(ctx, fmt.Sprintf(`
 		SELECT id, name FROM playlists
-		WHERE search_vec @@ websearch_to_tsquery('simple', unaccent($1)) OR name ILIKE $2
-		ORDER BY similarity(name,$1) DESC LIMIT $3`, q.Text, "%"+q.Text+"%", limit)
+		WHERE %s
+		ORDER BY similarity(name,$1) DESC LIMIT $%d`, match, len(args)), args...)
 	if err != nil {
 		return nil, err
 	}

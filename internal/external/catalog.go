@@ -13,31 +13,38 @@ import (
 func ListPlaylists(ctx context.Context, provider, token, extraKey string) ([]Playlist, error) {
 	switch provider {
 	case "spotify":
-		var raw struct {
-			Items []struct {
-				ID, Name, Description string
-				SnapshotID            string `json:"snapshot_id"`
-				Images                []struct{ URL string }
-				Owner                 struct{ DisplayName string `json:"display_name"` }
-				Tracks                struct{ Total int }
+		next := "https://api.spotify.com/v1/me/playlists?limit=50"
+		out := []Playlist{}
+		for next != "" {
+			var raw struct {
+				Next  string
+				Items []struct {
+					ID, Name, Description string
+					SnapshotID            string `json:"snapshot_id"`
+					Images                []struct{ URL string }
+					Owner                 struct {
+						DisplayName string `json:"display_name"`
+					}
+					Tracks struct{ Total int }
+				}
 			}
-		}
-		if err := httpJSON(ctx, "GET", "https://api.spotify.com/v1/me/playlists?limit=50", token, nil, &raw); err != nil {
-			return nil, err
-		}
-		out := make([]Playlist, 0, len(raw.Items))
-		for _, it := range raw.Items {
-			p := Playlist{ID: it.ID, Name: it.Name, Description: it.Description, Owner: it.Owner.DisplayName, TrackCount: it.Tracks.Total, Snapshot: it.SnapshotID}
-			if len(it.Images) > 0 {
-				p.Artwork = it.Images[0].URL
+			if err := httpJSON(ctx, "GET", next, token, nil, &raw); err != nil {
+				return nil, err
 			}
-			out = append(out, p)
+			for _, it := range raw.Items {
+				p := Playlist{ID: it.ID, Name: it.Name, Description: it.Description, Owner: it.Owner.DisplayName, TrackCount: it.Tracks.Total, Snapshot: it.SnapshotID}
+				if len(it.Images) > 0 {
+					p.Artwork = it.Images[0].URL
+				}
+				out = append(out, p)
+			}
+			next = raw.Next
 		}
 		return out, nil
 	case "youtube":
 		var raw struct {
 			Items []struct {
-				ID string
+				ID      string
 				Snippet struct {
 					Title, Description, ChannelTitle string
 					Thumbnails                       map[string]struct{ URL string }
@@ -106,7 +113,9 @@ func GetPlaylistItems(ctx context.Context, provider, token, extra, playlistID st
 		var pl struct {
 			Name, Description, SnapshotID string
 			Images                        []struct{ URL string }
-			Owner                         struct{ DisplayName string `json:"display_name"` }
+			Owner                         struct {
+				DisplayName string `json:"display_name"`
+			}
 		}
 		if err := httpJSON(ctx, "GET", "https://api.spotify.com/v1/playlists/"+url.PathEscape(playlistID), token, nil, &pl); err != nil {
 			return meta, nil, err
@@ -139,6 +148,9 @@ func GetPlaylistItems(ctx context.Context, provider, token, extra, playlistID st
 			}
 			for _, it := range page.Items {
 				tr := it.Track
+				if tr.ID == "" || tr.Name == "" {
+					continue
+				}
 				isrc := tr.ExternalIDs.ISRC
 				if isrc == "" {
 					isrc = tr.ISRC
@@ -241,12 +253,12 @@ func GetPlaylistItems(ctx context.Context, provider, token, extra, playlistID st
 			Data []struct {
 				ID         string
 				Attributes struct {
-					Name       string
-					ArtistName string
-					AlbumName  string
+					Name             string
+					ArtistName       string
+					AlbumName        string
 					DurationInMillis int
-					Isrc       string
-					Artwork    struct{ URL string }
+					Isrc             string
+					Artwork          struct{ URL string }
 				}
 			}
 		}

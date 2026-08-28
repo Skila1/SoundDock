@@ -675,7 +675,7 @@ export function AdminExternalProviders() {
   const q = useQuery({ queryKey: ["ext-providers"], queryFn: () => api.get<any[]>("/api/v1/admin/integrations/external-providers") });
   return (
     <div>
-      <PageHeader title="External playlist providers" description="OAuth and MusicKit credentials are write-only. SoundDock imports playlist metadata only." />
+      <PageHeader title="External playlist providers" description="OAuth credentials are write-only. Playlist import matches your library, then downloads missing tracks from YouTube." />
       <div className="space-y-4">
         {(q.data || []).map((p) => (
           <ProviderCard key={p.provider} p={p} onSaved={() => qc.invalidateQueries({ queryKey: ["ext-providers"] })} />

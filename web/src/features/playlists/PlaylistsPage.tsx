@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/misc";
 import { EmptyState, PageHeader } from "@/components/ui/empty";
 import { toast } from "sonner";
 import { usePlayer } from "@/stores/player";
-import type { PlaylistFolder, PlaylistListItem, RadioResponse } from "./types";
+import type { PlaylistFolder, PlaylistListItem, ProviderPlaylist, RadioResponse } from "./types";
 
 const tabs = [
   { id: "all", label: "SoundDock" },
@@ -25,8 +25,6 @@ const tabs = [
 export function PlaylistsPage() {
   const qc = useQueryClient();
   const play = usePlayer((s) => s.playTracks);
-  const q = useQuery({ queryKey: ["playlists"], queryFn: () => api.get<PlaylistListItem[]>("/api/v1/playlists") });
-  const folders = useQuery({ queryKey: ["playlist-folders"], queryFn: () => api.get<PlaylistFolder[]>("/api/v1/playlists/folders") });
   const [open, setOpen] = useState(false);
   const [imp, setImp] = useState(false);
   const [smart, setSmart] = useState(false);
@@ -41,6 +39,16 @@ export function PlaylistsPage() {
   const [genre, setGenre] = useState("");
   const [ymin, setYmin] = useState("");
   const [ymax, setYmax] = useState("");
+  const [busyId, setBusyId] = useState("");
+  const q = useQuery({ queryKey: ["playlists"], queryFn: () => api.get<PlaylistListItem[]>("/api/v1/playlists") });
+  const folders = useQuery({ queryKey: ["playlist-folders"], queryFn: () => api.get<PlaylistFolder[]>("/api/v1/playlists/folders") });
+  const providers = useQuery({ queryKey: ["me-providers"], queryFn: () => api.get<{ provider: string; connected?: boolean; enabled?: boolean }[]>("/api/v1/me/providers") });
+  const spotifyOk = (providers.data || []).some((p) => p.provider === "spotify" && p.connected);
+  const remote = useQuery({
+    queryKey: ["provider-playlists", "spotify"],
+    enabled: tab === "spotify" && spotifyOk,
+    queryFn: () => api.get<ProviderPlaylist[]>("/api/v1/providers/spotify/playlists")
+  });
 
   const list = useMemo(() => {
     return (q.data || []).filter((p) => {
@@ -83,6 +91,26 @@ export function PlaylistsPage() {
             <Button variant="secondary" onClick={() => { location.href = "/radio"; }}><RadioIcon /> Radio</Button>
             <Button variant="secondary" onClick={quickMix}>Quick Mix</Button>
             <Button variant="secondary" onClick={() => setImp(true)}>Import from URL</Button>
+            {tab === "spotify" && spotifyOk && (
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  setBusyId("all");
+                  try {
+                    const r = await api.post<{ count: number }>("/api/v1/providers/spotify/import-all", { mode: "once" });
+                    toast.success(`Queued ${r.count} Spotify playlists. Missing songs download from YouTube.`);
+                    qc.invalidateQueries({ queryKey: ["playlists"] });
+                  } catch (err: any) {
+                    toast.error(err?.message || "Could not import Spotify playlists");
+                  } finally {
+                    setBusyId("");
+                  }
+                }}
+                disabled={busyId === "all"}
+              >
+                {busyId === "all" ? "Importing…" : "Import all from Spotify"}
+              </Button>
+            )}
             <Button variant="secondary" onClick={() => setSmart(true)}>Smart playlist</Button>
             <Button onClick={() => setOpen(true)}>New playlist</Button>
           </div>
@@ -107,7 +135,46 @@ export function PlaylistsPage() {
           </button>
         ))}
       </div>
-      {!q.isLoading && !list.length && (
+      {tab === "spotify" && !spotifyOk && (
+        <p className="mb-5 text-sm text-muted">
+          Connect Spotify in <a className="text-accent underline" href="/settings/connected">Connected Services</a>, or paste a playlist URL. SoundDock creates the playlist and pulls missing songs from YouTube.
+        </p>
+      )}
+      {tab === "spotify" && spotifyOk && (remote.data || []).length > 0 && (
+        <section className="mb-8">
+          <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-subtle">Your Spotify playlists</h2>
+          <ul className="divide-y divide-border rounded-xl border border-border bg-surface-1">
+            {(remote.data || []).map((pl) => (
+              <li key={pl.id} className="flex items-center justify-between gap-3 px-4 py-3">
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{pl.name}</div>
+                  <div className="text-xs text-muted">{pl.track_count ?? 0} tracks{pl.owner ? ` · ${pl.owner}` : ""}</div>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={busyId === pl.id}
+                  onClick={async () => {
+                    setBusyId(pl.id);
+                    try {
+                      await api.post(`/api/v1/providers/spotify/playlists/${pl.id}/import`, { mode: "once", name: pl.name });
+                      toast.success("Import queued. Matching your library, then YouTube");
+                      qc.invalidateQueries({ queryKey: ["playlists"] });
+                    } catch (err: any) {
+                      toast.error(err?.message || "Import failed");
+                    } finally {
+                      setBusyId("");
+                    }
+                  }}
+                >
+                  {busyId === pl.id ? "Queued…" : "Import"}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {!q.isLoading && !list.length && tab !== "spotify" && (
         <EmptyState
           icon={ListMusic}
           title={tab === "all" ? "Create your first playlist." : `No ${tabs.find((x) => x.id === tab)?.label} playlists yet.`}
@@ -195,13 +262,13 @@ export function PlaylistsPage() {
             onSubmit={async (e) => {
               e.preventDefault();
               await api.post("/api/v1/providers/import-url", { url, mode, sync_interval: interval, removal_policy: "mirror" });
-              toast.success("Import queued. Matching against your SoundDock library");
+              toast.success("Import queued. Matching your library, then downloading missing songs from YouTube");
               setImp(false);
               setUrl("");
               qc.invalidateQueries({ queryKey: ["playlists"] });
             }}
           >
-            <Field label="Playlist URL" hint="Spotify, YouTube, SoundCloud, or Apple Music playlist. This does not download audio.">
+            <Field label="Playlist URL" hint="Spotify, YouTube, SoundCloud, or Apple Music. Creates a SoundDock playlist and fetches missing tracks from YouTube via ScapeX.">
               <Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://open.spotify.com/playlist/…" required />
             </Field>
             <Field label="Mode">

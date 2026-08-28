@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -246,6 +247,7 @@ func (s *Server) importProviderPlaylist(w http.ResponseWriter, r *http.Request) 
 	extID := chi.URLParam(r, "id")
 	var body struct {
 		Mode, Name, Interval, Removal string
+		FillYouTube                   *bool `json:"fill_youtube"`
 	}
 	_ = decodeJSON(r, &body)
 	if body.Mode == "" {
@@ -254,6 +256,7 @@ func (s *Server) importProviderPlaylist(w http.ResponseWriter, r *http.Request) 
 	jid, err := s.Jobs.Enqueue(r.Context(), "external.playlist.import", external.ImportPayload{
 		UserID: u.ID, Provider: prov, ExternalID: extID, Mode: body.Mode, Name: body.Name,
 		Interval: body.Interval, Removal: body.Removal, LibraryIDs: s.libraryIDs(r.Context(), u),
+		FillYouTube: body.FillYouTube,
 	})
 	if err != nil {
 		writeErr(w, 500, "job", err.Error())
@@ -273,6 +276,7 @@ func (s *Server) importPlaylistURL(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		URL, Mode, Name, Interval, Removal string
+		FillYouTube                        *bool `json:"fill_youtube"`
 	}
 	_ = decodeJSON(r, &body)
 	ref, ok := external.ParsePlaylistURL(body.URL)
@@ -286,12 +290,62 @@ func (s *Server) importPlaylistURL(w http.ResponseWriter, r *http.Request) {
 	jid, err := s.Jobs.Enqueue(r.Context(), "external.playlist.import", external.ImportPayload{
 		UserID: u.ID, Provider: ref.Provider, ExternalID: ref.ID, Mode: body.Mode, Name: body.Name,
 		Interval: body.Interval, Removal: body.Removal, LibraryIDs: s.libraryIDs(r.Context(), u),
+		FillYouTube: body.FillYouTube,
 	})
 	if err != nil {
 		writeErr(w, 500, "job", err.Error())
 		return
 	}
 	writeJSON(w, 202, map[string]any{"job_id": jid, "provider": ref.Provider, "external_id": ref.ID})
+}
+
+func (s *Server) importAllProviderPlaylists(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
+	if !auth.HasPerm(u, "playlists.external_import") {
+		writeErr(w, 403, "forbidden", "not permitted")
+		return
+	}
+	prov := chi.URLParam(r, "provider")
+	st, err := external.LoadSettings(r.Context(), s.Pool, s.Box, prov)
+	if err != nil || !st.Enabled {
+		writeErr(w, 400, "disabled", "provider disabled")
+		return
+	}
+	access, extra, err := s.accountAccess(r, u.ID, prov, st)
+	if err != nil {
+		writeErr(w, 400, "not_connected", "connect this provider first")
+		return
+	}
+	var body struct {
+		Mode, Interval, Removal string
+		FillYouTube             *bool `json:"fill_youtube"`
+	}
+	_ = decodeJSON(r, &body)
+	if body.Mode == "" {
+		body.Mode = "once"
+	}
+	list, err := external.ListPlaylists(r.Context(), prov, access, extra)
+	if err != nil {
+		writeErr(w, 502, "provider", err.Error())
+		return
+	}
+	libs := s.libraryIDs(r.Context(), u)
+	ids := make([]uuid.UUID, 0, len(list))
+	for _, pl := range list {
+		if pl.ID == "" {
+			continue
+		}
+		jid, err := s.Jobs.Enqueue(r.Context(), "external.playlist.import", external.ImportPayload{
+			UserID: u.ID, Provider: prov, ExternalID: pl.ID, Mode: body.Mode, Name: pl.Name,
+			Interval: body.Interval, Removal: body.Removal, LibraryIDs: libs, FillYouTube: body.FillYouTube,
+		})
+		if err != nil {
+			writeErr(w, 500, "job", err.Error())
+			return
+		}
+		ids = append(ids, jid)
+	}
+	writeJSON(w, 202, map[string]any{"count": len(ids), "job_ids": ids})
 }
 
 func (s *Server) playlistExternalSync(w http.ResponseWriter, r *http.Request) {
@@ -380,6 +434,54 @@ func (s *Server) matchExternalItem(w http.ResponseWriter, r *http.Request) {
 		s.Hooks.Emit(r.Context(), "external.track.matched", map[string]any{"playlist_id": pid, "track_id": body.TrackID})
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) youtubeFillExternalItem(w http.ResponseWriter, r *http.Request) {
+	pid, _ := uuid.Parse(chi.URLParam(r, "id"))
+	iid, _ := uuid.Parse(chi.URLParam(r, "itemID"))
+	u := currentUser(r)
+	if !auth.HasPerm(u, "playlists.external_import") {
+		writeErr(w, 403, "forbidden", "not permitted")
+		return
+	}
+	if s.ScapeX == nil {
+		writeErr(w, 502, "scapex", "ScapeX is not running")
+		return
+	}
+	var prov, extID, title, arts string
+	err := s.Pool.QueryRow(r.Context(), `
+		SELECT p.provider, i.provider_track_id, i.title, coalesce(i.artists,'')
+		FROM external_playlist_items i JOIN external_playlists p ON p.id=i.external_playlist_id
+		WHERE i.id=$1 AND p.sounddock_playlist_id=$2 AND p.user_id=$3 AND i.mapped_track_id IS NULL`, iid, pid, u.ID).
+		Scan(&prov, &extID, &title, &arts)
+	if err != nil {
+		writeErr(w, 404, "not_found", "item not found")
+		return
+	}
+	var artists []string
+	for _, a := range strings.Split(arts, ",") {
+		a = strings.TrimSpace(a)
+		if a != "" {
+			artists = append(artists, a)
+		}
+	}
+	tid, err := external.FillTrack(r.Context(), s.ScapeX, prov, extID, title, artists)
+	if err != nil {
+		writeErr(w, 502, "youtube", err.Error())
+		return
+	}
+	if tid == uuid.Nil {
+		writeErr(w, 404, "not_found", "no matching YouTube track")
+		return
+	}
+	_, _ = s.Pool.Exec(r.Context(), `UPDATE external_playlist_items SET mapped_track_id=$2, match_status='high', match_confidence=0.9 WHERE id=$1`, iid, tid)
+	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO external_track_mappings (provider, provider_track_id, sounddock_track_id, mapping_source, confidence) VALUES ($1,$2,$3,'youtube',0.9)
+		ON CONFLICT (provider, provider_track_id) DO UPDATE SET sounddock_track_id=EXCLUDED.sounddock_track_id, mapping_source='youtube'`,
+		prov, extID, tid)
+	var max int
+	_ = s.Pool.QueryRow(r.Context(), `SELECT coalesce(max(position),-1) FROM playlist_entries WHERE playlist_id=$1`, pid).Scan(&max)
+	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO playlist_entries (playlist_id, track_id, position, added_by) SELECT $1,$2,$3,$4 WHERE NOT EXISTS (SELECT 1 FROM playlist_entries WHERE playlist_id=$1 AND track_id=$2)`, pid, tid, max+1, u.ID)
+	writeJSON(w, 200, map[string]any{"ok": true, "track_id": tid})
 }
 
 func (s *Server) adminExternalProviders(w http.ResponseWriter, r *http.Request) {

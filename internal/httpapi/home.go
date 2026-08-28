@@ -43,71 +43,16 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, scanMaps(rows, "track_id", "played_at", "duration_ms", "source"))
 }
 
-const homeTrackSQL = `
-		SELECT t.id, t.title, t.duration_ms, t.album_id, coalesce(al.title,''),
-			coalesce((SELECT string_agg(ar.name, ', ' ORDER BY ta.position)
-				FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
-				WHERE ta.track_id=t.id AND ta.role='primary'),'')
-		FROM tracks t LEFT JOIN albums al ON al.id=t.album_id `
-
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
-	libs := s.libraryIDs(r.Context(), u)
-	recent, err := s.Pool.Query(r.Context(), homeTrackSQL+` WHERE t.library_id = ANY($1) ORDER BY t.created_at DESC LIMIT 48`, libs)
-	if err != nil {
-		writeErr(w, 500, "home", err.Error())
-		return
-	}
-	defer recent.Close()
-	played, err := s.Pool.Query(r.Context(), `
-		SELECT t.id, t.title, t.duration_ms, t.album_id, coalesce(al.title,''),
-			coalesce((SELECT string_agg(ar.name, ', ' ORDER BY ta.position)
-				FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
-				WHERE ta.track_id=t.id AND ta.role='primary'),''), pc.count
-		FROM play_counts pc JOIN tracks t ON t.id=pc.track_id
-		LEFT JOIN albums al ON al.id=t.album_id
-		WHERE pc.user_id=$1 AND pc.count > 0
-		ORDER BY pc.count DESC, pc.last_played_at DESC NULLS LAST
-		LIMIT 48`, u.ID)
-	if err != nil {
-		writeErr(w, 500, "home", err.Error())
-		return
-	}
-	defer played.Close()
-	cont := s.homeContinue(r, u)
 	writeJSON(w, 200, map[string]any{
-		"recently_added": scanMaps(recent, "id", "title", "duration_ms", "album_id", "album", "artist"),
-		"most_played":    scanMaps(played, "id", "title", "duration_ms", "album_id", "album", "artist", "count"),
-		"continue":       cont,
+		"continue":       s.homeContinue(r, u),
+		"recently_added": []any{},
+		"most_played":    []any{},
 	})
 }
 
 func (s *Server) homeContinue(r *http.Request, u *auth.User) []map[string]any {
-	seen := map[uuid.UUID]bool{}
-	var out []map[string]any
-	sess, err := s.Pool.Query(r.Context(), `
-		SELECT t.id, t.title, t.duration_ms, t.album_id, coalesce(al.title,''),
-			coalesce((SELECT string_agg(ar.name, ', ' ORDER BY ta.position)
-				FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
-				WHERE ta.track_id=t.id AND ta.role='primary'),''),
-			s.position_ms
-		FROM playback_sessions s
-		JOIN tracks t ON t.id=s.current_track_id
-		LEFT JOIN albums al ON al.id=t.album_id
-		WHERE s.user_id=$1 AND s.kind='web_device'
-			AND s.status IN ('playing','paused')
-			AND s.current_track_id IS NOT NULL AND s.position_ms > 0
-		ORDER BY s.updated_at DESC
-		LIMIT 24`, u.ID)
-	if err == nil {
-		defer sess.Close()
-		for _, row := range scanMaps(sess, "id", "title", "duration_ms", "album_id", "album", "artist", "position_ms") {
-			if id, err := uuid.Parse(asString(row["id"])); err == nil {
-				seen[id] = true
-			}
-			out = append(out, row)
-		}
-	}
 	hist, err := s.Pool.Query(r.Context(), `
 		SELECT id, title, duration_ms, album_id, album, artist FROM (
 			SELECT DISTINCT ON (h.track_id) t.id, t.title, t.duration_ms, t.album_id, coalesce(al.title,'') AS album,
@@ -119,23 +64,12 @@ func (s *Server) homeContinue(r *http.Request, u *auth.User) []map[string]any {
 			LEFT JOIN albums al ON al.id=t.album_id
 			WHERE h.user_id=$1
 			ORDER BY h.track_id, h.played_at DESC
-		) x ORDER BY played_at DESC LIMIT 48`, u.ID)
-	if err == nil {
-		defer hist.Close()
-		for _, row := range scanMaps(hist, "id", "title", "duration_ms", "album_id", "album", "artist") {
-			id, err := uuid.Parse(asString(row["id"]))
-			if err == nil && seen[id] {
-				continue
-			}
-			if err == nil {
-				seen[id] = true
-			}
-			out = append(out, row)
-			if len(out) >= 48 {
-				break
-			}
-		}
+		) x ORDER BY played_at DESC LIMIT 15`, u.ID)
+	if err != nil {
+		return []map[string]any{}
 	}
+	defer hist.Close()
+	out := scanMaps(hist, "id", "title", "duration_ms", "album_id", "album", "artist")
 	if out == nil {
 		out = []map[string]any{}
 	}
