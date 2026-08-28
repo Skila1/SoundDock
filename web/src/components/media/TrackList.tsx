@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Artwork } from "./Artwork";
 import { Button } from "@/components/ui/button";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -199,6 +200,10 @@ export function TrackList({
     setPlOpen(true);
   };
 
+  const stopRow = (e: { stopPropagation: () => void }) => {
+    e.stopPropagation();
+  };
+
   const applyBulk = async () => {
     const ids = [...selected];
     if (!ids.length) return;
@@ -227,7 +232,7 @@ export function TrackList({
           onDragStart={(e) => onDragStart(e, t)}
           className={cn(
             "group grid cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface-2",
-            showAlbum ? "grid-cols-[32px_1fr_minmax(0,1fr)_64px_40px]" : "grid-cols-[32px_1fr_64px_40px]",
+            showAlbum ? "grid-cols-[32px_minmax(0,1fr)_auto_auto] md:grid-cols-[32px_minmax(0,1fr)_minmax(0,1fr)_auto_auto]" : "grid-cols-[32px_minmax(0,1fr)_auto_auto]",
             currentId === t.id && "text-accent",
             selected.has(t.id) && "bg-surface-2"
           )}
@@ -236,7 +241,17 @@ export function TrackList({
         >
           <div className="relative text-center text-xs text-subtle">
             <span className="group-hover:hidden">{t.track_number || i + 1}</span>
-            <button className="hidden w-full justify-center group-hover:flex" onClick={() => onPlay(i)} aria-label="Play">
+            <button
+              type="button"
+              className="hidden w-full justify-center group-hover:flex"
+              onPointerDown={stopRow}
+              onDoubleClick={stopRow}
+              onClick={(e) => {
+                e.stopPropagation();
+                onPlay(i);
+              }}
+              aria-label="Play"
+            >
               <Play className="h-3.5 w-3.5 fill-current" />
             </button>
           </div>
@@ -249,7 +264,7 @@ export function TrackList({
                 {t.source === "youtube" ? (
                   <span className="truncate text-sm font-medium">{t.title}</span>
                 ) : (
-                  <Link to={`/tracks/${t.id}`} className="truncate text-sm font-medium hover:underline" onClick={(e) => e.stopPropagation()}>
+                  <Link to={`/tracks/${t.id}`} className="truncate text-sm font-medium hover:underline" onClick={stopRow} onDoubleClick={stopRow}>
                     {t.title}
                   </Link>
                 )}
@@ -262,18 +277,69 @@ export function TrackList({
             </div>
           </div>
           {showAlbum && (
-            <Link to={t.album_id ? `/albums/${t.album_id}` : "#"} className="hidden truncate text-sm text-muted hover:underline md:block">
+            <Link
+              to={t.album_id ? `/albums/${t.album_id}` : "#"}
+              className="hidden truncate text-sm text-muted hover:underline md:block"
+              onClick={stopRow}
+              onDoubleClick={stopRow}
+            >
               {t.album}
             </Link>
           )}
-          <div className="text-right text-xs text-subtle">{formatDuration(t.duration_ms)}</div>
-          <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100">
-            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => doFav(t)} aria-label="Favourite">
+          <div className="w-12 text-right text-xs text-subtle">{formatDuration(t.duration_ms)}</div>
+          <div
+            className="relative z-10 flex shrink-0 justify-end gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
+            onPointerDown={stopRow}
+            onClick={stopRow}
+            onDoubleClick={stopRow}
+          >
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8"
+              onClick={(e) => {
+                e.stopPropagation();
+                doFav(t);
+              }}
+              aria-label="Favourite"
+            >
               <Heart className={cn("h-3.5 w-3.5", favSet.has(t.id) && "fill-current text-accent")} />
             </Button>
-            <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="More">
-              <MoreHorizontal className="h-3.5 w-3.5" />
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="More">
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" onClick={stopRow}>
+                <DropdownMenuItem onSelect={() => onPlay(i)}>Play</DropdownMenuItem>
+                {onNext && <DropdownMenuItem onSelect={() => onNext(t)}>Play next</DropdownMenuItem>}
+                {onQueue && <DropdownMenuItem onSelect={() => onQueue(t)}>Add to queue</DropdownMenuItem>}
+                <DropdownMenuItem onSelect={() => doFav(t)}>{favSet.has(t.id) ? "Unfavourite" : "Favourite"}</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => openPlaylist(t)}>Add to playlist</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => navigate(`/tracks/${t.id}`)}>Go to track info</DropdownMenuItem>
+                {admin && t.source !== "youtube" && (
+                  <DropdownMenuItem
+                    onSelect={() => {
+                      setSelected(new Set(targetIds(t)));
+                      setDelOpen(true);
+                    }}
+                  >
+                    Delete
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuItem
+                  onSelect={() => {
+                    targetIds(t).forEach((id) => {
+                      const tr = tracks.find((x) => x.id === id) || t;
+                      downloadTrack(tr);
+                    });
+                  }}
+                >
+                  Download
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
       </ContextMenuTrigger>

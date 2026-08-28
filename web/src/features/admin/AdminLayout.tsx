@@ -56,8 +56,8 @@ export function AdminLayout() {
           {groups.map((g) => (
             <div key={g.id} className="min-w-max lg:min-w-0">
               <div className="mb-1 mt-3 px-3 first:mt-0">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-subtle">{g.label}</div>
-                <p className="hidden text-[11px] text-muted lg:block">{g.hint}</p>
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-accent">{g.label}</div>
+                <p className="hidden text-[11px] text-accent/70 lg:block">{g.hint}</p>
               </div>
               {g.links.map(([to, label]) => (
                 <NavLink
