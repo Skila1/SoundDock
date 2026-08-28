@@ -149,6 +149,9 @@ func (s *Server) patchTrackMetadata(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "id")
 		return
 	}
+	if !s.requireTrackLibraryWrite(w, r, id) {
+		return
+	}
 	var body trackMetaBody
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, 400, "invalid", err.Error())
@@ -261,6 +264,11 @@ func (s *Server) bulkTrackMetadata(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
+	for _, id := range body.IDs {
+		if !s.requireTrackLibraryWrite(w, r, id) {
+			return
+		}
+	}
 	meta := trackMetaBody{Genre: body.Genre, Year: body.Year, Explicit: body.Explicit, DiscNumber: body.DiscNumber, TrackNumber: body.TrackNumber, WriteBack: body.WriteBack}
 	if s.Jobs != nil && len(body.IDs) > 0 {
 		jid, err := s.Jobs.Enqueue(r.Context(), "tracks.metadata", tracksMetaPayload{
@@ -303,6 +311,9 @@ func (s *Server) putTrackLock(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
 		writeErr(w, 400, "invalid", "id")
+		return
+	}
+	if !s.requireTrackLibraryWrite(w, r, id) {
 		return
 	}
 	var body struct {
@@ -406,6 +417,9 @@ func (s *Server) postTrackArtwork(w http.ResponseWriter, r *http.Request) {
 	var albumID *uuid.UUID
 	if err := s.Pool.QueryRow(r.Context(), `SELECT album_id FROM tracks WHERE id=$1`, id).Scan(&albumID); err != nil {
 		writeErr(w, 404, "not_found", "track not found")
+		return
+	}
+	if !s.requireTrackLibraryWrite(w, r, id) {
 		return
 	}
 	if albumID != nil {

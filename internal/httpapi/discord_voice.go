@@ -9,12 +9,15 @@ import (
 	"github.com/google/uuid"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
 	discordx "github.com/sounddock/sounddock/internal/discord"
+	"github.com/sounddock/sounddock/internal/playback"
 )
 
 var (
 	errNotInVoice    = errors.New("not in a voice channel")
 	errGuildDisabled = errors.New("this Discord server is disabled")
 )
+
+const pendingHTTPRendererID = "pending-http"
 
 // MountP7 registers Discord voice-output and scrobble routes on an authenticated /api/v1 router.
 func (s *Server) MountP7(r chi.Router) {
@@ -97,16 +100,40 @@ func (s *Server) findUserVoice(r *http.Request) (guildID, channelID string, ok b
 	return g, c, true
 }
 
-func (s *Server) discordPlaySession(r *http.Request) (uuid.UUID, error) {
-	g, _, ok := s.findUserVoice(r)
-	if !ok {
-		return uuid.Nil, errNotInVoice
+// attachedBoundSession returns runtime.session_id when the caller has a verified
+// Discord identity and is in the bot's bound voice channel. Does not copy queues.
+func (s *Server) attachedBoundSession(r *http.Request) (uuid.UUID, bool) {
+	did := s.discordUserID(r)
+	if did == "" {
+		return uuid.Nil, false
 	}
-	if !s.guildPlaybackEnabled(r.Context(), g) {
-		return uuid.Nil, errGuildDisabled
+	guildID, channelID := "", ""
+	if bot := discordx.Live(); bot != nil {
+		if g, c, found := bot.VoiceOfUser(did); found {
+			guildID, channelID = g, c
+		}
 	}
-	u := currentUser(r)
-	return s.Play.Session(r.Context(), "discord_guild", g, &u.ID)
+	if channelID == "" {
+		_ = s.Pool.QueryRow(r.Context(), `
+			SELECT guild_id, channel_id FROM discord_user_voice
+			WHERE discord_user_id=$1 AND channel_id IS NOT NULL AND channel_id <> ''
+			ORDER BY updated_at DESC LIMIT 1`, did).Scan(&guildID, &channelID)
+	}
+	if guildID == "" || channelID == "" {
+		return uuid.Nil, false
+	}
+	var sid uuid.UUID
+	var runtimeCh *string
+	err := s.Pool.QueryRow(r.Context(), `
+		SELECT session_id, voice_channel_id FROM discord_voice_runtime
+		WHERE guild_id=$1 AND session_id IS NOT NULL`, guildID).Scan(&sid, &runtimeCh)
+	if err != nil || sid == uuid.Nil {
+		return uuid.Nil, false
+	}
+	if runtimeCh == nil || *runtimeCh == "" || *runtimeCh != channelID {
+		return uuid.Nil, false
+	}
+	return sid, true
 }
 
 func (s *Server) guildPlaybackEnabled(ctx context.Context, guildID string) bool {
@@ -119,47 +146,11 @@ func (s *Server) guildPlaybackEnabled(ctx context.Context, guildID string) bool 
 }
 
 func (s *Server) discordJoin(w http.ResponseWriter, r *http.Request) {
-	g, c, ok := s.findUserVoice(r)
-	if !ok {
-		writeErr(w, 409, "not_in_voice", "not in a voice channel")
-		return
-	}
-	if err := s.ensureDiscordJoin(r, g, c); err != nil {
-		if errors.Is(err, errGuildDisabled) {
-			writeErr(w, 403, "guild_disabled", err.Error())
-			return
-		}
-		writeErr(w, 500, "voice", err.Error())
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "guild_id": g, "channel_id": c})
-}
-
-func (s *Server) ensureDiscordJoin(r *http.Request, guildID, channelID string) error {
-	ctx := r.Context()
-	if !s.guildPlaybackEnabled(ctx, guildID) {
-		return errGuildDisabled
-	}
-	_, _ = s.Pool.Exec(ctx, `INSERT INTO discord_guilds (id) VALUES ($1) ON CONFLICT DO NOTHING`, guildID)
-	sid, err := s.Play.Session(ctx, "discord_guild", guildID, &currentUser(r).ID)
-	if err != nil {
-		return err
-	}
-	if bot := discordx.Live(); bot != nil {
-		return bot.JoinChannel(ctx, guildID, channelID)
-	}
-	_, _ = s.Pool.Exec(ctx, `
-		INSERT INTO discord_voice_runtime (guild_id, voice_channel_id, session_id, connected, last_disconnect_reason)
-		VALUES ($1,$2,$3,false,'pending_join')
-		ON CONFLICT (guild_id) DO UPDATE SET voice_channel_id=$2, session_id=$3, connected=false, last_disconnect_reason='pending_join'`,
-		guildID, channelID, sid)
-	return nil
-}
-
-func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TrackIDs []string `json:"track_ids"`
-		Start    int      `json:"start"`
+		ExpectedBindingRevision int64  `json:"expected_binding_revision"`
+		RendererID              string `json:"renderer_id"`
+		RendererGeneration      int64  `json:"renderer_generation"`
+		DeviceID                string `json:"device_id"`
 	}
 	_ = decodeJSON(r, &body)
 	g, c, ok := s.findUserVoice(r)
@@ -167,30 +158,89 @@ func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 409, "not_in_voice", "not in a voice channel")
 		return
 	}
-	if err := s.ensureDiscordJoin(r, g, c); err != nil {
-		if errors.Is(err, errGuildDisabled) {
-			writeErr(w, 403, "guild_disabled", err.Error())
+	sid, err := s.attachedPlaySession(r, nil, body.DeviceID)
+	if s.writePlaySessionErr(w, err) {
+		return
+	}
+	res, err := s.ensureDiscordJoin(r, g, c, sid, body.ExpectedBindingRevision, body.RendererID, body.RendererGeneration)
+	if s.writePlaySessionErr(w, err) {
+		return
+	}
+	writeJSON(w, 200, map[string]any{
+		"ok": true, "guild_id": g, "channel_id": c, "session_id": sid,
+		"binding_revision": res.BindingRevision, "state_revision": res.StateRevision,
+	})
+}
+
+func (s *Server) ensureDiscordJoin(r *http.Request, guildID, channelID string, sid uuid.UUID, expectedBindingRevision int64, rendererID string, generation int64) (playback.BindResult, error) {
+	ctx := r.Context()
+	if !s.guildPlaybackEnabled(ctx, guildID) {
+		return playback.BindResult{}, errGuildDisabled
+	}
+	if rendererID == "" {
+		rendererID = pendingHTTPRendererID
+	}
+	if bot := discordx.Live(); bot != nil {
+		if err := bot.JoinChannel(ctx, guildID, channelID); err != nil {
+			return playback.BindResult{}, err
+		}
+	}
+	res, err := s.Play.BindDiscordRenderer(ctx, guildID, sid, channelID, expectedBindingRevision, rendererID, generation)
+	if err != nil {
+		return playback.BindResult{}, err
+	}
+	if discordx.Live() == nil {
+		_, _ = s.Pool.Exec(ctx, `
+			UPDATE discord_voice_runtime
+			SET last_disconnect_reason='pending_join'
+			WHERE guild_id=$1 AND connected=false`, guildID)
+	}
+	return res, nil
+}
+
+func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TrackIDs                []string `json:"track_ids"`
+		Start                   int      `json:"start"`
+		DeviceID                string   `json:"device_id"`
+		ExpectedBindingRevision int64    `json:"expected_binding_revision"`
+		RendererID              string   `json:"renderer_id"`
+		RendererGeneration      int64    `json:"renderer_generation"`
+	}
+	_ = decodeJSON(r, &body)
+	g, c, ok := s.findUserVoice(r)
+	if !ok {
+		writeErr(w, 409, "not_in_voice", "not in a voice channel")
+		return
+	}
+	sid, err := s.attachedPlaySession(r, nil, body.DeviceID)
+	if s.writePlaySessionErr(w, err) {
+		return
+	}
+	res, err := s.ensureDiscordJoin(r, g, c, sid, body.ExpectedBindingRevision, body.RendererID, body.RendererGeneration)
+	if s.writePlaySessionErr(w, err) {
+		return
+	}
+	if len(body.TrackIDs) > 0 {
+		ids, err := s.resolveQueueTracks(r.Context(), body.TrackIDs)
+		if err != nil {
+			writeErr(w, 502, "scapex", err.Error())
 			return
 		}
-		writeErr(w, 500, "voice", err.Error())
-		return
+		if err := s.Play.Replace(r.Context(), sid, ids, body.Start); err != nil {
+			writeErr(w, 400, "queue", err.Error())
+			return
+		}
+		if q, gerr := s.Play.Get(r.Context(), sid); gerr == nil {
+			if rev, ok := anyInt64(q["state_revision"]); ok {
+				res.StateRevision = rev
+			}
+		}
 	}
-	u := currentUser(r)
-	sid, err := s.Play.Session(r.Context(), "discord_guild", g, &u.ID)
-	if err != nil {
-		writeErr(w, 500, "queue", err.Error())
-		return
-	}
-	ids, err := s.resolveQueueTracks(r.Context(), body.TrackIDs)
-	if err != nil {
-		writeErr(w, 502, "scapex", err.Error())
-		return
-	}
-	if err := s.Play.Replace(r.Context(), sid, ids, body.Start); err != nil {
-		writeErr(w, 500, "queue", err.Error())
-		return
-	}
-	writeJSON(w, 200, map[string]any{"ok": true, "guild_id": g, "channel_id": c, "session_id": sid})
+	writeJSON(w, 200, map[string]any{
+		"ok": true, "guild_id": g, "channel_id": c, "session_id": sid,
+		"binding_revision": res.BindingRevision, "state_revision": res.StateRevision,
+	})
 }
 
 func (s *Server) discordCompleteLink(w http.ResponseWriter, r *http.Request) {

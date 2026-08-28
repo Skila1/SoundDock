@@ -125,7 +125,7 @@ func TestQueueGetAdditiveFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, k := range []string{"id", "kind", "owner_key", "volume", "repeat", "shuffle", "crossfade_seconds", "replaygain_mode", "current_index", "current_track_id", "position_ms", "status", "items", "shuffle_mode", "stop_after_current", "device_id"} {
+	for _, k := range []string{"id", "kind", "owner_key", "volume", "repeat", "shuffle", "crossfade_seconds", "replaygain_mode", "current_index", "current_track_id", "position_ms", "status", "items", "shuffle_mode", "stop_after_current", "device_id", "state_revision", "playhead_sequence", "playback_instance_id", "muted", "output_pref", "autoplay", "renderer_kind", "renderer_id", "renderer_generation"} {
 		if _, ok := q[k]; !ok {
 			t.Fatalf("missing %s", k)
 		}
@@ -138,6 +138,55 @@ func TestQueueGetAdditiveFields(t *testing.T) {
 	}
 	if q["shuffle_mode"] != "random" {
 		t.Fatalf("shuffle_mode %v", q["shuffle_mode"])
+	}
+}
+
+func TestControlStopAfterCurrentExtraKeys(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	e := New(pool)
+	userID := uuid.New()
+	username := "p1s-" + userID.String()[:8]
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, username, password_hash, display_name) VALUES ($1,$2,'x',$2)`, userID, username); err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM playback_sessions WHERE user_id=$1`, userID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	sid, err := e.WebSession(ctx, userID, "browser-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Control(ctx, sid, "stop_after_current", map[string]any{"enabled": true}); err != nil {
+		t.Fatal(err)
+	}
+	q, err := e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q["stop_after_current"] != true {
+		t.Fatalf("enabled got %v", q["stop_after_current"])
+	}
+	if err := e.Control(ctx, sid, "stop_after_current", map[string]any{"enabled": false}); err != nil {
+		t.Fatal(err)
+	}
+	q, err = e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q["stop_after_current"] != false {
+		t.Fatalf("disabled got %v", q["stop_after_current"])
+	}
+	if err := e.Control(ctx, sid, "pause", map[string]any{"stop_after_current": true}); err != nil {
+		t.Fatal(err)
+	}
+	q, err = e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q["stop_after_current"] != true {
+		t.Fatalf("extra field got %v", q["stop_after_current"])
 	}
 }
 

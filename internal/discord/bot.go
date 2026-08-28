@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
+	"github.com/sounddock/sounddock/internal/mediabusy"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/scrobble"
 	"github.com/sounddock/sounddock/internal/search"
@@ -43,6 +44,13 @@ type Bot struct {
 	voices sync.Map // guildID -> *guildRuntime
 
 	gwOn int32
+
+	rendererID      string
+	generation      int64
+	resumeOnRestart bool
+	lastBindRev     sync.Map // guildID -> int64
+
+	MediaBusy *mediabusy.Set
 }
 
 var (
@@ -65,14 +73,22 @@ func setLive(b *Bot) {
 
 func New(pool *pgxpool.Pool, box *cryptox.Box, se *search.Engine, play *playback.Engine, log *slog.Logger,
 	provider func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) *Bot {
-	return &Bot{
+	b := &Bot{
 		pool: pool, box: box, search: se, play: play, log: log, provider: provider,
-		scrobble: scrobble.New(pool, box, se),
-		public:   strings.TrimRight(os.Getenv("SD_PUBLIC_URL"), "/"),
+		scrobble:        scrobble.New(pool, box, se),
+		public:          strings.TrimRight(os.Getenv("SD_PUBLIC_URL"), "/"),
+		resumeOnRestart: initResumeOnRestart(),
 	}
+	b.resetRendererIdentity()
+	return b
 }
 
 func (b *Bot) Run(ctx context.Context) error {
+	b.resetRendererIdentity()
+	b.lastBindRev.Range(func(k, _ any) bool {
+		b.lastBindRev.Delete(k)
+		return true
+	})
 	cctx, cancel := context.WithCancel(ctx)
 	b.mu.Lock()
 	b.cancel = cancel
@@ -130,6 +146,7 @@ func (b *Bot) tick(ctx context.Context) {
 		_, _ = b.pool.Exec(ctx, `UPDATE discord_settings SET last_gateway_status='connected', last_error_redacted=NULL WHERE id=1`)
 	}
 	b.reconcileVoice(ctx)
+	b.heartbeatHeldLeases(ctx)
 }
 
 func (b *Bot) loadSettings(ctx context.Context) (enabled bool, token string, appID *string, cmdStatus string, err error) {
@@ -309,7 +326,7 @@ func (b *Bot) PlayQuery(ctx context.Context, guildID, discordUser string, q stri
 	if err := b.rejectExplicit(ctx, guildID, ids); err != nil {
 		return err
 	}
-	sid, err := b.play.Session(ctx, "discord_guild", guildID, nil)
+	sid, err := b.ensureBoundSession(ctx, guildID, b.voiceChannelForGuild(guildID))
 	if err != nil {
 		return err
 	}

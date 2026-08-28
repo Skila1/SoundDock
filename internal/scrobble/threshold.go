@@ -1,13 +1,28 @@
 package scrobble
 
-import "github.com/google/uuid"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
 
 type Event struct {
-	TrackID    uuid.UUID
-	PositionMS int
-	DurationMS int
-	Source     string
-	Kind       string // progress | skip
+	TrackID            uuid.UUID
+	PositionMS         int
+	DurationMS         int
+	Source             string
+	Kind               string // progress | skip
+	StopAfter          bool
+	PlaybackInstanceID uuid.UUID
+	PlayheadSequence   int64
+	ClientID           string
+	DeviceID           string
+	Status             string
+	PlaybackRate       float64
+	RendererKind       string
+	RendererID         string
+	AudioListener      *bool
+	At                 time.Time
 }
 
 type State struct {
@@ -55,8 +70,12 @@ func Eval(prev State, ev Event) (State, Outcome) {
 	}
 
 	if ev.Kind == "skip" {
+		if ev.StopAfter {
+			return next, out
+		}
 		if !next.Counted {
 			out.CountSkip = true
+			next.Counted = true
 		}
 		return next, out
 	}

@@ -48,6 +48,7 @@ type JobRow = {
   last_error?: string | null;
   created_at: string;
   started_at?: string | null;
+  cancellable?: boolean;
 };
 
 type Workers = { pools: Pool[]; running: JobRow[]; jobs: JobRow[] };
@@ -160,7 +161,7 @@ function PoolCard({ pool, onSaved }: { pool: Pool; onSaved: () => void }) {
           <Input type="number" min={1} max={100} value={form.priority}
             onChange={(e) => set("priority", Number(e.target.value))} />
         </Field>
-        <Field label="Memory cap (MB)" hint="0 means no cap. In-process this is advisory; concurrency is the real limit.">
+        <Field label="Memory cap (MB, advisory)" hint="Advisory only — this is not a cgroup or enforced memory limit. 0 leaves it unset. Worker min/max concurrency is what actually caps load.">
           <Input type="number" min={0} max={65536} value={form.max_rss_mb || 0}
             onChange={(e) => set("max_rss_mb", Number(e.target.value))} />
         </Field>
@@ -225,7 +226,7 @@ export function AdminWorkers() {
                 <td className="p-3 text-muted">{relativeTime(j.started_at || j.created_at)}</td>
                 <td className="max-w-xs truncate p-3 text-destructive">{j.last_error}</td>
                 <td className="whitespace-nowrap p-3">
-                  {(j.status === "queued" || j.status === "retry" || j.status === "running") && (
+                  {(j.status === "queued" || j.status === "retry" || j.status === "running") && j.cancellable && (
                     <Button size="sm" variant="ghost" onClick={() => api.post(`/api/v1/admin/jobs/${j.id}/cancel`).then(() => { toast("Cancel requested"); refresh(); })}>
                       Cancel
                     </Button>

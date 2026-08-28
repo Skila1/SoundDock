@@ -37,7 +37,7 @@ SoundDock is built to be the system your library, players, and bots talk to. The
 - **Storage.** Libraries on local disk, NAS/NFS/SMB, Docker volumes, and S3-compatible object storage (Cloudflare R2, AWS S3, MinIO, B2). Scan in place, resumable uploads, Remote Import of direct HTTP(S) media URLs, migrate into managed storage.
 - **API.** REST `/api/v1`, OpenAPI at `/api/docs`, search for humans and bots, API keys (`sd_…`), optional OpenSubsonic, signed webhooks. Stream URLs only. Never filesystem paths.
 - **Web/PWA.** Queue, ReplayGain, optional crossfade. Artists, albums, tracks, playlists, favourites.
-- **Discord.** Optional OAuth sign-in (server/role registration whitelist). Optional native voice worker that plays **your** library. No Lavalink, YouTube, or Spotify.
+- **Discord.** Optional OAuth sign-in (server/role registration whitelist). Optional native voice worker that plays **your** library. No Lavalink, YouTube, or Spotify. `/link` in Discord completes in the web UI.
 - **Playlist matching.** Connect Spotify, YouTube, SoundCloud, or Apple Music and import playlist URLs. Titles are matched against **your** library. Provider audio is not downloaded.
 - **Operations.** PostgreSQL system of record. Optional Redis, Meilisearch, Prometheus `/metrics`, Cloudflare Tunnel. Admin for users, roles, jobs, backups, transcoding, retention.
 
@@ -52,7 +52,7 @@ docker compose up -d --build
 
 Production hosts should `docker compose pull && docker compose up -d` so they use `ghcr.io/skila1/sounddock:latest` instead of cloning.
 
-Discord bot worker: `docker compose --profile discord up -d`
+The Discord voice worker (`discord-worker`) starts with the default Compose stack.
 
 Cloudflare Tunnel is a **systemd** service (`cloudflared`), not Compose. Point the tunnel at `http://localhost:8080`.
 

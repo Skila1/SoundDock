@@ -2,6 +2,14 @@
 
 ## 0.1.0
 
+- Player keyboard shortcuts (space, arrows, n/p/m) are off until enabled. The flag is stored in browser `sd-prefs` and defaults to false. Ctrl+K / Cmd+K still opens header search.
+- Listen recap (Home, Stats, Wrapped) reads `listen_history` until an admin runs **Stats rebuild**, which rebuilds `play_counts` from `listen_events` and flips the reader. Recap minutes that fill null `listened_ms` from track duration are estimated. The two tables are not a merged listen total.
+- `SD_SCAPEX_URL` is deprecated. Leave it empty so YouTube search/fetch runs in-process. A leftover sidecar still works if the URL is set; Compose does not include one.
+- `library_grants` remains the per-library ACL (`read` / `stream` / `write` on a library for a user or role). It is not global groups. Do not drop the table.
+- Queue live updates use a cookie `EventSource` (`/api/v1/me/queue/sse`). Query bearer tokens are rejected.
+- Play HTTP does not wait for yt-dlp. YouTube enqueue returns `media_state` `restoring` until the file is ready.
+- Browser and Discord bind one logical playback session. The queue is not copied. The web player does not use `?target=discord`.
+- Worker pool **Memory cap (MB, advisory)** is a stored hint, not a cgroup limit.
 - Queue, listen history, Discord voice as the listening surface when enabled, radio, Wrapped, playlists, offline stream tokens, and admin health/maintenance.
 - Playback, scrobble, and `/healthz` stay available during maintenance. Remote streams fail closed to the LAN/remote policy.
 - Library titles come from ID3 tags or the original upload name, never the hashed storage filename.
@@ -16,7 +24,7 @@
 - Discord join/play reuses a healthy voice session instead of disconnecting first. A kicked bot stays left until someone asks it to join again.
 - Discord voice no longer skips most Opus frames on each Ogg page, which made tracks sound several times too fast.
 - The web container no longer starts a second Discord gateway. Only `discord-worker` owns voice, so two sessions cannot kick each other out after a few seconds of audio.
-- When output is Discord, the web player uses that guild queue (`?target=discord`): pause, resume, seek, and time stay in sync. Resume no longer restarts the track from the beginning.
+- When output is Discord, pause, resume, seek, and time stay in sync on the bound session. Resume no longer restarts the track from the beginning.
 - Administration can enable or disable an invited Discord server without a second bot token.
 - Header search is a dropdown from the top bar, not a modal. It shows two library matches and five YouTube matches. Choosing a result adds it to the queue without skipping the current song. YouTube hits download into the library first.
 - Library search requires the real words you typed (title, artist, or album). Weak lookalike matches no longer appear.

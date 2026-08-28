@@ -110,15 +110,7 @@ func (c *Client) Fetch(ctx context.Context, refs []string) ([]uuid.UUID, error) 
 		return nil, fmt.Errorf("YouTube fetch is not available")
 	}
 	if c.svc != nil {
-		var ids []uuid.UUID
-		for _, ref := range refs {
-			got, err := c.svc.Fetch(ctx, ref)
-			if err != nil {
-				return ids, err
-			}
-			ids = append(ids, got...)
-		}
-		return ids, nil
+		return c.svc.RunFetchJob(ctx, FetchOpts{URLs: refs, Policy: DefaultMediaPolicy})
 	}
 	body, _ := json.Marshal(map[string]any{"urls": refs})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/fetch", bytes.NewReader(body))
@@ -153,6 +145,38 @@ func (c *Client) Fetch(ctx context.Context, refs []string) ([]uuid.UUID, error) 
 		return nil, err
 	}
 	return out.TrackIDs, nil
+}
+
+func (c *Client) RunFetchJob(ctx context.Context, opts FetchOpts) ([]uuid.UUID, error) {
+	if c == nil {
+		return nil, fmt.Errorf("YouTube fetch is not available")
+	}
+	if c.svc != nil {
+		return c.svc.RunFetchJob(ctx, opts)
+	}
+	return c.Fetch(ctx, opts.URLs)
+}
+
+// RunReplaceAcquire downloads to a job-scoped dir and does not wait on HTTP.
+func (c *Client) RunReplaceAcquire(ctx context.Context, opts ReplaceOpts) ([]LocalTrack, error) {
+	if c == nil || c.svc == nil {
+		return nil, fmt.Errorf("YouTube fetch is not available")
+	}
+	return c.svc.AcquireReplace(ctx, opts)
+}
+
+func (c *Client) JobWork(jobID uuid.UUID) string {
+	if c == nil || c.svc == nil || c.svc.dock == nil {
+		return ""
+	}
+	return c.svc.dock.JobWork(jobID)
+}
+
+func (c *Client) DestLibrary(ctx context.Context) (uuid.UUID, error) {
+	if c == nil || c.svc == nil || c.svc.dock == nil {
+		return uuid.Nil, fmt.Errorf("no writable SoundDock library")
+	}
+	return c.svc.dock.LibraryID(ctx)
 }
 
 func SongQuery(q string) string {

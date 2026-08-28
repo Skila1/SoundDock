@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -168,6 +169,17 @@ func (r *Runner) Apply(ctx context.Context, in Configs) (Configs, error) {
 }
 
 func (r *Runner) Enqueue(ctx context.Context, typ string, payload any) (uuid.UUID, error) {
+	return r.enqueue(ctx, typ, "", payload)
+}
+
+// EnqueueCoalesced returns an existing queued|running|retry job with the same
+// coalesce_key instead of inserting a duplicate. The key is stored on the
+// payload as "coalesce_key". Empty key falls through to Enqueue.
+func (r *Runner) EnqueueCoalesced(ctx context.Context, typ, coalesceKey string, payload any) (uuid.UUID, error) {
+	return r.enqueue(ctx, typ, strings.TrimSpace(coalesceKey), payload)
+}
+
+func (r *Runner) enqueue(ctx context.Context, typ, coalesceKey string, payload any) (uuid.UUID, error) {
 	pool := PoolForType(typ)
 	cfg := r.config(pool)
 	if !cfg.Enabled {
@@ -175,6 +187,17 @@ func (r *Runner) Enqueue(ctx context.Context, typ string, payload any) (uuid.UUI
 	}
 	if r.db == nil {
 		return uuid.Nil, errors.New("jobs: no database")
+	}
+	b, err := payloadWithCoalesceKey(payload, coalesceKey)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if coalesceKey != "" {
+		if id, ok, err := r.findCoalesced(ctx, typ, coalesceKey); err != nil {
+			return uuid.Nil, err
+		} else if ok {
+			return id, nil
+		}
 	}
 	var queued int
 	if err := r.db.QueryRow(ctx, `
@@ -184,12 +207,55 @@ func (r *Runner) Enqueue(ctx context.Context, typ string, payload any) (uuid.UUI
 	if queued >= cfg.QueueLimit {
 		return uuid.Nil, fmt.Errorf("%w: %s", ErrQueueFull, Name(pool))
 	}
-	b, _ := json.Marshal(payload)
 	var id uuid.UUID
-	err := r.db.QueryRow(ctx, `
+	err = r.db.QueryRow(ctx, `
 		INSERT INTO jobs (type, payload, pool, priority) VALUES ($1,$2,$3,$4) RETURNING id`,
 		typ, b, pool, cfg.Priority).Scan(&id)
+	if err != nil && coalesceKey != "" {
+		if id, ok, findErr := r.findCoalesced(ctx, typ, coalesceKey); findErr == nil && ok {
+			return id, nil
+		}
+	}
 	return id, err
+}
+
+func payloadWithCoalesceKey(payload any, key string) ([]byte, error) {
+	var m map[string]any
+	switch p := payload.(type) {
+	case nil:
+		m = map[string]any{}
+	case map[string]any:
+		m = make(map[string]any, len(p)+1)
+		for k, v := range p {
+			m[k] = v
+		}
+	default:
+		raw, err := json.Marshal(p)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+			m = map[string]any{}
+		}
+	}
+	if key != "" {
+		m["coalesce_key"] = key
+	}
+	return json.Marshal(m)
+}
+
+func (r *Runner) findCoalesced(ctx context.Context, typ, key string) (uuid.UUID, bool, error) {
+	var id uuid.UUID
+	err := r.db.QueryRow(ctx, `
+		SELECT id FROM jobs
+		WHERE type=$1 AND status IN ('queued','running','retry')
+		  AND payload->>'coalesce_key'=$2
+		ORDER BY created_at
+		LIMIT 1`, typ, key).Scan(&id)
+	if err != nil {
+		return uuid.Nil, false, nil
+	}
+	return id, true, nil
 }
 
 func (r *Runner) SetProgress(ctx context.Context, id uuid.UUID, p int) {
@@ -210,6 +276,19 @@ func (r *Runner) SetResult(ctx context.Context, id uuid.UUID, v any) {
 func (r *Runner) RequestCancel(ctx context.Context, id uuid.UUID) error {
 	if r.db == nil {
 		return errors.New("jobs: no database")
+	}
+	var typ, status string
+	var progress int
+	err := r.db.QueryRow(ctx, `SELECT type, status, progress FROM jobs WHERE id=$1`, id).Scan(&typ, &status, &progress)
+	if err != nil {
+		return err
+	}
+	extra := r.cancelExtra(ctx, typ, id)
+	if typ == "stats.rebuild" && strings.EqualFold(status, "running") {
+		extra.StatsSwapStarted = true
+	}
+	if !AllowCancel(typ, status, progress, extra) {
+		return ErrNotCancellable
 	}
 	tag, err := r.db.Exec(ctx, `
 		UPDATE jobs SET status='cancelled', cancel_requested=true, finished_at=now(), updated_at=now()
@@ -592,16 +671,17 @@ type PoolStatus struct {
 }
 
 type JobRow struct {
-	ID        uuid.UUID  `json:"id"`
-	Type      string     `json:"type"`
-	Pool      string     `json:"pool"`
-	Status    string     `json:"status"`
-	Progress  int        `json:"progress"`
-	Attempts  int        `json:"attempts"`
-	LastError *string    `json:"last_error"`
-	CreatedAt time.Time  `json:"created_at"`
-	StartedAt *time.Time `json:"started_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	ID           uuid.UUID  `json:"id"`
+	Type         string     `json:"type"`
+	Pool         string     `json:"pool"`
+	Status       string     `json:"status"`
+	Progress     int        `json:"progress"`
+	Attempts     int        `json:"attempts"`
+	LastError    *string    `json:"last_error"`
+	CreatedAt    time.Time  `json:"created_at"`
+	StartedAt    *time.Time `json:"started_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+	Cancellable  bool       `json:"cancellable"`
 }
 
 func (r *Runner) Status(ctx context.Context) []PoolStatus {
@@ -669,9 +749,18 @@ func (r *Runner) RecentJobs(ctx context.Context, limit int) []JobRow {
 		if err := rows.Scan(&j.ID, &j.Type, &j.Pool, &j.Status, &j.Progress, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.UpdatedAt); err != nil {
 			continue
 		}
-		out = append(out, j)
+		out = append(out, r.decorateJob(ctx, j))
 	}
 	return out
+}
+
+func (r *Runner) decorateJob(ctx context.Context, j JobRow) JobRow {
+	extra := r.cancelExtra(ctx, j.Type, j.ID)
+	if j.Type == "stats.rebuild" && strings.EqualFold(j.Status, "running") {
+		extra.StatsSwapStarted = true
+	}
+	j.Cancellable = AllowCancel(j.Type, j.Status, j.Progress, extra)
+	return j
 }
 
 func (r *Runner) RunningJobs(ctx context.Context) []JobRow {
@@ -691,7 +780,7 @@ func (r *Runner) RunningJobs(ctx context.Context) []JobRow {
 		if err := rows.Scan(&j.ID, &j.Type, &j.Pool, &j.Status, &j.Progress, &j.Attempts, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.UpdatedAt); err != nil {
 			continue
 		}
-		out = append(out, j)
+		out = append(out, r.decorateJob(ctx, j))
 	}
 	return out
 }

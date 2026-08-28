@@ -2,6 +2,7 @@ package discordx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -18,6 +19,7 @@ import (
 
 type guildRuntime struct {
 	cancel context.CancelFunc
+	gain   *pcmGain
 }
 
 var idleSince sync.Map
@@ -116,20 +118,20 @@ func (b *Bot) BotChannel(guildID string) (string, bool) {
 }
 
 func (b *Bot) markVoiceConnected(ctx context.Context, guildID, channelID string, sid uuid.UUID) {
+	_ = sid
 	_, _ = b.pool.Exec(ctx, `
-		INSERT INTO discord_voice_runtime (guild_id, voice_channel_id, session_id, connected, last_disconnect_reason)
-		VALUES ($1,$2,$3,true,'')
-		ON CONFLICT (guild_id) DO UPDATE SET voice_channel_id=$2, session_id=$3, connected=true, last_disconnect_reason=''`,
-		guildID, channelID, sid)
+		UPDATE discord_voice_runtime
+		SET voice_channel_id=$2, connected=true, last_disconnect_reason=''
+		WHERE guild_id=$1`, guildID, channelID)
 	b.ensureStreamer(guildID)
 }
 
 func (b *Bot) markJoining(ctx context.Context, guildID, channelID string, sid uuid.UUID) {
+	_ = sid
 	_, _ = b.pool.Exec(ctx, `
-		INSERT INTO discord_voice_runtime (guild_id, voice_channel_id, session_id, connected, last_disconnect_reason)
-		VALUES ($1,$2,$3,false,'joining')
-		ON CONFLICT (guild_id) DO UPDATE SET voice_channel_id=$2, session_id=$3, connected=false, last_disconnect_reason='joining'`,
-		guildID, channelID, sid)
+		UPDATE discord_voice_runtime
+		SET voice_channel_id=$2, connected=false, last_disconnect_reason='joining'
+		WHERE guild_id=$1`, guildID, channelID)
 }
 
 func (b *Bot) finishVoiceJoin(ctx context.Context, vc *discordgo.VoiceConnection, guildID, channelID string, sid uuid.UUID) error {
@@ -158,7 +160,7 @@ func (b *Bot) JoinChannel(ctx context.Context, guildID, channelID string) error 
 		return fmt.Errorf("discord gateway is not connected")
 	}
 	_, _ = b.pool.Exec(ctx, `INSERT INTO discord_guilds (id) VALUES ($1) ON CONFLICT DO NOTHING`, guildID)
-	sid, err := b.play.Session(ctx, "discord_guild", guildID, nil)
+	sid, err := b.ensureBoundSession(ctx, guildID, channelID)
 	if err != nil {
 		return err
 	}
@@ -193,23 +195,53 @@ func (b *Bot) JoinChannel(ctx context.Context, guildID, channelID string) error 
 	return b.finishVoiceJoin(ctx, vc, guildID, channelID, sid)
 }
 
-// LeaveGuild disconnects voice, stops the guild session, and marks runtime disconnected.
-func (b *Bot) LeaveGuild(ctx context.Context, guildID string) error {
+func (b *Bot) stopStreamer(guildID string) {
 	if v, ok := b.voices.LoadAndDelete(guildID); ok {
 		if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
 			gr.cancel()
 		}
 	}
-	if sess := b.session(); sess != nil {
-		if vc, ok := sess.VoiceConnections[guildID]; ok && vc != nil {
-			disconnectVC(vc)
+}
+
+// LeaveGuild disconnects voice, stops the PCM streamer, and CAS-unbinds this
+// worker's Discord renderer. connected=false is written first while we still
+// hold the lease so reconcile cannot restart the streamer. If the lease was
+// already stolen, voice is still dropped and Unbind is a no-op (bind_conflict).
+func (b *Bot) LeaveGuild(ctx context.Context, guildID string) error {
+	rt, _ := b.loadVoiceRuntime(ctx, guildID)
+	rid, gen := b.rendererIdentity()
+	held := false
+	if rt.SessionID != uuid.Nil && b.play != nil {
+		if st, err := b.play.Get(ctx, rt.SessionID); err == nil && holdsRendererLease(st, rid, gen) {
+			held = true
 		}
 	}
-	if sid, err := b.play.Session(ctx, "discord_guild", guildID, nil); err == nil {
-		_ = b.play.Control(ctx, sid, "stop", nil)
-		_ = b.play.Control(ctx, sid, "clear", nil)
+	if held {
+		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='leave' WHERE guild_id=$1`, guildID)
 	}
-	_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='leave' WHERE guild_id=$1`, guildID)
+	b.stopStreamer(guildID)
+	b.dropVoice(guildID)
+	if held && rt.SessionID != uuid.Nil && b.play != nil {
+		_ = b.play.Control(ctx, rt.SessionID, "stop", nil)
+		_ = b.play.Control(ctx, rt.SessionID, "clear", map[string]any{"all": true})
+	}
+	if b.play != nil {
+		expected := rt.BindingRevision
+		known := false
+		if v, ok := b.lastBindRev.Load(guildID); ok {
+			if n, ok := v.(int64); ok {
+				expected = n
+				known = true
+			}
+		}
+		if known || held {
+			_, err := b.play.UnbindDiscordRenderer(ctx, guildID, expected, rid, gen)
+			if err != nil && !errors.Is(err, playback.ErrBindConflict) && !errors.Is(err, playback.ErrLeaseConflict) && b.log != nil {
+				b.log.Warn("discord unbind", "guild", guildID, "err", err)
+			}
+		}
+	}
+	b.lastBindRev.Delete(guildID)
 	return nil
 }
 
@@ -218,12 +250,24 @@ func (b *Bot) ensureStreamer(guildID string) {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	gr := &guildRuntime{cancel: cancel}
+	gr := &guildRuntime{cancel: cancel, gain: newPCMGain(1)}
 	if _, loaded := b.voices.LoadOrStore(guildID, gr); loaded {
 		cancel()
 		return
 	}
 	go b.streamLoop(ctx, guildID)
+}
+
+func (b *Bot) streamGain(guildID string) *pcmGain {
+	v, ok := b.voices.Load(guildID)
+	if !ok {
+		return nil
+	}
+	gr, ok := v.(*guildRuntime)
+	if !ok {
+		return nil
+	}
+	return gr.gain
 }
 
 func (b *Bot) streamLoop(ctx context.Context, guildID string) {
@@ -244,33 +288,41 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 	defer stopTrack()
 	t := time.NewTicker(400 * time.Millisecond)
 	defer t.Stop()
+	var lastHB time.Time
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		var connected bool
-		var reason *string
-		_ = b.pool.QueryRow(ctx, `SELECT connected, last_disconnect_reason FROM discord_voice_runtime WHERE guild_id=$1`, guildID).Scan(&connected, &reason)
-		if !connected {
-			if reason != nil && *reason == "joining" {
+		rt, err := b.loadVoiceRuntime(ctx, guildID)
+		if err != nil {
+			continue
+		}
+		if !rt.Connected {
+			if rt.DisconnectReason == "joining" {
 				stopTrack()
 				continue
 			}
-			if b.voiceConn(guildID) != nil && waitVoiceReady(b.voiceConn(guildID), 0) {
-				continue
-			}
+			// LeaveGuild / kick set connected=false; do not keep playing just
+			// because the voice socket has not finished closing.
 			stopTrack()
 			return
 		}
-		sid, err := b.play.Session(ctx, "discord_guild", guildID, nil)
+		sid, st, err := b.boundState(ctx, guildID, rt.VoiceChannelID)
 		if err != nil {
+			stopTrack()
+			if errors.Is(err, playback.ErrBindConflict) || errors.Is(err, playback.ErrLeaseConflict) {
+				return
+			}
 			continue
 		}
-		st, err := b.play.Get(ctx, sid)
-		if err != nil {
-			continue
+		if time.Since(lastHB) >= rendererHeartbeatEvery {
+			if err := b.heartbeatLease(ctx, sid); errors.Is(err, playback.ErrLeaseConflict) {
+				stopTrack()
+				return
+			}
+			lastHB = time.Now()
 		}
 		stat, _ := st["status"].(string)
 		var tid uuid.UUID
@@ -288,6 +340,11 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 				status = stat
 			}
 			continue
+		}
+		// Volume/mute are live PCM gain: update the multiplier in place. Do not
+		// stopTrack or reconnect voice — state_revision is the engine's job.
+		if g := b.streamGain(guildID); g != nil {
+			g.Set(liveVolumeMultiplier(st))
 		}
 		if tid == current && stat == status && trackCancel != nil {
 			pos := sessionPositionMS(st)
@@ -340,6 +397,8 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 		_ = b.play.Control(ctx, sid, "skip", nil)
 		return
 	}
+	releaseBusy := b.MediaBusy.Hold(trackID)
+	defer releaseBusy()
 	defer func() {
 		if pcm != nil {
 			pcm.Close()
@@ -350,7 +409,13 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 		}
 	}()
 
-	enc, err := startOpusEncoder(ctx, pcm)
+	gain := b.streamGain(guildID)
+	if gain == nil {
+		gain = newPCMGain(liveVolumeMultiplier(st))
+	} else {
+		gain.Set(liveVolumeMultiplier(st))
+	}
+	enc, err := startOpusEncoder(ctx, newPCMGainReader(pcm, gain))
 	if err != nil {
 		b.recordPlaybackError(ctx, guildID, trackID, "opus", err.Error())
 		return
@@ -362,7 +427,7 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 
 	started := time.Now()
 	lastPosWrite := time.Time{}
-	lastWritten := startMS
+	instanceID := playbackInstanceID(st)
 	thresh := durationMS / 2
 	if thresh > 30000 {
 		thresh = 30000
@@ -389,17 +454,22 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 		}
 		if time.Since(lastPosWrite) >= time.Second {
 			lastPosWrite = time.Now()
-			tag, err := b.pool.Exec(ctx, `
-				UPDATE playback_sessions SET position_ms=$2, updated_at=now()
-				WHERE id=$1 AND abs(position_ms - $3) <= 2500`, sid, elapsed, lastWritten)
-			if err != nil || tag.RowsAffected() == 0 {
+			if instanceID == uuid.Nil {
+				if cur, err := b.play.Get(ctx, sid); err == nil {
+					instanceID = playbackInstanceID(cur)
+				}
+			}
+			if instanceID == uuid.Nil {
 				return
 			}
-			lastWritten = elapsed
+			if err := b.play.CheckpointPlayhead(ctx, sid, instanceID, elapsed); err != nil {
+				return
+			}
+			b.recordDiscordListens(ctx, guildID, sid, trackID, durationMS, elapsed, instanceID)
 		}
 		if !counted && durationMS > 0 && elapsed >= thresh {
 			counted = true
-			b.recordDiscordListens(ctx, guildID, trackID, durationMS)
+			b.recordDiscordListens(ctx, guildID, sid, trackID, durationMS, elapsed, instanceID)
 		}
 	}
 	if ctx.Err() != nil {
@@ -451,6 +521,66 @@ func sessionPositionMS(st map[string]any) int {
 	}
 }
 
+// sessionVolume returns the session volume in 0–1. Missing volume defaults to 1;
+// an explicit 0 is silence and must not be rewritten to 100%.
+func sessionVolume(st map[string]any) float64 {
+	if st == nil {
+		return 1
+	}
+	v, ok := st["volume"]
+	if !ok || v == nil {
+		return 1
+	}
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int32:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 1
+	}
+}
+
+func sessionMuted(st map[string]any) bool {
+	if st == nil {
+		return false
+	}
+	v, ok := st["muted"].(bool)
+	return ok && v
+}
+
+// liveVolumeMultiplier is the extra PCM scale applied after ReplayGain.
+// Session volume is 0–1 (engine clamps >1); mute or volume 0 is silence.
+func liveVolumeMultiplier(st map[string]any) float64 {
+	if sessionMuted(st) {
+		return 0
+	}
+	v := sessionVolume(st)
+	if v <= 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+// pcmGainDB is ReplayGain only, baked into the first ffmpeg -af at track start.
+// Live session volume/mute is a separate int16 multiplier on the s16le pipe.
+func pcmGainDB(mode string, trackGain, albumGain *float64) float64 {
+	mult := playback.ReplayGainMultiplier(mode, trackGain, albumGain, 0)
+	if mult > 0 && mult != 1 {
+		return 20 * math.Log10(mult)
+	}
+	return 0
+}
+
 func (b *Bot) ffmpegSourceForTrack(ctx context.Context, trackID uuid.UUID, st map[string]any) (pcmSource, float64, int, error) {
 	var libID uuid.UUID
 	var key string
@@ -473,15 +603,7 @@ func (b *Bot) ffmpegSourceForTrack(ctx context.Context, trackID uuid.UUID, st ma
 		return pcmSource{}, 0, 0, err
 	}
 	mode, _ := st["replaygain_mode"].(string)
-	vol, _ := st["volume"].(float64)
-	if vol <= 0 {
-		vol = 1
-	}
-	mult := playback.ReplayGainMultiplier(mode, trackGain, albumGain, 0) * vol
-	gainDB := 0.0
-	if mult > 0 && mult != 1 {
-		gainDB = 20 * math.Log10(mult)
-	}
+	gainDB := pcmGainDB(mode, trackGain, albumGain)
 	src := pcmSource{}
 	if fs, ok := prov.(storage.FFmpegSourcer); ok {
 		ff, err := fs.FFmpegSource(ctx, key)
@@ -507,29 +629,60 @@ func (b *Bot) recordPlaybackError(ctx context.Context, guildID string, trackID u
 		guildID, trackID, class, redacted(msg))
 }
 
-func (b *Bot) recordDiscordListens(ctx context.Context, guildID string, trackID uuid.UUID, durationMS int) {
+func (b *Bot) recordDiscordListens(ctx context.Context, guildID string, sid, trackID uuid.UUID, durationMS, positionMS int, instanceID uuid.UUID) {
 	if b.scrobble == nil {
 		return
+	}
+	rendererKind := playback.RendererDiscord
+	seq := int64(0)
+	rate := 1.0
+	status := "playing"
+	if b.play != nil && sid != uuid.Nil {
+		st, err := b.play.Get(ctx, sid)
+		if err != nil {
+			return
+		}
+		rendererKind = rendererKindOf(st)
+		if rendererKind != playback.RendererDiscord {
+			return
+		}
+		if instanceID == uuid.Nil {
+			instanceID = playbackInstanceID(st)
+		}
+		seq = int64Of(st, "playhead_sequence")
+		status = statusOf(st)
+		switch v := st["playback_rate"].(type) {
+		case float64:
+			if v > 0 {
+				rate = v
+			}
+		case float32:
+			if v > 0 {
+				rate = float64(v)
+			}
+		}
 	}
 	rows, err := b.pool.Query(ctx, `
 		SELECT i.user_id FROM discord_user_voice v
 		JOIN user_identities i ON i.provider='discord' AND i.provider_user_id=v.discord_user_id
-		WHERE v.guild_id=$1 AND v.channel_id IS NOT NULL AND v.channel_id <> ''`, guildID)
+		JOIN discord_voice_runtime r ON r.guild_id=v.guild_id
+		WHERE v.guild_id=$1 AND v.channel_id=r.voice_channel_id
+			AND r.voice_channel_id IS NOT NULL AND r.voice_channel_id <> ''`, guildID)
 	if err != nil {
 		return
 	}
 	defer rows.Close()
+	audio := true
 	for rows.Next() {
 		var uid uuid.UUID
 		if rows.Scan(&uid) != nil {
 			continue
 		}
-		pos := durationMS
-		if pos < 30000 {
-			pos = 30000
-		}
 		_ = b.scrobble.HandleListen(ctx, uid, scrobble.Event{
-			TrackID: trackID, PositionMS: pos, DurationMS: durationMS, Source: "discord", Kind: "progress",
+			TrackID: trackID, PositionMS: positionMS, DurationMS: durationMS, Source: "discord", Kind: "progress",
+			PlaybackInstanceID: instanceID, PlayheadSequence: seq,
+			RendererKind: rendererKind, PlaybackRate: rate, Status: status,
+			AudioListener: &audio,
 		})
 	}
 }
@@ -556,14 +709,17 @@ func (b *Bot) reconcileVoice(ctx context.Context) {
 			continue
 		}
 		if !connected {
-			if b.voiceConn(gid) == nil {
-				if v, ok := b.voices.LoadAndDelete(gid); ok {
-					if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
-						gr.cancel()
-					}
+			if reason != nil && *reason == "joining" {
+				continue
+			}
+			b.stopStreamer(gid)
+		} else if ch != nil && *ch != "" && b.voiceConn(gid) != nil {
+			if _, err := b.ensureBoundSession(ctx, gid, *ch); err != nil {
+				if errors.Is(err, playback.ErrBindConflict) || errors.Is(err, playback.ErrLeaseConflict) {
+					b.stopStreamer(gid)
+					continue
 				}
 			}
-		} else if ch != nil && *ch != "" && b.voiceConn(gid) != nil {
 			b.ensureStreamer(gid)
 		}
 	}
@@ -612,10 +768,10 @@ func (b *Bot) maybeIdleLeave(ctx context.Context) {
 			continue
 		}
 		if stay {
-			sid, err := b.play.Session(ctx, "discord_guild", gid, nil)
-			if err == nil {
-				items, _ := b.play.Queue(ctx, sid)
-				st, _ := b.play.Get(ctx, sid)
+			rt, err := b.loadVoiceRuntime(ctx, gid)
+			if err == nil && rt.SessionID != uuid.Nil {
+				items, _ := b.play.Queue(ctx, rt.SessionID)
+				st, _ := b.play.Get(ctx, rt.SessionID)
 				stat, _ := st["status"].(string)
 				if len(items) > 0 && stat == "playing" {
 					idleSince.Delete(gid)

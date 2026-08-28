@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { MediaCard } from "@/components/media/MediaCard";
 import { TrackList } from "@/components/media/TrackList";
 import { EmptyState } from "@/components/ui/empty";
-import { usePlayer } from "@/stores/player";
+import { usePlayer, type PlayerQueueItem } from "@/stores/player";
 import type { SearchHit } from "@/types/api";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,37 @@ const FILTERS: { id: string; label: string; token: string }[] = [
   { id: "month", label: "Last 30 days", token: "last_played:30d" },
   { id: "stale", label: "Not in 90 days", token: "last_played:>90d" }
 ];
+
+function hitKeys(hit: SearchHit): string[] {
+  const extra = hit as SearchHit & { youtube_id?: string; external_id?: string };
+  return [hit.id, extra.youtube_id, extra.external_id].filter((v): v is string => !!v);
+}
+
+function itemKeys(item: PlayerQueueItem): string[] {
+  const keys = [item.track_id, item.origin, item.youtube_id, item.external_id, item.id].filter((v): v is string => !!v);
+  const expanded: string[] = [];
+  for (const k of keys) {
+    expanded.push(k);
+    if (k.startsWith("youtube:")) expanded.push(k.slice("youtube:".length));
+  }
+  return expanded;
+}
+
+function queueMediaStateForHit(items: PlayerQueueItem[] | undefined, hit: SearchHit): string | undefined {
+  if (!items?.length) return undefined;
+  const want = new Set(hitKeys(hit));
+  for (const item of items) {
+    if (itemKeys(item).some((k) => want.has(k))) return item.media_state;
+  }
+  return undefined;
+}
+
+function mediaStateChip(state?: string): string | null {
+  if (state === "restoring") return "Restoring";
+  if (state === "missing_external" || state === "failed") return "Unavailable";
+  if (state === "ready") return "Ready";
+  return null;
+}
 
 function stripPlayTokens(q: string) {
   return q
@@ -36,6 +67,7 @@ export function SearchPage() {
   const [q, setQ] = useState(sp.get("q") || "");
   const play = usePlayer((s) => s.playTracks);
   const add = usePlayer((s) => s.add);
+  const queueItems = usePlayer((s) => s.queue?.items);
   const results = useQuery({
     queryKey: ["search", q],
     enabled: q.trim().length > 0,
@@ -105,7 +137,7 @@ export function SearchPage() {
       </div>
       {!q && <p className="text-muted">Search your SoundDock library. Missing tracks can be fetched from YouTube.</p>}
       {q && !results.isLoading && !youtube.isLoading && !results.data?.results?.length && !grouped.youtube.length && (
-        <EmptyState icon={Search} title={`No results for ‘${q}’.`} description="Try another spelling, or wait for ScapeX if YouTube search is enabled." />
+        <EmptyState icon={Search} title={`No results for ‘${q}’.`} description="Try another spelling. YouTube search runs inside SoundDock when enabled." />
       )}
       {grouped.artist.length > 0 && (
         <section className="mb-8">
@@ -147,15 +179,19 @@ export function SearchPage() {
           <h2 className="mb-3 font-semibold">YouTube</h2>
           <p className="mb-3 text-sm text-muted">Not in your library. Play or queue to download into SoundDock.</p>
           <TrackList
-            tracks={grouped.youtube.map((h) => ({
-              id: h.id,
-              title: h.title,
-              artist: h.artist,
-              album: h.album,
-              duration_ms: h.duration_ms,
-              source: "youtube",
-              artwork_url: h.artwork_url
-            }))}
+            tracks={grouped.youtube.map((h) => {
+              const chip = mediaStateChip(queueMediaStateForHit(queueItems, h));
+              return {
+                id: h.id,
+                title: h.title,
+                artist: h.artist,
+                album: h.album,
+                duration_ms: h.duration_ms,
+                source: "youtube",
+                artwork_url: h.artwork_url,
+                ...(chip ? { codec: chip } : {})
+              };
+            })}
             onPlay={(i) => play([grouped.youtube[i].id])}
             onQueue={(t) => add([t.id]).then(() => toast.success("Downloading and adding to queue"))}
             onNext={(t) => add([t.id], true).then(() => toast.success("Downloading to play next"))}

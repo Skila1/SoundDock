@@ -3,18 +3,45 @@ import { persist } from "zustand/middleware";
 import { api } from "@/lib/api";
 import { isLibraryTrackId } from "@/lib/utils";
 import { toast } from "sonner";
-import type { QueueState, Track } from "@/types/api";
+import type { MediaState, QueueState, Track } from "@/types/api";
 import {
+  askRendererTabsToStop,
   discordOptionVisible,
   discordReady,
+  getDeviceId,
+  getTabRendererId,
   loadDevicePrefs,
   resolveOutput,
   saveDevicePrefs,
   setManualOutput,
+  subscribeRendererChannel,
   type OutputTarget,
   type VoiceState
 } from "@/lib/device";
 import { useUi } from "@/stores/ui";
+import { usePrefs } from "@/stores/prefs";
+import { createCommandClient, newCommandId } from "@/stores/commandClient";
+import { attachMediaRemote, bindMediaSession, updateMediaPosition } from "@/stores/mediaSession";
+import { interpolatePosition, parseTimeMs, sampleClock, type ClockSample } from "@/stores/playhead";
+import {
+  applyBindResult,
+  applyJoinFailure,
+  applySnapshot,
+  applySwitchToBrowser,
+  initialSession,
+  shouldStopHtmlAudio,
+  tabOwnsBrowserLease,
+  type QueueSnapshot,
+  type SessionView
+} from "@/stores/sessionReducer";
+import {
+  createQueueSseClient,
+  mergePresence,
+  pickListeners,
+  playheadEventToSnap,
+  type PresenceParticipant,
+  type QueueSseClient
+} from "@/stores/sseClient";
 import {
   applyRate,
   applyReplayGain,
@@ -27,6 +54,7 @@ import {
   ensureGraph,
   getAudio,
   getIdleAudio,
+  isMediaReady,
   looksGapless,
   pauseAll,
   playActive,
@@ -37,17 +65,44 @@ import {
   replayGainMultiplier,
   seekActive,
   setFade,
+  stopElement,
   swapActive,
   type TrackGainFields
 } from "@/components/player/audioEngine";
 
 export type PlayerTrack = Track & TrackGainFields;
 
-export type PlayerQueue = QueueState & {
+/** Queue item extras from GET/SSE (W6-http). Keep local so we do not race api.ts. */
+export type RequestedBy = {
+  user_id?: string;
+  discord_user_id?: string;
+  display_name?: string;
+};
+
+export type PlayerQueueItem = {
+  id: string;
+  position: number;
+  track_id: string;
+  origin?: string;
+  media_state?: MediaState;
+  intent_id?: string;
+  youtube_id?: string;
+  external_id?: string;
+  requested_by?: RequestedBy;
+};
+
+export type PlayerQueue = Omit<QueueState, "items"> & {
+  items: PlayerQueueItem[];
   shuffle_mode?: string;
   stop_after_current?: boolean;
   device_id?: string | null;
   kind?: string;
+};
+
+/** Last remove/clear snapshot; valid only while state_revision === undo_generation. */
+export type PendingUndo = {
+  undo_generation: number;
+  items: PlayerQueueItem[];
 };
 
 type ListenScratch = { id: string; counted: boolean; skipped: boolean };
@@ -60,6 +115,8 @@ let xfTimer: number | undefined;
 let sleepHandle: number | undefined;
 let voiceTimer: number | undefined;
 let discordQueueTimer: number | undefined;
+let playheadTimer: number | undefined;
+let volTimer: number | undefined;
 let keysBound = false;
 let audioBound = false;
 let currentMeta: PlayerTrack | undefined;
@@ -68,6 +125,12 @@ let skipLocalStart = false;
 let advancing = false;
 let queueGate: Promise<unknown> = Promise.resolve();
 let lastQueueMutAt = 0;
+let session: SessionView = initialSession();
+let lastClock: ClockSample | null = null;
+let rendererGeneration = 0;
+let queueSse: QueueSseClient | null = null;
+
+const commands = createCommandClient((body) => api.post<PlayerQueue>("/api/v1/me/queue/control", body));
 
 function enqueueQueueOp<T>(fn: () => Promise<T>): Promise<T> {
   const next = queueGate.then(fn, fn);
@@ -103,12 +166,176 @@ function emptyQueue(partial?: Partial<PlayerQueue>): PlayerQueue {
     current_track_id: null,
     position_ms: 0,
     items: [],
+    muted: false,
+    output_pref: "browser",
+    autoplay: false,
+    renderer_kind: "none",
+    renderer_id: null,
+    playback_instance_id: null,
+    state_revision: 0,
+    playhead_sequence: 0,
     ...partial
   };
 }
 
 function idsOf(q: PlayerQueue | null | undefined) {
   return q?.items?.map((i) => i.track_id) || [];
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v);
+}
+
+function numOrUndef(v: unknown): number | undefined {
+  const n = typeof v === "number" ? v : typeof v === "string" && v.trim() ? Number(v) : NaN;
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function asRequestedBy(raw: unknown): RequestedBy | undefined {
+  if (!isRecord(raw)) return undefined;
+  const user_id = typeof raw.user_id === "string" ? raw.user_id : undefined;
+  const discord_user_id = typeof raw.discord_user_id === "string" ? raw.discord_user_id : undefined;
+  const display_name = typeof raw.display_name === "string" ? raw.display_name : undefined;
+  if (!user_id && !discord_user_id && !display_name) return undefined;
+  return { user_id, discord_user_id, display_name };
+}
+
+function asQueueItem(raw: unknown): PlayerQueueItem | null {
+  if (!isRecord(raw)) return null;
+  const track_id = typeof raw.track_id === "string" ? raw.track_id : "";
+  const id = typeof raw.id === "string" ? raw.id : track_id;
+  if (!id && !track_id) return null;
+  const position = numOrUndef(raw.position) ?? 0;
+  const item: PlayerQueueItem = { id: id || track_id, position, track_id: track_id || id };
+  if (typeof raw.origin === "string") item.origin = raw.origin;
+  if (raw.media_state === "ready" || raw.media_state === "restoring" || raw.media_state === "missing_external") {
+    item.media_state = raw.media_state;
+  }
+  if (typeof raw.intent_id === "string") item.intent_id = raw.intent_id;
+  if (typeof raw.youtube_id === "string") item.youtube_id = raw.youtube_id;
+  if (typeof raw.external_id === "string") item.external_id = raw.external_id;
+  const requested = asRequestedBy(raw.requested_by);
+  if (requested) item.requested_by = requested;
+  return item;
+}
+
+function asQueueItems(raw: unknown): PlayerQueueItem[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PlayerQueueItem[] = [];
+  for (const row of raw) {
+    const item = asQueueItem(row);
+    if (item) out.push(item);
+  }
+  return out;
+}
+
+function cloneQueueItems(items: PlayerQueueItem[]): PlayerQueueItem[] {
+  return items.map((i) => ({
+    ...i,
+    requested_by: i.requested_by ? { ...i.requested_by } : undefined
+  }));
+}
+
+function firstNonEmptyItems(...candidates: unknown[]): PlayerQueueItem[] {
+  for (const c of candidates) {
+    const items = asQueueItems(c);
+    if (items.length) return items;
+  }
+  return [];
+}
+
+/** Read undo snapshot from control/GET. Do not treat queue `items` as removed rows. */
+function parseUndoPayload(result: unknown, fallbackItems: PlayerQueueItem[]): PendingUndo | null {
+  if (!isRecord(result)) return null;
+  const nested = isRecord(result.undo) ? result.undo : null;
+  const items = firstNonEmptyItems(nested?.items, result.undo_items, result.removed_items, fallbackItems);
+  if (!items.length) return null;
+  const gen =
+    numOrUndef(nested?.undo_generation) ??
+    numOrUndef(nested?.generation) ??
+    numOrUndef(result.undo_generation) ??
+    numOrUndef(result.state_revision);
+  if (gen == null) return null;
+  return { undo_generation: gen, items: cloneQueueItems(items) };
+}
+
+function snapshotRemovedItems(action: string, extra: Record<string, unknown> | undefined, queue: PlayerQueue | null): PlayerQueueItem[] {
+  const items = queue?.items;
+  if (!items?.length) return [];
+  if (action === "remove") {
+    const pos = numOrUndef(extra?.position);
+    if (pos == null) return [];
+    const hit = items.find((i) => i.position === pos) ?? items[pos];
+    return hit ? cloneQueueItems([hit]) : [];
+  }
+  if (action === "clear") {
+    if (extra?.all === true) return cloneQueueItems(items);
+    const idx = queue?.current_index ?? 0;
+    return cloneQueueItems(items.slice(idx + 1));
+  }
+  return [];
+}
+
+function errorStatus(e: unknown): number | undefined {
+  if (typeof e === "object" && e !== null && "status" in e) {
+    const s = (e as { status: unknown }).status;
+    return typeof s === "number" ? s : undefined;
+  }
+  return undefined;
+}
+
+function syncPendingUndo(revision: number | undefined) {
+  if (typeof revision !== "number" || !Number.isFinite(revision)) return;
+  const pending = usePlayer.getState().pendingUndo;
+  if (!pending) return;
+  if (pending.undo_generation !== revision) usePlayer.setState({ pendingUndo: null });
+}
+
+function offerUndoToast(action: string) {
+  toast(action === "clear" ? "Up next cleared" : "Removed from queue", {
+    action: {
+      label: "Undo",
+      onClick: () => {
+        void usePlayer.getState().undo();
+      }
+    }
+  });
+}
+
+function itemMediaState(q: { items?: PlayerQueueItem[] } | null | undefined, trackId: string | null | undefined): string | undefined {
+  if (!q?.items || !trackId) return undefined;
+  return q.items.find((i) => i.track_id === trackId)?.media_state;
+}
+
+function mediaBecameReady(
+  prevItems: PlayerQueueItem[] | undefined,
+  q: { items?: PlayerQueueItem[] } | null | undefined,
+  trackId: string | null | undefined
+): boolean {
+  if (!trackId) return false;
+  return !isMediaReady(itemMediaState({ items: prevItems }, trackId)) && isMediaReady(itemMediaState(q, trackId));
+}
+
+function queueNeedsLocalBind(
+  prevId: string | null | undefined,
+  prevItems: PlayerQueueItem[] | undefined,
+  q: PlayerQueue
+): boolean {
+  const id = q.current_track_id;
+  if (!id) return false;
+  if (id !== prevId) return true;
+  return mediaBecameReady(prevItems, q, id);
+}
+
+function preloadUpcoming(q: { items?: PlayerQueueItem[]; current_index?: number } | null | undefined) {
+  const next = q?.items?.[(q?.current_index ?? 0) + 1];
+  if (next?.track_id) preloadTrack(next.track_id, next.media_state);
+}
+
+function playingAfterStart(played: boolean, wantPlay: boolean, trackId: string | null | undefined): boolean {
+  if (!wantPlay) return false;
+  if (played) return true;
+  return !isMediaReady(itemMediaState(session.queue, trackId));
 }
 
 function typingTarget(el: EventTarget | null) {
@@ -164,98 +391,41 @@ function markSkip(id: string, pos: number, dur: number, stopAfter: boolean) {
   postListen(id, pos, dur, "skip");
 }
 
-async function bindSession(meta: Track) {
-  if (!("mediaSession" in navigator)) return;
-  navigator.mediaSession.metadata = new MediaMetadata({
-    title: meta.title,
-    artist: meta.artists?.map((a) => a.name).join(", ") || meta.artist || "",
-    album: meta.album,
-    artwork: [{ src: `/api/v1/tracks/${meta.id}/artwork?size=card`, sizes: "300x300" }]
-  });
-  updatePositionState();
-}
-
-function updatePositionState() {
+function publishMediaPosition() {
   const s = usePlayer.getState();
-  try {
-    navigator.mediaSession?.setPositionState({
-      duration: Math.max(0, (s.duration || 0) / 1000),
-      playbackRate: s.playbackRate || 1,
-      position: Math.max(0, Math.min((s.duration || 0) / 1000, (s.position || 0) / 1000))
-    });
-  } catch {
-    /* some browsers reject incomplete state */
-  }
-  if ("mediaSession" in navigator) {
-    navigator.mediaSession.playbackState = s.playing ? "playing" : "paused";
-  }
+  updateMediaPosition({
+    duration: s.duration,
+    playbackRate: s.playbackRate,
+    position: s.position,
+    playing: s.playing
+  });
 }
 
 async function joinDiscord() {
-  return api.post<{ ok?: boolean; guild_id?: string; channel_id?: string }>("/api/v1/me/discord/join");
+  const expected = session.lastBindingRevision || session.queue.binding_revision;
+  return api.post<{ ok?: boolean; guild_id?: string; channel_id?: string; binding_revision?: number; state_revision?: number; session_id?: string }>(
+    "/api/v1/me/discord/join",
+    {
+      device_id: getDeviceId(),
+      ...(expected ? { expected_binding_revision: expected } : {})
+    }
+  );
 }
 
-async function playDiscord(trackIds: string[], start: number) {
-  return api.post("/api/v1/me/discord/play", { track_ids: trackIds, start });
+function guildIdOf(): string {
+  return usePlayer.getState().voice?.guild_id || "";
 }
 
-type PlayerStore = {
-  queue: PlayerQueue | null;
-  current?: PlayerTrack;
-  playing: boolean;
-  volume: number;
-  muted: boolean;
-  shuffle: boolean;
-  repeat: string;
-  position: number;
-  duration: number;
-  playbackRate: number;
-  autoplay: boolean;
-  visualizer: boolean;
-  tinyMode: boolean;
-  stopAfterCurrent: boolean;
-  sleepUntil: number | null;
-  output: OutputTarget;
-  voice: VoiceState | null;
-  sinkId: string;
-  load: () => Promise<void>;
-  playTracks: (ids: string[], start?: number) => Promise<void>;
-  playNow: (index: number) => Promise<void>;
-  add: (ids: string[], next?: boolean) => Promise<void>;
-  control: (action: string, extra?: Record<string, unknown>) => Promise<void>;
-  seek: (ms: number) => void;
-  setVolume: (v: number) => void;
-  toggleMute: () => void;
-  hydrateTrack: (id: string) => Promise<PlayerTrack | undefined>;
-  setOutput: (o: OutputTarget) => Promise<void>;
-  pollVoice: () => Promise<void>;
-  syncDiscordQueue: () => Promise<void>;
-  setPlaybackRate: (r: number) => void;
-  setAutoplay: (on: boolean) => void;
-  setVisualizer: (on: boolean) => void;
-  setTinyMode: (on: boolean) => void;
-  setStopAfterCurrent: (on: boolean) => Promise<void>;
-  setSleep: (minutes: number | null) => void;
-  setSink: (id: string) => Promise<void>;
-  saveQueueAsPlaylist: (name: string) => Promise<void>;
-};
-
-function applyQueueFields(q: PlayerQueue) {
-  return {
-    queue: q,
-    playing: q.status === "playing",
-    volume: q.volume ?? usePlayer.getState().volume,
-    shuffle: !!q.shuffle,
-    repeat: q.repeat || "off",
-    stopAfterCurrent: !!q.stop_after_current,
-    position: q.position_ms || 0
-  };
+function tabId() {
+  return getTabRendererId();
 }
 
 function usingDiscord() {
   const s = usePlayer.getState();
-  if (!discordOptionVisible(s.voice)) return false;
-  return resolveOutput(s.voice, loadDevicePrefs().outputManual) === "discord";
+  if (s.queue?.output_pref === "discord") return true;
+  if (s.queue?.output_pref === "browser") return false;
+  if (s.output === "discord") return discordOptionVisible(s.voice) && resolveOutput(s.voice, loadDevicePrefs().outputManual) === "discord";
+  return false;
 }
 
 function discordBlocked() {
@@ -263,17 +433,150 @@ function discordBlocked() {
   return usingDiscord() && !discordReady(s.voice);
 }
 
-function queuePath(path: string) {
-  if (!usingDiscord()) return path;
-  return path.includes("?") ? `${path}&target=discord` : `${path}?target=discord`;
+function interpolatedNow(): number {
+  const ph = session.playhead;
+  return interpolatePosition({
+    playing: ph.playing,
+    checkpointPositionMs: ph.checkpointPositionMs,
+    checkpointAtMs: ph.checkpointAtMs,
+    playbackRate: ph.playbackRate,
+    durationMs: ph.durationMs || usePlayer.getState().duration,
+    nowMs: Date.now(),
+    offsetMs: session.clockOffsetMs
+  });
 }
 
-function queuePayload<T extends Record<string, unknown>>(body: T): T & { target?: string } {
-  if (usingDiscord()) return { ...body, target: "discord" };
-  return body;
+function patchFromSession(view: SessionView, extra: Record<string, unknown> = {}) {
+  const q = view.queue as PlayerQueue;
+  const output = q.output_pref === "discord" || q.output_pref === "browser" ? q.output_pref : usePlayer.getState().output;
+  return {
+    queue: q,
+    playing: q.status === "playing",
+    volume: q.volume ?? usePlayer.getState().volume,
+    muted: q.muted ?? usePlayer.getState().muted,
+    shuffle: !!q.shuffle,
+    repeat: q.repeat || "off",
+    stopAfterCurrent: !!q.stop_after_current,
+    position: view.playhead.positionMs || q.position_ms || 0,
+    duration: q.duration_ms || usePlayer.getState().duration,
+    playbackRate: q.playback_rate && q.playback_rate > 0 ? q.playback_rate : usePlayer.getState().playbackRate,
+    autoplay: q.autoplay ?? usePlayer.getState().autoplay,
+    output,
+    ...extra
+  };
 }
 
-function ensureDiscordPoll() {
+function ingestQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kind?: "snapshot" | "playhead" | "bind" }): SessionView {
+  const prev = session;
+  session = applySnapshot(prev, snap, {
+    guildId: guildIdOf(),
+    clock: opts?.clock ?? lastClock ?? undefined,
+    tabRendererId: tabId(),
+    nowMs: Date.now(),
+    kind: opts?.kind
+  });
+  if (opts?.clock) lastClock = opts.clock;
+  if (typeof snap.generation === "number" && snap.generation > 0) rendererGeneration = snap.generation;
+  if (session.stopAudio || shouldStopHtmlAudio(session.queue, tabId())) pauseAll();
+  const listeners = pickListeners(snap);
+  if (listeners) usePlayer.setState({ listeners });
+  syncPendingUndo((session.queue as PlayerQueue).state_revision);
+  return session;
+}
+
+function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kind?: "snapshot" | "playhead" }) {
+  const prev = usePlayer.getState();
+  const prevId = prev.queue?.current_track_id;
+  const prevItems = prev.queue?.items;
+  const view = ingestQueue(snap, opts);
+  const own = !usingDiscord() && tabOwnsBrowserLease(session.queue, tabId());
+
+  if (opts?.kind === "playhead" && own) {
+    usePlayer.setState({
+      duration: view.playhead.durationMs || prev.duration,
+      playbackRate: view.playhead.playbackRate || prev.playbackRate
+    });
+  } else {
+    const jump = Math.abs(view.playhead.positionMs - prev.position) > 1500;
+    const position = view.stopAudio || usingDiscord() || !own || jump ? view.playhead.positionMs : prev.position;
+    usePlayer.setState({ ...patchFromSession(view), position });
+  }
+
+  if (view.stopAudio || shouldStopHtmlAudio(session.queue, tabId())) pauseAll();
+
+  if (opts?.kind === "playhead") {
+    if (!own) {
+      usePlayer.setState({ playing: session.queue.status === "playing", position: interpolatedNow() });
+    }
+    ensureSessionPoll();
+    return;
+  }
+
+  const q = session.queue as PlayerQueue;
+  if (q.status === "paused" || q.status === "stopped" || view.stopAudio) {
+    pauseAll();
+    usePlayer.setState({ playing: false });
+  }
+
+  if (own && queueNeedsLocalBind(prevId, prevItems, q) && q.current_track_id) {
+    const id = q.current_track_id;
+    void usePlayer
+      .getState()
+      .hydrateTrack(id)
+      .then(async (t) => {
+        const ownNow = !usingDiscord() && tabOwnsBrowserLease(session.queue, tabId());
+        if (!ownNow) {
+          pauseAll();
+          return;
+        }
+        const wantPlay = session.queue.status === "playing";
+        const played = await startLocal(id, interpolatedNow(), wantPlay, t);
+        if (wantPlay) usePlayer.setState({ playing: playingAfterStart(played, true, id) });
+      });
+  }
+  if (own) preloadUpcoming(q);
+  ensureSessionPoll();
+}
+
+function ensureQueueSse(): QueueSseClient {
+  if (queueSse) return queueSse;
+  queueSse = createQueueSseClient({
+    fetchSnapshot: async () => {
+      const { queue } = await fetchQueue();
+      return { queue, listeners: pickListeners(queue) };
+    },
+    onSnapshot: ({ queue }) => {
+      applyRemoteQueue(queue, { clock: lastClock ?? undefined, kind: "snapshot" });
+    },
+    onState: (snap) => {
+      const serverTime = parseTimeMs(snap.server_time);
+      const clock = serverTime != null ? sampleClock(Date.now(), Date.now(), serverTime) : undefined;
+      applyRemoteQueue(snap, { clock, kind: "snapshot" });
+    },
+    onPlayhead: (event) => {
+      applyRemoteQueue(playheadEventToSnap(event, session.queue), { kind: "playhead" });
+    },
+    onPresence: (event) => {
+      usePlayer.setState({ listeners: mergePresence(usePlayer.getState().listeners, event) });
+    },
+    onAuthLost: () => {
+      queueSse?.stop();
+    }
+  });
+  return queueSse;
+}
+
+async function fetchQueue(): Promise<{ queue: PlayerQueue; clock: ClockSample }> {
+  const localSend = Date.now();
+  const q = ((await api.get<PlayerQueue>("/api/v1/me/queue")) || emptyQueue()) as PlayerQueue;
+  const localReceive = Date.now();
+  const serverTime = parseTimeMs((q as QueueSnapshot).server_time);
+  const clock = sampleClock(localSend, localReceive, serverTime);
+  lastClock = clock;
+  return { queue: q, clock };
+}
+
+function ensureSessionPoll() {
   if (usingDiscord() && !discordQueueTimer) {
     discordQueueTimer = window.setInterval(() => {
       usePlayer.getState().syncDiscordQueue();
@@ -283,11 +586,48 @@ function ensureDiscordPoll() {
     window.clearInterval(discordQueueTimer);
     discordQueueTimer = undefined;
   }
+  if ((usingDiscord() || !tabOwnsBrowserLease(session.queue, tabId())) && !playheadTimer) {
+    playheadTimer = window.setInterval(() => {
+      if (seeking) return;
+      usePlayer.setState({ position: interpolatedNow() });
+      publishMediaPosition();
+    }, 250);
+  }
+  if (!usingDiscord() && tabOwnsBrowserLease(session.queue, tabId()) && playheadTimer) {
+    window.clearInterval(playheadTimer);
+    playheadTimer = undefined;
+  }
+}
+
+async function acquireBrowserLease(): Promise<boolean> {
+  const id = tabId();
+  if (tabOwnsBrowserLease(session.queue, id) && session.queue.output_pref !== "discord") return true;
+  askRendererTabsToStop();
+  try {
+    const res = await api.post<QueueSnapshot>("/api/v1/me/queue/renderer/acquire", {
+      renderer_id: id,
+      expected_generation: 0,
+      device_id: getDeviceId()
+    });
+    if (res) ingestQueue(res);
+    usePlayer.setState(patchFromSession(session));
+    return tabOwnsBrowserLease(session.queue, id);
+  } catch {
+    return tabOwnsBrowserLease(session.queue, id);
+  }
 }
 
 async function startLocal(id: string, positionMsValue: number, shouldPlay: boolean, meta?: PlayerTrack) {
+  const mediaState = itemMediaState(session.queue, id) ?? itemMediaState(usePlayer.getState().queue, id);
+  if (!isMediaReady(mediaState)) {
+    stopElement(getAudio());
+    if (shouldPlay && !usingDiscord() && !shouldStopHtmlAudio(session.queue, tabId())) {
+      await acquireBrowserLease();
+    }
+    return false;
+  }
   const a = getAudio();
-  await bindTrack(a, id);
+  await bindTrack(a, id, mediaState);
   applyReplayGain(replayGainMultiplier(usePlayer.getState().queue?.replaygain_mode, meta || currentMeta));
   applyRate(usePlayer.getState().playbackRate);
   applyVolume(usePlayer.getState().volume, usePlayer.getState().muted);
@@ -310,6 +650,15 @@ async function startLocal(id: string, positionMsValue: number, shouldPlay: boole
     }
     return false;
   }
+  if (usingDiscord() || shouldStopHtmlAudio(session.queue, tabId())) {
+    pauseAll();
+    return false;
+  }
+  const owns = await acquireBrowserLease();
+  if (!owns || !tabOwnsBrowserLease(session.queue, tabId())) {
+    pauseAll();
+    return false;
+  }
   try {
     await playActive();
     return true;
@@ -319,7 +668,11 @@ async function startLocal(id: string, positionMsValue: number, shouldPlay: boole
 }
 
 function isPlaybackLive() {
-  return !!usePlayer.getState().playing;
+  const s = usePlayer.getState();
+  if (s.playing) return true;
+  const status = s.queue?.status;
+  if (status === "paused" || status === "playing" || status === "interrupted") return true;
+  return !!s.queue?.current_track_id;
 }
 
 async function appendToQueue(ids: string[], next?: boolean) {
@@ -336,25 +689,17 @@ async function appendToQueue(ids: string[], next?: boolean) {
       return false;
     }
   }
-  const q = await api.post<PlayerQueue>(queuePath("/api/v1/me/queue/add"), queuePayload({ track_ids: ids, next }));
+  const q = await api.post<PlayerQueue>("/api/v1/me/queue/add", { track_ids: ids, next, device_id: getDeviceId() });
   lastQueueMutAt = Date.now();
   if (q && Array.isArray(q.items)) {
-    usePlayer.setState({
-      queue: q,
-      shuffle: !!q.shuffle,
-      repeat: q.repeat || usePlayer.getState().repeat,
-      stopAfterCurrent: !!q.stop_after_current
-    });
+    ingestQueue(q);
+    usePlayer.setState(patchFromSession(session));
     return true;
   }
   try {
-    const fresh = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
-    usePlayer.setState({
-      queue: fresh,
-      shuffle: !!fresh.shuffle,
-      repeat: fresh.repeat || usePlayer.getState().repeat,
-      stopAfterCurrent: !!fresh.stop_after_current
-    });
+    const { queue: fresh, clock } = await fetchQueue();
+    ingestQueue(fresh, { clock });
+    usePlayer.setState(patchFromSession(session));
   } catch {
     /* keep local queue */
   }
@@ -492,6 +837,52 @@ async function beginNext(fromEnded: boolean, gapless: boolean, xfMs: number) {
 
 const prefs = loadDevicePrefs();
 
+type PlayerStore = {
+  queue: PlayerQueue | null;
+  current?: PlayerTrack;
+  playing: boolean;
+  volume: number;
+  muted: boolean;
+  shuffle: boolean;
+  repeat: string;
+  position: number;
+  duration: number;
+  playbackRate: number;
+  autoplay: boolean;
+  visualizer: boolean;
+  tinyMode: boolean;
+  keyboardShortcuts: boolean;
+  stopAfterCurrent: boolean;
+  sleepUntil: number | null;
+  output: OutputTarget;
+  voice: VoiceState | null;
+  sinkId: string;
+  listeners: PresenceParticipant[];
+  pendingUndo: PendingUndo | null;
+  load: () => Promise<void>;
+  playTracks: (ids: string[], start?: number) => Promise<void>;
+  playNow: (index: number) => Promise<void>;
+  add: (ids: string[], next?: boolean) => Promise<void>;
+  control: (action: string, extra?: Record<string, unknown>) => Promise<void>;
+  seek: (ms: number) => void;
+  setVolume: (v: number) => void;
+  toggleMute: () => void;
+  hydrateTrack: (id: string) => Promise<PlayerTrack | undefined>;
+  setOutput: (o: OutputTarget) => Promise<void>;
+  pollVoice: () => Promise<void>;
+  syncDiscordQueue: () => Promise<void>;
+  setPlaybackRate: (r: number) => void;
+  setAutoplay: (on: boolean) => void;
+  setVisualizer: (on: boolean) => void;
+  setTinyMode: (on: boolean) => void;
+  setKeyboardShortcuts: (on: boolean) => void;
+  setStopAfterCurrent: (on: boolean) => Promise<void>;
+  setSleep: (minutes: number | null) => void;
+  setSink: (id: string) => Promise<void>;
+  saveQueueAsPlaylist: (name: string) => Promise<void>;
+  undo: () => Promise<void>;
+};
+
 export const usePlayer = create<PlayerStore>()(
   persist(
     (set, get) => ({
@@ -507,44 +898,48 @@ export const usePlayer = create<PlayerStore>()(
       autoplay: prefs.autoplay,
       visualizer: prefs.visualizer,
       tinyMode: prefs.tinyMode,
+      keyboardShortcuts: false,
       stopAfterCurrent: false,
       sleepUntil: null,
       output: resolveOutput(null, prefs.outputManual),
       voice: null,
       sinkId: prefs.sinkId,
+      listeners: [],
+      pendingUndo: null,
       load: async () => {
         try {
           await get().pollVoice();
-          const q = (await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"))) || emptyQueue();
-          const discord = usingDiscord();
-          set({
-            ...applyQueueFields(q),
-            playing: discord ? q.status === "playing" : false
-          });
+          const { queue: q, clock } = await fetchQueue();
+          ingestQueue(q || emptyQueue(), { clock });
+          const discord = usingDiscord() || shouldStopHtmlAudio(session.queue, tabId());
+          set(patchFromSession(session, { playing: discord ? session.queue.status === "playing" : false }));
           applyVolume(get().volume, get().muted);
           if (q.current_track_id) {
             const t = await get().hydrateTrack(q.current_track_id);
             if (discord) {
               pauseAll();
-              set({ playing: q.status === "playing", position: q.position_ms || 0, duration: t?.duration_ms || 0 });
+              set({ playing: session.queue.status === "playing", position: interpolatedNow(), duration: t?.duration_ms || session.playhead.durationMs || 0 });
             } else {
-              const wantPlay = q.status === "playing";
-              const played = await startLocal(q.current_track_id, q.position_ms || 0, wantPlay, t);
-              set({ playing: wantPlay && played, position: q.position_ms || 0, duration: t?.duration_ms || durationMs() });
+              const wantPlay =
+                session.queue.status === "playing" &&
+                (tabOwnsBrowserLease(session.queue, tabId()) || !session.queue.renderer_id || session.queue.renderer_kind === "none");
+              const played = wantPlay ? await startLocal(q.current_track_id, interpolatedNow(), true, t) : await startLocal(q.current_track_id, interpolatedNow(), false, t);
+              set({ playing: playingAfterStart(played, wantPlay, q.current_track_id), position: interpolatedNow(), duration: t?.duration_ms || durationMs() });
               if (played) beginListen(q.current_track_id);
             }
           }
-          const nextId = q.items?.[(q.current_index ?? 0) + 1]?.track_id;
-          if (nextId && !discord) {
-            preloadTrack(nextId);
+          const nextItem = q.items?.[(q.current_index ?? 0) + 1];
+          if (nextItem?.track_id && !discord) {
+            preloadTrack(nextItem.track_id, nextItem.media_state);
             get()
-              .hydrateTrack(nextId)
+              .hydrateTrack(nextItem.track_id)
               .then((t) => {
                 nextMeta = t;
               })
               .catch(() => undefined);
           }
-          ensureDiscordPoll();
+          ensureSessionPoll();
+          ensureQueueSse().start({ resync: false });
         } catch {
           /* unauthenticated or not in voice */
         }
@@ -555,7 +950,8 @@ export const usePlayer = create<PlayerStore>()(
           if (get().queue?.current_track_id === id || get().current?.id === id || !get().current) {
             currentMeta = t;
             set({ current: t, duration: t.duration_ms || durationMs() || 0 });
-            bindSession(t);
+            bindMediaSession(t);
+            publishMediaPosition();
             applyReplayGain(replayGainMultiplier(get().queue?.replaygain_mode, t));
           }
           return t;
@@ -586,45 +982,48 @@ export const usePlayer = create<PlayerStore>()(
           if (usingDiscord()) {
             pauseAll();
             try {
-              await joinDiscord();
-              await playDiscord(ids, idx);
+              const joined = await joinDiscord();
+              const next = applyBindResult(session, joined || {}, joined?.guild_id || guildIdOf());
+              if (next.ignored === "stale_bind") {
+                toast.error("Voice bind is out of date");
+                return;
+              }
+              session = next;
+              const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
+                track_ids: ids,
+                start: idx,
+                device_id: getDeviceId(),
+                command_id: newCommandId()
+              });
+              ingestQueue(q || emptyQueue());
+              set(patchFromSession(session, { playing: true, position: 0 }));
             } catch (e) {
               const msg = e instanceof Error ? e.message : "Discord play failed";
               toast.error(msg);
               return;
             }
-            try {
-              const q = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
-              set({ ...applyQueueFields(q || emptyQueue()), playing: true, position: 0 });
-            } catch {
-              set({
-                queue: emptyQueue({
-                  items: ids.map((track_id, position) => ({ id: track_id, position, track_id })),
-                  current_index: idx,
-                  current_track_id: ids[idx],
-                  status: "playing"
-                }),
-                playing: true,
-                position: 0
-              });
-            }
             lastQueueMutAt = Date.now();
             await get().hydrateTrack(ids[idx]);
-            ensureDiscordPoll();
+            ensureSessionPoll();
             return;
           }
-          const q = await api.put<PlayerQueue>("/api/v1/me/queue", { track_ids: ids, start: idx });
+          const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
+            track_ids: ids,
+            start: idx,
+            device_id: getDeviceId(),
+            command_id: newCommandId()
+          });
           lastQueueMutAt = Date.now();
-          set({ ...applyQueueFields(q), playing: true });
+          ingestQueue(q);
+          set(patchFromSession(session, { playing: true }));
           const id = ids[idx];
           currentMeta = undefined;
           listen = null;
           const t = await get().hydrateTrack(id);
           const played = await startLocal(id, 0, true, t);
-          set({ playing: played });
+          set({ playing: playingAfterStart(played, true, id) });
           if (played) beginListen(id);
-          const nid = ids[idx + 1];
-          if (nid) preloadTrack(nid);
+          preloadUpcoming(session.queue);
         });
       },
       playNow: async (index) => {
@@ -666,24 +1065,26 @@ export const usePlayer = create<PlayerStore>()(
         const t = await get().hydrateTrack(ids[index]);
         currentMeta = t;
         const played = await startLocal(ids[index], 0, true, t);
-        set({ playing: played });
+        set({ playing: playingAfterStart(played, true, ids[index]) });
         if (played) beginListen(ids[index]);
-        const nid = ids[index + 1];
-        if (nid) preloadTrack(nid);
+        preloadUpcoming(get().queue);
       },
       add: async (ids, next) => {
         await enqueueQueueOp(() => appendToQueue(ids, next));
       },
       control: async (action, extra) => {
-        const before = get();
-        if ((action === "skip" || action === "next" || action === "previous") && before.current) {
-          markSkip(before.current.id, before.position, before.duration, before.stopAfterCurrent);
-        }
         if (action === "pause") pauseAll();
+        const localRemoved =
+          action === "remove" || action === "clear" ? snapshotRemovedItems(action, extra, get().queue) : [];
         let q: PlayerQueue | null = null;
         try {
-          q = await api.post<PlayerQueue>(queuePath("/api/v1/me/queue/control"), queuePayload({ action, extra }));
+          q = (await commands.control(action, extra || {}, getDeviceId())) as PlayerQueue | null;
         } catch (e) {
+          if (action === "undo" && errorStatus(e) === 409) {
+            toast.error("Undo expired");
+            set({ pendingUndo: null });
+            return;
+          }
           if (action === "index") throw e;
           if (action === "stop_after_current" || action === "reorder" || action === "seek") return;
           toast.error(e instanceof Error ? e.message : "Playback control failed");
@@ -691,15 +1092,26 @@ export const usePlayer = create<PlayerStore>()(
         }
         if (!q) return;
         const prevId = get().current?.id;
-        const metaOnly = action === "seek" || action === "reorder" || action === "volume" || action === "stop_after_current" || action === "remove" || action === "clear";
-        set({
-          queue: q,
-          shuffle: !!q.shuffle,
-          repeat: q.repeat || get().repeat,
-          stopAfterCurrent: q.stop_after_current ?? get().stopAfterCurrent,
-          volume: q.volume ?? get().volume,
-          ...(metaOnly ? {} : { playing: q.status === "playing" })
-        });
+        const prevItems = get().queue?.items;
+        const metaOnly =
+          action === "seek" ||
+          action === "reorder" ||
+          action === "volume" ||
+          action === "mute" ||
+          action === "unmute" ||
+          action === "stop_after_current" ||
+          action === "remove" ||
+          action === "clear" ||
+          action === "undo";
+        ingestQueue(q);
+        if (action === "remove" || action === "clear") {
+          const pending = parseUndoPayload(q, localRemoved);
+          set({ pendingUndo: pending });
+          if (pending) offerUndoToast(action);
+        } else if (action === "undo") {
+          set({ pendingUndo: null });
+        }
+        set(patchFromSession(session, metaOnly ? { playing: get().playing } : {}));
         const discord = usingDiscord();
         if (!metaOnly && (action === "pause" || q.status === "paused" || q.status === "stopped")) {
           pauseAll();
@@ -707,6 +1119,17 @@ export const usePlayer = create<PlayerStore>()(
         }
         if (action === "resume" && !discord) {
           try {
+            if (!(await acquireBrowserLease())) {
+              pauseAll();
+              set({ playing: false });
+              return;
+            }
+            const resumeId = q.current_track_id || get().current?.id;
+            if (resumeId && !isMediaReady(itemMediaState(session.queue, resumeId))) {
+              stopElement(getAudio());
+              set({ playing: true });
+              return;
+            }
             await playActive();
             set({ playing: true });
             if (get().current?.id) beginListen(get().current!.id);
@@ -722,26 +1145,26 @@ export const usePlayer = create<PlayerStore>()(
           pauseAll();
           set({ playing: false, position: 0 });
         }
-        if (q.current_track_id && q.current_track_id !== prevId) {
+        if (queueNeedsLocalBind(prevId, prevItems, q) && q.current_track_id) {
           const t = await get().hydrateTrack(q.current_track_id);
           currentMeta = t;
           if (skipLocalStart) {
             applyReplayGain(replayGainMultiplier(get().queue?.replaygain_mode, t));
           } else if (!discord && q.status === "playing") {
-            const played = await startLocal(q.current_track_id, q.position_ms || 0, true, t);
-            set({ playing: played });
+            const played = await startLocal(q.current_track_id, q.position_ms || interpolatedNow(), true, t);
+            set({ playing: playingAfterStart(played, true, q.current_track_id) });
             if (played) {
               listen = null;
               beginListen(q.current_track_id);
             }
           } else if (!discord) {
-            await startLocal(q.current_track_id, q.position_ms || 0, false, t);
+            await startLocal(q.current_track_id, q.position_ms || interpolatedNow(), false, t);
           } else {
             pauseAll();
           }
+          preloadUpcoming(q);
           const nid = q.items?.[(q.current_index ?? 0) + 1]?.track_id;
           if (nid) {
-            preloadTrack(nid);
             get()
               .hydrateTrack(nid)
               .then((m) => {
@@ -750,6 +1173,7 @@ export const usePlayer = create<PlayerStore>()(
               .catch(() => undefined);
           }
         }
+        ensureSessionPoll();
       },
       seek: (ms) => {
         seeking = true;
@@ -759,90 +1183,136 @@ export const usePlayer = create<PlayerStore>()(
         const t = get().current;
         if (t) markProgress(t.id, ms, get().duration);
         get().control("seek", { position_ms: Math.round(ms) }).catch(() => undefined);
-        updatePositionState();
+        publishMediaPosition();
       },
       setVolume: (v) => {
         const next = Math.min(1, Math.max(0, v));
         const muted = next <= 0;
         applyVolume(next, muted);
         set({ volume: next, muted });
+        if (volTimer) window.clearTimeout(volTimer);
+        volTimer = window.setTimeout(() => {
+          get().control("volume", { volume: next }).catch(() => undefined);
+        }, 150);
       },
       toggleMute: () => {
         const muted = !get().muted;
         applyVolume(get().volume, muted);
         set({ muted });
+        get().control(muted ? "mute" : "unmute").catch(() => undefined);
       },
       setOutput: async (o) => {
-        setManualOutput(o);
-        set({ output: o });
         if (o === "discord") {
+          const wasPlaying = get().playing || get().queue?.status === "playing";
+          const resumeId = get().current?.id;
+          const resumePos = get().position;
+          const resumeMeta = get().current;
           pauseAll();
+          setManualOutput("discord");
           await get().pollVoice();
           if (!discordReady(get().voice)) {
+            setManualOutput("browser");
+            session = applyJoinFailure(session);
+            set({ output: "browser", playing: false, queue: { ...get().queue, output_pref: "browser" } as PlayerQueue });
             toast.error("Join a Discord voice channel to play");
-            set({ playing: false });
-            ensureDiscordPoll();
+            if (wasPlaying && resumeId) {
+              const played = await startLocal(resumeId, resumePos, true, resumeMeta);
+              set({ playing: played, output: "browser" });
+            }
+            ensureSessionPoll();
             return;
           }
-          const ids = idsOf(get().queue);
-          const idx = get().queue?.current_index || 0;
-          const pos = get().position;
           try {
-            await joinDiscord();
-            if (ids.length) {
-              await playDiscord(ids, idx);
-              if (pos > 500) {
-                await api.post(queuePath("/api/v1/me/queue/control"), queuePayload({
-                  action: "seek",
-                  extra: { position_ms: Math.round(pos) }
-                }));
+            const joined = await joinDiscord();
+            const next = applyBindResult(session, joined || {}, joined?.guild_id || guildIdOf());
+            if (next.ignored === "stale_bind") {
+              session = applyJoinFailure(session);
+              setManualOutput("browser");
+              set({ output: "browser", queue: { ...get().queue, output_pref: "browser" } as PlayerQueue });
+              toast.error("Voice bind is out of date");
+              if (wasPlaying && resumeId) {
+                const played = await startLocal(resumeId, resumePos, true, resumeMeta);
+                set({ playing: played });
               }
-              set({ playing: true });
+              ensureSessionPoll();
+              return;
             }
-            await get().syncDiscordQueue();
+            session = next;
+            pauseAll();
+            set(patchFromSession(session, { output: "discord", playing: session.queue.status === "playing" || wasPlaying }));
+            try {
+              const { queue: fresh, clock } = await fetchQueue();
+              ingestQueue(fresh, { clock });
+              set(patchFromSession(session, { output: "discord" }));
+            } catch {
+              /* keep bind result */
+            }
           } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Discord play failed");
+            session = applyJoinFailure(session);
+            setManualOutput("browser");
+            set({ output: "browser", queue: { ...(get().queue || emptyQueue()), output_pref: "browser" } });
+            toast.error(e instanceof Error ? e.message : "Discord join failed");
+            if (wasPlaying && resumeId) {
+              const played = await startLocal(resumeId, resumePos, true, resumeMeta);
+              set({ playing: played, output: "browser" });
+            }
+            ensureSessionPoll();
+            return;
           }
-          ensureDiscordPoll();
+          ensureSessionPoll();
           return;
         }
+        setManualOutput("browser");
         try {
-          await api.post("/api/v1/me/queue/control", { action: "pause", extra: {}, target: "discord" });
-        } catch {
-          /* no guild session */
+          const switched = (await commands.control(
+            "output_pref",
+            { output_pref: "browser", renderer_id: tabId() },
+            getDeviceId()
+          )) as PlayerQueue | null;
+          if (switched) {
+            const bindRev = session.lastBindingRevision;
+            const byGuild = session.lastBindingByGuild;
+            session = applySwitchToBrowser(session, switched);
+            session = { ...session, lastBindingRevision: bindRev, lastBindingByGuild: byGuild };
+            set(patchFromSession(session, { output: "browser" }));
+          }
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Could not switch to browser");
+          ensureSessionPoll();
+          return;
         }
-        ensureDiscordPoll();
+        const owned = await acquireBrowserLease();
+        ensureSessionPoll();
         const id = get().current?.id;
-        if (id && (get().playing || get().queue?.status === "playing")) {
-          const played = await startLocal(id, get().position, true, get().current);
-          set({ playing: played });
+        const fromCheckpoint = interpolatedNow();
+        if (owned && id && (get().playing || get().queue?.status === "playing")) {
+          const played = await startLocal(id, fromCheckpoint, true, get().current);
+          set({ playing: played, position: fromCheckpoint, output: "browser" });
+        } else {
+          set({ output: "browser", position: fromCheckpoint });
+          if (id) await startLocal(id, fromCheckpoint, false, get().current);
         }
       },
       pollVoice: async () => {
         const voice = await fetchVoice();
         const manual = loadDevicePrefs().outputManual;
-        const output = resolveOutput(voice, manual);
+        const pref = session.queue.output_pref;
+        const output = pref === "discord" || pref === "browser" ? pref : resolveOutput(voice, manual);
         set({ voice, output });
-        ensureDiscordPoll();
+        ensureSessionPoll();
       },
       syncDiscordQueue: async () => {
-        if (!usingDiscord()) return;
         try {
-          const q = await api.get<PlayerQueue>(queuePath("/api/v1/me/queue"));
+          const { queue: q, clock } = await fetchQueue();
           if (!q) return;
+          const view = ingestQueue(q, { clock });
           const cur = get();
-          const trackChanged = q.current_track_id !== cur.queue?.current_track_id;
-          const pos = q.position_ms || 0;
           set({
-            queue: q,
-            shuffle: !!q.shuffle,
-            repeat: q.repeat || cur.repeat,
-            stopAfterCurrent: !!q.stop_after_current,
-            volume: q.volume ?? cur.volume,
-            playing: q.status === "playing",
-            position: trackChanged || Math.abs(pos - cur.position) > 1500 ? pos : cur.position
+            ...patchFromSession(view),
+            position: view.stopAudio || usingDiscord() || Math.abs(view.playhead.positionMs - cur.position) > 1500 ? view.playhead.positionMs : cur.position
           });
-          if (q.current_track_id && (trackChanged || !cur.current)) {
+          if (view.stopAudio) pauseAll();
+          if (q.current_track_id && (q.current_track_id !== cur.queue?.current_track_id || !cur.current)) {
             await get().hydrateTrack(q.current_track_id);
           }
           const idx = q.current_index ?? 0;
@@ -856,7 +1326,7 @@ export const usePlayer = create<PlayerStore>()(
         applyRate(rate);
         saveDevicePrefs({ playbackRate: rate });
         set({ playbackRate: rate });
-        updatePositionState();
+        publishMediaPosition();
       },
       setAutoplay: (on) => {
         saveDevicePrefs({ autoplay: on, autoplaySet: true });
@@ -872,10 +1342,14 @@ export const usePlayer = create<PlayerStore>()(
         saveDevicePrefs({ tinyMode: on });
         set({ tinyMode: on });
       },
+      setKeyboardShortcuts: (on) => {
+        usePrefs.getState().setKeyboardShortcuts(on);
+        set({ keyboardShortcuts: on });
+      },
       setStopAfterCurrent: async (on) => {
         set({ stopAfterCurrent: on });
         try {
-          await get().control("stop_after_current", { enabled: on });
+          await get().control("stop_after_current", { stop_after_current: on, enabled: on });
         } catch {
           /* P1 additive */
         }
@@ -910,14 +1384,30 @@ export const usePlayer = create<PlayerStore>()(
         const created = await api.post<{ id: string }>("/api/v1/playlists", { name: name || "Queue" });
         if (created?.id) await api.post(`/api/v1/playlists/${created.id}/tracks`, { track_ids: ids });
         toast.success("Saved as playlist");
+      },
+      undo: async () => {
+        const pending = get().pendingUndo;
+        if (!pending?.items.length) return;
+        await get().control("undo", { undo_generation: pending.undo_generation, items: pending.items });
       }
     }),
     { name: "sd-player", partialize: (s) => ({ volume: s.volume, muted: s.muted }) }
   )
 );
 
+usePrefs.persist.onFinishHydration((s) => {
+  usePlayer.setState({ keyboardShortcuts: s?.keyboardShortcuts === true });
+});
+if (usePrefs.persist.hasHydrated()) {
+  usePlayer.setState({ keyboardShortcuts: usePrefs.getState().keyboardShortcuts === true });
+}
+
 function onTimeUpdate(el: HTMLAudioElement) {
   if (usingDiscord() || el !== getAudio() || seeking) return;
+  if (shouldStopHtmlAudio(session.queue, tabId())) {
+    pauseAll();
+    return;
+  }
   const pos = positionMs();
   const dur = durationMs() || usePlayer.getState().duration;
   usePlayer.setState({ position: pos, duration: dur || usePlayer.getState().duration });
@@ -929,7 +1419,7 @@ function onTimeUpdate(el: HTMLAudioElement) {
   }
   if (remainingMs() < 12000) maybeReplenishRadio();
   scheduleCrossfade();
-  updatePositionState();
+  publishMediaPosition();
 }
 
 function onEnded(el: HTMLAudioElement) {
@@ -950,13 +1440,23 @@ function onEnded(el: HTMLAudioElement) {
 }
 
 export function attachAudioListeners() {
+  const keysOn = usePrefs.getState().keyboardShortcuts === true;
+  if (usePlayer.getState().keyboardShortcuts !== keysOn) {
+    usePlayer.setState({ keyboardShortcuts: keysOn });
+  }
+  subscribeRendererChannel(() => {
+    pauseAll();
+  });
   if (!audioBound) {
     audioBound = true;
     const bind = (el: HTMLAudioElement) => {
       el.ontimeupdate = () => onTimeUpdate(el);
       el.onended = () => onEnded(el);
       el.onplay = () => {
-        if (usingDiscord()) return;
+        if (usingDiscord() || shouldStopHtmlAudio(session.queue, tabId())) {
+          pauseAll();
+          return;
+        }
         if (el === getAudio()) usePlayer.setState({ playing: true });
       };
       el.onpause = () => {
@@ -976,36 +1476,24 @@ export function attachAudioListeners() {
     if (sink) applySink(sink);
   }
 
-  navigator.mediaSession?.setActionHandler("play", () => usePlayer.getState().control("resume"));
-  navigator.mediaSession?.setActionHandler("pause", () => usePlayer.getState().control("pause"));
-  navigator.mediaSession?.setActionHandler("nexttrack", () => usePlayer.getState().control("skip"));
-  navigator.mediaSession?.setActionHandler("previoustrack", () => usePlayer.getState().control("previous"));
-  try {
-    navigator.mediaSession?.setActionHandler("seekto", (e) => {
-      if (e.seekTime == null) return;
-      usePlayer.getState().seek(e.seekTime * 1000);
-    });
-  } catch {
-    /* unsupported */
-  }
-  try {
-    navigator.mediaSession?.setActionHandler("seekforward", (e) => {
-      const off = (e.seekOffset ?? 10) * 1000;
-      usePlayer.getState().seek(usePlayer.getState().position + off);
-    });
-    navigator.mediaSession?.setActionHandler("seekbackward", (e) => {
-      const off = (e.seekOffset ?? 10) * 1000;
-      usePlayer.getState().seek(Math.max(0, usePlayer.getState().position - off));
-    });
-  } catch {
-    /* unsupported */
-  }
+  attachMediaRemote({
+    play: () => usePlayer.getState().control("resume"),
+    pause: () => usePlayer.getState().control("pause"),
+    next: () => usePlayer.getState().control("skip"),
+    previous: () => usePlayer.getState().control("previous"),
+    seekTo: (ms) => usePlayer.getState().seek(ms),
+    seekBy: (deltaMs) => {
+      const p = usePlayer.getState();
+      p.seek(Math.max(0, p.position + deltaMs));
+    }
+  });
 
   if (!keysBound) {
     keysBound = true;
     window.addEventListener("keydown", (e) => {
       if (useUi.getState().commandOpen) return;
       if (typingTarget(e.target)) return;
+      if (!usePrefs.getState().keyboardShortcuts) return;
       const p = usePlayer.getState();
       if (e.code === "Space") {
         e.preventDefault();
@@ -1036,6 +1524,24 @@ export function attachAudioListeners() {
     voiceTimer = window.setInterval(() => usePlayer.getState().pollVoice(), 4000);
     usePlayer.getState().pollVoice();
   }
+}
+
+export function applyRemoteQueueForTests(snap: QueueSnapshot) {
+  applyRemoteQueue(snap, { kind: "snapshot" });
+}
+
+export function resetPlayerSessionForTests(view?: SessionView) {
+  queueSse?.stop();
+  session = view ? { ...initialSession(), ...view } : initialSession();
+  lastClock = null;
+  rendererGeneration = 0;
+  commands.reset();
+  lastQueueMutAt = 0;
+  usePlayer.setState({ listeners: [], pendingUndo: null });
+}
+
+export function getPlayerSessionForTests() {
+  return session;
 }
 
 export { getAudio, getAnalyser } from "@/components/player/audioEngine";

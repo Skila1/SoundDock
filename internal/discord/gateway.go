@@ -124,6 +124,11 @@ func (b *Bot) onGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
 	}
 	ctx := context.Background()
 	_, _ = b.pool.Exec(ctx, `INSERT INTO discord_guilds (id, name) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name`, g.ID, g.Name)
+	botID := ""
+	if s != nil && s.State != nil && s.State.User != nil {
+		botID = s.State.User.ID
+	}
+	b.seedGuildVoiceStates(ctx, g.ID, botID, g.VoiceStates)
 	enabled, token, appID, _, err := b.loadSettings(ctx)
 	if err != nil || !enabled || token == "" || appID == nil || *appID == "" {
 		return
@@ -132,6 +137,23 @@ func (b *Bot) onGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
 	u := "https://discord.com/api/v10/applications/" + *appID + "/guilds/" + g.ID + "/commands"
 	if err := putDiscordJSON(ctx, token, u, body); err != nil {
 		b.log.Warn("guild command register", "guild", g.ID, "err", err)
+	}
+}
+
+func shouldSeedVoiceState(botID, userID, channelID string) bool {
+	return userID != "" && userID != botID && channelID != ""
+}
+
+func (b *Bot) seedGuildVoiceStates(ctx context.Context, guildID, botID string, states []*discordgo.VoiceState) {
+	for _, vs := range states {
+		if vs == nil || !shouldSeedVoiceState(botID, vs.UserID, vs.ChannelID) {
+			continue
+		}
+		_, _ = b.pool.Exec(ctx, `
+			INSERT INTO discord_user_voice (discord_user_id, guild_id, channel_id, updated_at)
+			VALUES ($1,$2,$3,now())
+			ON CONFLICT (discord_user_id, guild_id) DO UPDATE SET channel_id=EXCLUDED.channel_id, updated_at=now()`,
+			vs.UserID, guildID, vs.ChannelID)
 	}
 }
 
@@ -190,11 +212,7 @@ func (b *Bot) confirmBotLeft(ctx context.Context, guildID string) {
 	if vc := b.voiceConn(guildID); vc != nil && waitVoiceReady(vc, 0) {
 		return
 	}
-	if v, ok := b.voices.LoadAndDelete(guildID); ok {
-		if gr, ok := v.(*guildRuntime); ok && gr.cancel != nil {
-			gr.cancel()
-		}
-	}
+	b.stopStreamer(guildID)
 	_, _ = b.pool.Exec(context.Background(), `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='kicked' WHERE guild_id=$1`, guildID)
 }
 

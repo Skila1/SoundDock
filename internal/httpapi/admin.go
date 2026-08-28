@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -11,7 +12,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/auth"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
+	discordx "github.com/sounddock/sounddock/internal/discord"
 	"github.com/sounddock/sounddock/internal/ingest"
+	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/storage"
 	"github.com/sounddock/sounddock/internal/transcode"
@@ -88,8 +91,23 @@ func (s *Server) adminScans(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
-	_ = s.Jobs.RequestCancel(r.Context(), id)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "invalid job id")
+		return
+	}
+	if s.Jobs == nil {
+		writeErr(w, 503, "jobs", "worker runner is not available")
+		return
+	}
+	if err := s.Jobs.RequestCancel(r.Context(), id); err != nil {
+		if errors.Is(err, jobs.ErrNotCancellable) {
+			writeErr(w, 409, "not_cancellable", "this job type or stage cannot be cancelled")
+			return
+		}
+		s.writeJobErr(w, err)
+		return
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -236,9 +254,22 @@ func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request) {
 		}
 		s.Audit.Event(r.Context(), &currentUser(r).ID, "user.roles", id.String(), r.RemoteAddr, nil)
 	} else if body.Role != nil {
+		// Merge built-in User vs Administrator only. Do not wipe custom groups.
 		role := strings.TrimSpace(*body.Role)
-		_, _ = s.Pool.Exec(r.Context(), `DELETE FROM user_roles WHERE user_id=$1`, id)
-		_, _ = s.Pool.Exec(r.Context(), `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name=$2`, id, role)
+		if role == "Administrator" {
+			_, _ = s.Pool.Exec(r.Context(), `
+				INSERT INTO user_roles (user_id, role_id)
+				SELECT $1, id FROM roles WHERE name='Administrator'
+				ON CONFLICT DO NOTHING`, id)
+		} else {
+			_, _ = s.Pool.Exec(r.Context(), `
+				DELETE FROM user_roles
+				WHERE user_id=$1 AND role_id IN (SELECT id FROM roles WHERE name='Administrator')`, id)
+			_, _ = s.Pool.Exec(r.Context(), `
+				INSERT INTO user_roles (user_id, role_id)
+				SELECT $1, id FROM roles WHERE name='User'
+				ON CONFLICT DO NOTHING`, id)
+		}
 		s.Audit.Event(r.Context(), &currentUser(r).ID, "user.role", id.String()+":"+role, r.RemoteAddr, nil)
 	}
 	s.adminGetUser(w, r)
@@ -394,13 +425,39 @@ func (s *Server) adminScan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminMigrate(w http.ResponseWriter, r *http.Request) {
-	src, _ := uuid.Parse(chi.URLParam(r, "id"))
+	src, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "invalid library id")
+		return
+	}
 	var body struct {
 		Dest   uuid.UUID `json:"dest_library_id"`
 		Mode   string    `json:"mode"`
 		Dedupe bool      `json:"dedupe"`
 	}
-	_ = decodeJSON(r, &body)
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
+	if body.Dest == uuid.Nil {
+		writeErr(w, 400, "invalid", "dest_library_id required")
+		return
+	}
+	if body.Dest == src {
+		writeErr(w, 400, "invalid", "destination library must differ from source")
+		return
+	}
+	var srcExists, destExists bool
+	_ = s.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM libraries WHERE id=$1)`, src).Scan(&srcExists)
+	if !srcExists {
+		writeErr(w, 404, "not_found", "source library not found")
+		return
+	}
+	_ = s.Pool.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM libraries WHERE id=$1)`, body.Dest).Scan(&destExists)
+	if !destExists {
+		writeErr(w, 404, "not_found", "destination library not found")
+		return
+	}
 	jid, err := s.Jobs.Enqueue(r.Context(), "library.migrate", ingest.MigratePayload{Source: src, Dest: body.Dest, Mode: body.Mode, Dedupe: body.Dedupe})
 	if err != nil {
 		s.writeJobErr(w, err)
@@ -682,6 +739,9 @@ func (s *Server) discordPatchGuild(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) discordDisconnect(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	if bot := discordx.Live(); bot != nil {
+		_ = bot.LeaveGuild(r.Context(), id)
+	}
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='admin' WHERE guild_id=$1`, id)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

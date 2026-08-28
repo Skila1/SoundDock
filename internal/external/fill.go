@@ -66,6 +66,7 @@ func fillFromYouTube(ctx context.Context, sx Filler, title string, artists []str
 	if err != nil || len(hits) == 0 {
 		return uuid.Nil, err
 	}
+	hits = scapex.RankHits(q, hits)
 	id := pickYouTubeID(hits, title, artists)
 	if id == "" {
 		return uuid.Nil, nil

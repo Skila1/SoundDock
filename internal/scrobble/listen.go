@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/listen"
 )
 
 func (s *Service) HandleListen(ctx context.Context, userID uuid.UUID, ev Event) error {
@@ -15,6 +16,9 @@ func (s *Service) HandleListen(ctx context.Context, userID uuid.UUID, ev Event) 
 	if ev.Source == "import" {
 		return nil
 	}
+	if ev.DurationMS <= 0 && ev.TrackID != uuid.Nil {
+		_ = s.pool.QueryRow(ctx, `SELECT duration_ms FROM tracks WHERE id=$1`, ev.TrackID).Scan(&ev.DurationMS)
+	}
 	prev := s.loadState(ctx, userID, ev.Source)
 	next, out := Eval(prev, ev)
 	_, _ = s.pool.Exec(ctx, `
@@ -23,6 +27,14 @@ func (s *Service) HandleListen(ctx context.Context, userID uuid.UUID, ev Event) 
 		ON CONFLICT (user_id, source) DO UPDATE SET
 			track_id=EXCLUDED.track_id, counted=EXCLUDED.counted, max_position_ms=EXCLUDED.max_position_ms, updated_at=now()`,
 		userID, ev.Source, next.TrackID, next.Counted, next.MaxPositionMS)
+	_ = listen.ApplyShadow(ctx, s.pool, userID, listen.Checkpoint{
+		TrackID: ev.TrackID, PositionMS: ev.PositionMS, DurationMS: ev.DurationMS,
+		Source: ev.Source, Kind: ev.Kind, StopAfter: ev.StopAfter,
+		PlaybackInstanceID: ev.PlaybackInstanceID, PlayheadSequence: ev.PlayheadSequence,
+		ClientID: ev.ClientID, DeviceID: ev.DeviceID, Status: ev.Status,
+		PlaybackRate: ev.PlaybackRate, RendererKind: ev.RendererKind, RendererID: ev.RendererID,
+		AudioListener: ev.AudioListener, At: ev.At,
+	})
 	if out.CountSkip {
 		_, _ = s.pool.Exec(ctx, `
 			INSERT INTO play_counts (user_id, track_id, count, skip_count) VALUES ($1,$2,0,1)

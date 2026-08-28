@@ -1,15 +1,18 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/listen"
 	"github.com/sounddock/sounddock/internal/playback"
+	"github.com/sounddock/sounddock/internal/scapex"
 	"github.com/sounddock/sounddock/internal/scrobble"
 )
 
@@ -31,12 +34,48 @@ func requestPlaybackTarget(r *http.Request, extra map[string]any, bodyTarget str
 	return ""
 }
 
-func (s *Server) playSession(r *http.Request, extra map[string]any, bodyTarget, deviceID string) (uuid.UUID, error) {
-	if requestPlaybackTarget(r, extra, bodyTarget) == "discord" {
-		return s.discordPlaySession(r)
-	}
+// attachedPlaySession returns the bound guild session when the caller is a
+// verified Discord user currently in the bot's bound voice channel. Otherwise
+// it returns their personal web_device session. Unlinked users never attach.
+// target=discord is not a second-queue selector.
+func (s *Server) attachedPlaySession(r *http.Request, extra map[string]any, deviceID string) (uuid.UUID, error) {
 	u := currentUser(r)
-	return s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(deviceID, requestDeviceID(r, extra)))
+	personal, err := s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(deviceID, requestDeviceID(r, extra)))
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if attached, ok := s.attachedBoundSession(r); ok {
+		return attached, nil
+	}
+	return personal, nil
+}
+
+func (s *Server) playSession(r *http.Request, extra map[string]any, bodyTarget, deviceID string) (uuid.UUID, error) {
+	sid, err := s.attachedPlaySession(r, extra, deviceID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if requestPlaybackTarget(r, extra, bodyTarget) == "discord" {
+		if err := s.bindSessionToDiscord(r, sid, extra); err != nil {
+			return uuid.Nil, err
+		}
+	}
+	return sid, nil
+}
+
+func (s *Server) bindSessionToDiscord(r *http.Request, sid uuid.UUID, extra map[string]any) error {
+	g, c, ok := s.findUserVoice(r)
+	if !ok {
+		return errNotInVoice
+	}
+	expected, _ := extraInt64Map(extra, "expected_binding_revision")
+	rendererID := extraStringMap(extra, "renderer_id")
+	gen, _ := extraInt64Map(extra, "renderer_generation")
+	if gen == 0 {
+		gen, _ = extraInt64Map(extra, "generation")
+	}
+	_, err := s.ensureDiscordJoin(r, g, c, sid, expected, rendererID, gen)
+	return err
 }
 
 func (s *Server) writePlaySessionErr(w http.ResponseWriter, err error) bool {
@@ -51,8 +90,30 @@ func (s *Server) writePlaySessionErr(w http.ResponseWriter, err error) bool {
 		writeErr(w, 403, "guild_disabled", err.Error())
 		return true
 	}
+	if writePlaybackConflict(w, err) {
+		return true
+	}
 	writeErr(w, 500, "queue", err.Error())
 	return true
+}
+
+func writePlaybackConflict(w http.ResponseWriter, err error) bool {
+	switch {
+	case errors.Is(err, playback.ErrBindConflict):
+		writeErr(w, 409, "bind_conflict", err.Error())
+		return true
+	case errors.Is(err, playback.ErrLeaseConflict):
+		writeErr(w, 409, "lease_conflict", err.Error())
+		return true
+	case errors.Is(err, playback.ErrCommandConflict):
+		writeErr(w, 409, "command_conflict", err.Error())
+		return true
+	case errors.Is(err, playback.ErrUndoStale):
+		writeErr(w, 409, "undo_stale", err.Error())
+		return true
+	default:
+		return false
+	}
 }
 
 func requestDeviceID(r *http.Request, extra map[string]any) string {
@@ -74,7 +135,7 @@ func requestDeviceID(r *http.Request, extra map[string]any) string {
 }
 
 func (s *Server) webPlaySession(r *http.Request, extra map[string]any) (uuid.UUID, error) {
-	return s.playSession(r, extra, "", "")
+	return s.attachedPlaySession(r, extra, "")
 }
 
 func (s *Server) getQueue(w http.ResponseWriter, r *http.Request) {
@@ -87,29 +148,45 @@ func (s *Server) getQueue(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "queue", err.Error())
 		return
 	}
-	writeJSON(w, 200, q)
+	s.respondQueueMedia(w, r, sid, q, "")
 }
 
 func (s *Server) putQueue(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TrackIDs []string `json:"track_ids"`
-		Start    int      `json:"start"`
-		DeviceID string   `json:"device_id"`
-		Target   string   `json:"target"`
+		TrackIDs                []string `json:"track_ids"`
+		Start                   int      `json:"start"`
+		DeviceID                string   `json:"device_id"`
+		Target                  string   `json:"target"`
+		ExpectedBindingRevision int64    `json:"expected_binding_revision"`
+		RendererID              string   `json:"renderer_id"`
+		RendererGeneration      int64    `json:"renderer_generation"`
+		CommandID               string   `json:"command_id"`
 	}
 	_ = decodeJSON(r, &body)
-	sid, err := s.playSession(r, nil, body.Target, body.DeviceID)
+	sid, err := s.playSession(r, bindExtra(nil, body.ExpectedBindingRevision, body.RendererID, body.RendererGeneration), body.Target, body.DeviceID)
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	ids, err := s.resolveQueueTracks(r.Context(), body.TrackIDs)
-	if err != nil {
-		writeErr(w, 502, "scapex", err.Error())
+	ids, err := s.resolvePlayTracks(s.withAcquirePolicy(r.Context()), body.TrackIDs)
+	if s.writeAcquireErr(w, err) {
 		return
 	}
-	if err := s.Play.Replace(r.Context(), sid, ids, body.Start); err != nil {
-		writeErr(w, 400, "queue", err.Error())
-		return
+	cmdID := strings.TrimSpace(body.CommandID)
+	if cmdID == "" {
+		if err := s.Play.Replace(s.withQueueRequester(r), sid, ids, body.Start); err != nil {
+			writeErr(w, 400, "queue", err.Error())
+			return
+		}
+	} else {
+		extra := map[string]any{"track_ids": ids, "start": body.Start, "command_id": cmdID}
+		if err := s.Play.Control(s.withQueueRequester(r), sid, "replace", extra); err != nil {
+			if errors.Is(err, playback.ErrCommandConflict) {
+				writeErr(w, 409, "command_conflict", err.Error())
+				return
+			}
+			writeErr(w, 400, "queue", err.Error())
+			return
+		}
 	}
 	if len(ids) > 0 && s.Hooks != nil {
 		start := body.Start
@@ -119,51 +196,108 @@ func (s *Server) putQueue(w http.ResponseWriter, r *http.Request) {
 		s.Hooks.Emit(r.Context(), "playback.started", map[string]any{"track_id": ids[start]})
 	}
 	q, _ := s.Play.Get(r.Context(), sid)
-	writeJSON(w, 200, q)
+	s.respondQueueMedia(w, r, sid, q, "state")
+}
+
+func (s *Server) writeAcquireErr(w http.ResponseWriter, err error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.Contains(err.Error(), "library write not granted") {
+		writeErr(w, 403, "library_grant", err.Error())
+		return true
+	}
+	writeErr(w, 502, "scapex", err.Error())
+	return true
 }
 
 func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TrackIDs []string `json:"track_ids"`
-		Next     bool     `json:"next"`
-		DeviceID string   `json:"device_id"`
-		Target   string   `json:"target"`
+		TrackIDs                []string `json:"track_ids"`
+		Next                    bool     `json:"next"`
+		DeviceID                string   `json:"device_id"`
+		Target                  string   `json:"target"`
+		ExpectedBindingRevision int64    `json:"expected_binding_revision"`
+		RendererID              string   `json:"renderer_id"`
+		RendererGeneration      int64    `json:"renderer_generation"`
 	}
 	_ = decodeJSON(r, &body)
-	sid, err := s.playSession(r, nil, body.Target, body.DeviceID)
+	sid, err := s.playSession(r, bindExtra(nil, body.ExpectedBindingRevision, body.RendererID, body.RendererGeneration), body.Target, body.DeviceID)
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	ids, err := s.resolveQueueTracks(r.Context(), body.TrackIDs)
-	if err != nil {
-		writeErr(w, 502, "scapex", err.Error())
+	ids, err := s.resolvePlayTracks(s.withAcquirePolicy(r.Context()), body.TrackIDs)
+	if s.writeAcquireErr(w, err) {
 		return
 	}
-	if err := s.Play.Add(r.Context(), sid, ids, body.Next); err != nil {
+	if err := s.Play.Add(s.withQueueRequester(r), sid, ids, body.Next); err != nil {
 		writeErr(w, 400, "queue", err.Error())
 		return
 	}
 	q, _ := s.Play.Get(r.Context(), sid)
-	writeJSON(w, 200, q)
+	s.respondQueueMedia(w, r, sid, q, "state")
 }
 
 func (s *Server) queueControl(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Action   string         `json:"action"`
-		Extra    map[string]any `json:"extra"`
-		DeviceID string         `json:"device_id"`
-		Target   string         `json:"target"`
+		Action                  string         `json:"action"`
+		Extra                   map[string]any `json:"extra"`
+		DeviceID                string         `json:"device_id"`
+		Target                  string         `json:"target"`
+		CommandID               string         `json:"command_id"`
+		ExpectedBindingRevision int64          `json:"expected_binding_revision"`
+		RendererID              string         `json:"renderer_id"`
+		RendererGeneration      int64          `json:"renderer_generation"`
 	}
 	_ = decodeJSON(r, &body)
 	if body.Extra == nil {
 		body.Extra = map[string]any{}
 	}
+	if strings.TrimSpace(extraStringMap(body.Extra, "command_id")) == "" && strings.TrimSpace(body.CommandID) != "" {
+		body.Extra["command_id"] = body.CommandID
+	}
+	body.Extra = bindExtra(body.Extra, body.ExpectedBindingRevision, firstNonEmpty(body.RendererID, extraStringMap(body.Extra, "renderer_id")), body.RendererGeneration)
+	if body.Action == "switch_renderer" {
+		if controlOutputPref(body.Extra) == "" {
+			body.Extra["output_pref"] = playback.OutputBrowser
+		}
+		body.Action = "output_pref"
+	}
 	sid, err := s.playSession(r, body.Extra, body.Target, body.DeviceID)
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	s.maybeListenSkip(r, sid, body.Action, body.Extra)
-	if err := s.Play.Control(r.Context(), sid, body.Action, body.Extra); err != nil {
+	if body.Action == "output_pref" {
+		pref := controlOutputPref(body.Extra)
+		if pref == playback.OutputBrowser {
+			rid := firstNonEmpty(extraStringMap(body.Extra, "renderer_id"), body.DeviceID, requestDeviceID(r, body.Extra), "http-browser")
+			gen, _ := extraInt64Map(body.Extra, "renderer_generation")
+			if gen == 0 {
+				gen, _ = extraInt64Map(body.Extra, "generation")
+			}
+			if err := s.Play.SwitchRendererToBrowser(r.Context(), sid, rid, gen); err != nil {
+				if writePlaybackConflict(w, err) {
+					return
+				}
+				writeErr(w, 400, "control", err.Error())
+				return
+			}
+		} else if pref == playback.OutputDiscord && requestPlaybackTarget(r, body.Extra, body.Target) != "discord" {
+			if err := s.bindSessionToDiscord(r, sid, body.Extra); err != nil {
+				if s.writePlaySessionErr(w, err) {
+					return
+				}
+			}
+		}
+	}
+	switch body.Action {
+	case "skip", "next", "previous":
+		s.maybeListenSkip(r, sid, body.Extra)
+	}
+	if err := s.Play.Control(s.withQueueRequester(r), sid, body.Action, body.Extra); err != nil {
+		if writePlaybackConflict(w, err) {
+			return
+		}
 		writeErr(w, 400, "control", err.Error())
 		return
 	}
@@ -174,17 +308,50 @@ func (s *Server) queueControl(w http.ResponseWriter, r *http.Request) {
 		s.Hooks.Emit(r.Context(), "playback.finished", map[string]any{"session": sid})
 	}
 	q, _ := s.Play.Get(r.Context(), sid)
-	writeJSON(w, 200, q)
+	attachUndoToQueue(q, body.Extra)
+	s.respondQueueMedia(w, r, sid, q, "state+playhead")
+}
+
+func (s *Server) queueRendererAcquire(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RendererID         string `json:"renderer_id"`
+		ExpectedGeneration int64  `json:"expected_generation"`
+		DeviceID           string `json:"device_id"`
+	}
+	_ = decodeJSON(r, &body)
+	sid, err := s.attachedPlaySession(r, nil, body.DeviceID)
+	if s.writePlaySessionErr(w, err) {
+		return
+	}
+	rid := firstNonEmpty(body.RendererID, requestDeviceID(r, nil), "http-browser")
+	gen, err := s.Play.AcquireBrowserRenderer(r.Context(), sid, rid, body.ExpectedGeneration)
+	if err != nil {
+		if writePlaybackConflict(w, err) {
+			return
+		}
+		writeErr(w, 500, "renderer", err.Error())
+		return
+	}
+	q, _ := s.Play.Get(r.Context(), sid)
+	if q == nil {
+		q = map[string]any{}
+	}
+	q["generation"] = gen
+	s.respondQueueMedia(w, r, sid, q, "state")
 }
 
 func (s *Server) postListen(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		TrackID    uuid.UUID `json:"track_id"`
-		PositionMs int       `json:"position_ms"`
-		DurationMs int       `json:"duration_ms"`
-		Source     string    `json:"source"`
-		Event      string    `json:"event"`
-		DeviceID   string    `json:"device_id"`
+		TrackID            uuid.UUID `json:"track_id"`
+		PositionMs         int       `json:"position_ms"`
+		DurationMs         int       `json:"duration_ms"`
+		Source             string    `json:"source"`
+		Event              string    `json:"event"`
+		DeviceID           string    `json:"device_id"`
+		ClientID           string    `json:"client_id"`
+		PlaybackInstanceID uuid.UUID `json:"playback_instance_id"`
+		PlayheadSequence   int64     `json:"playhead_sequence"`
+		Status             string    `json:"status"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, 400, "listen", "invalid json")
@@ -210,29 +377,45 @@ func (s *Server) postListen(w http.ResponseWriter, r *http.Request) {
 	if kind == "" {
 		kind = "progress"
 	}
-	err := listen.For(s.Pool).Record(r.Context(), listen.Event{
-		UserID:     u.ID,
-		TrackID:    body.TrackID,
-		PositionMs: body.PositionMs,
-		DurationMs: body.DurationMs,
-		Source:     body.Source,
-		Kind:       kind,
+	clientID := firstNonEmpty(body.ClientID, requestClientID(r, nil))
+	deviceID := firstNonEmpty(body.DeviceID, requestDeviceID(r, nil))
+	instanceID := body.PlaybackInstanceID
+	seq := body.PlayheadSequence
+	rendererKind, rendererID, status := "", "", body.Status
+	rate := 1.0
+	sid, serr := s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(deviceID, requestDeviceID(r, nil)))
+	if serr == nil {
+		if q, err := s.Play.Get(r.Context(), sid); err == nil {
+			if instanceID == uuid.Nil {
+				instanceID = uuidFromQueue(q, "playback_instance_id")
+			}
+			if seq == 0 {
+				seq, _ = extraInt64Map(q, "playhead_sequence")
+			}
+			rendererKind = extraStringMap(q, "renderer_kind")
+			rendererID = stringFromQueue(q, "renderer_id")
+			if status == "" {
+				status = extraStringMap(q, "status")
+			}
+			if rateVal := floatFromQueue(q, "playback_rate"); rateVal > 0 {
+				rate = rateVal
+			}
+		}
+	}
+	err := s.scrobbleSvc().HandleListen(r.Context(), u.ID, scrobble.Event{
+		TrackID: body.TrackID, PositionMS: body.PositionMs, DurationMS: body.DurationMs,
+		Source: body.Source, Kind: kind,
+		PlaybackInstanceID: instanceID, PlayheadSequence: seq,
+		ClientID: clientID, DeviceID: deviceID, Status: status,
+		PlaybackRate: rate, RendererKind: rendererKind, RendererID: rendererID,
 	})
 	if err != nil {
-		if errors.Is(err, listen.ErrSource) {
-			writeErr(w, 400, "listen", err.Error())
-			return
-		}
 		writeErr(w, 500, "listen", err.Error())
 		return
 	}
-	_ = scrobble.New(s.Pool, s.Box, s.Search).HandleListen(r.Context(), u.ID, scrobble.Event{
-		TrackID: body.TrackID, PositionMS: body.PositionMs, DurationMS: body.DurationMs,
-		Source: body.Source, Kind: kind,
-	})
-	sid, serr := s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(body.DeviceID, requestDeviceID(r, nil)))
 	if serr == nil {
 		_ = s.Play.SetPosition(r.Context(), sid, body.PositionMs)
+		s.touchPresenceFromRequest(r, sid)
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
@@ -404,39 +587,32 @@ func (s *Server) enqueuePartyExpire(r *http.Request, sid uuid.UUID, exp time.Tim
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE jobs SET run_after=$2 WHERE id=$1`, jid, exp)
 }
 
-func (s *Server) maybeListenSkip(r *http.Request, sid uuid.UUID, action string, extra map[string]any) {
-	if action != "skip" && action != "next" && action != "previous" {
-		return
-	}
+func (s *Server) maybeListenSkip(r *http.Request, sid uuid.UUID, extra map[string]any) {
 	q, err := s.Play.Get(r.Context(), sid)
 	if err != nil {
 		return
 	}
-	stopAfter, _ := q["stop_after_current"].(bool)
 	tid := trackIDFromQueue(q)
 	if tid == uuid.Nil {
 		return
 	}
-	pos, _ := q["position_ms"].(int)
-	if ms, ok := extra["position_ms"]; ok {
-		switch t := ms.(type) {
-		case float64:
-			pos = int(t)
-		case int:
-			pos = t
-		}
-	}
+	pos, _ := extraIntMap(extra, "position_ms")
 	dur := 0
 	_ = s.Pool.QueryRow(r.Context(), `SELECT duration_ms FROM tracks WHERE id=$1`, tid).Scan(&dur)
-	src := extraStringMap(extra, "source")
-	_ = listen.For(s.Pool).Record(r.Context(), listen.Event{
-		UserID:     currentUser(r).ID,
-		TrackID:    tid,
-		PositionMs: pos,
-		DurationMs: dur,
-		Source:     src,
-		Kind:       "skip",
-		StopAfter:  stopAfter && action != "previous",
+	seq, _ := extraInt64Map(q, "playhead_sequence")
+	listenTrue := true
+	_ = s.scrobbleSvc().HandleListen(r.Context(), currentUser(r).ID, scrobble.Event{
+		TrackID: tid, PositionMS: pos, DurationMS: dur,
+		Source: extraStringMap(extra, "source"), Kind: "skip",
+		PlaybackInstanceID: uuidFromQueue(q, "playback_instance_id"),
+		PlayheadSequence:   seq,
+		ClientID:           extraStringMap(extra, "client_id"),
+		DeviceID:           extraStringMap(extra, "device_id"),
+		Status:             extraStringMap(q, "status"),
+		PlaybackRate:       floatFromQueue(q, "playback_rate"),
+		RendererKind:       extraStringMap(q, "renderer_kind"),
+		RendererID:         stringFromQueue(q, "renderer_id"),
+		AudioListener:      &listenTrue,
 	})
 }
 
@@ -452,26 +628,77 @@ func (s *Server) maybeListenProgress(r *http.Request, sid uuid.UUID, extra map[s
 	pos, _ := extraIntMap(extra, "position_ms")
 	dur := 0
 	_ = s.Pool.QueryRow(r.Context(), `SELECT duration_ms FROM tracks WHERE id=$1`, tid).Scan(&dur)
-	_ = listen.For(s.Pool).Record(r.Context(), listen.Event{
-		UserID:     currentUser(r).ID,
-		TrackID:    tid,
-		PositionMs: pos,
-		DurationMs: dur,
-		Source:     extraStringMap(extra, "source"),
-		Kind:       "progress",
+	seq, _ := extraInt64Map(q, "playhead_sequence")
+	_ = s.scrobbleSvc().HandleListen(r.Context(), currentUser(r).ID, scrobble.Event{
+		TrackID: tid, PositionMS: pos, DurationMS: dur,
+		Source: extraStringMap(extra, "source"), Kind: "progress",
+		PlaybackInstanceID: uuidFromQueue(q, "playback_instance_id"),
+		PlayheadSequence:   seq,
+		ClientID:           extraStringMap(extra, "client_id"),
+		DeviceID:           extraStringMap(extra, "device_id"),
+		Status:             extraStringMap(q, "status"),
+		PlaybackRate:       floatFromQueue(q, "playback_rate"),
+		RendererKind:       extraStringMap(q, "renderer_kind"),
+		RendererID:         stringFromQueue(q, "renderer_id"),
 	})
 }
 
 func trackIDFromQueue(q map[string]any) uuid.UUID {
-	switch v := q["current_track_id"].(type) {
+	return uuidFromQueue(q, "current_track_id")
+}
+
+func uuidFromQueue(q map[string]any, key string) uuid.UUID {
+	if q == nil {
+		return uuid.Nil
+	}
+	switch v := q[key].(type) {
 	case uuid.UUID:
 		return v
 	case *uuid.UUID:
 		if v != nil {
 			return *v
 		}
+	case string:
+		id, err := uuid.Parse(v)
+		if err == nil {
+			return id
+		}
 	}
 	return uuid.Nil
+}
+
+func stringFromQueue(q map[string]any, key string) string {
+	if q == nil {
+		return ""
+	}
+	switch v := q[key].(type) {
+	case string:
+		return v
+	case *string:
+		if v != nil {
+			return *v
+		}
+	}
+	return ""
+}
+
+func floatFromQueue(q map[string]any, key string) float64 {
+	if q == nil {
+		return 0
+	}
+	switch v := q[key].(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case int32:
+		return float64(v)
+	}
+	return 0
 }
 
 func firstNonEmpty(vals ...string) string {
@@ -483,6 +710,32 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
+func (s *Server) withQueueRequester(r *http.Request) context.Context {
+	ctx := r.Context()
+	u := currentUser(r)
+	if u == nil {
+		return playback.WithOrigin(ctx, playback.OriginUser)
+	}
+	discordID := ""
+	if _, ok := s.attachedBoundSession(r); ok {
+		discordID = s.discordUserID(r)
+	}
+	ctx = playback.WithRequester(ctx, u.ID, discordID)
+	return playback.WithOrigin(ctx, playback.OriginUser)
+}
+
+func attachUndoToQueue(q, extra map[string]any) {
+	if q == nil || extra == nil {
+		return
+	}
+	if u, ok := extra["undo"]; ok && u != nil {
+		q["undo"] = u
+	}
+	if g, ok := extra["undo_generation"]; ok && g != nil {
+		q["undo_generation"] = g
+	}
+}
+
 func extraStringMap(extra map[string]any, key string) string {
 	if extra == nil {
 		return ""
@@ -492,19 +745,263 @@ func extraStringMap(extra map[string]any, key string) string {
 }
 
 func extraIntMap(extra map[string]any, key string) (int, bool) {
+	n, ok := extraInt64Map(extra, key)
+	return int(n), ok
+}
+
+func extraInt64Map(extra map[string]any, key string) (int64, bool) {
 	if extra == nil {
 		return 0, false
 	}
 	v, ok := extra[key]
-	if !ok {
+	if !ok || v == nil {
 		return 0, false
 	}
+	return anyInt64(v)
+}
+
+func anyInt64(v any) (int64, bool) {
 	switch t := v.(type) {
-	case float64:
-		return int(t), true
-	case int:
+	case int64:
 		return t, true
+	case int:
+		return int64(t), true
+	case float64:
+		return int64(t), true
+	case float32:
+		return int64(t), true
 	default:
 		return 0, false
 	}
+}
+
+func bindExtra(extra map[string]any, expected int64, rendererID string, gen int64) map[string]any {
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	if expected != 0 {
+		extra["expected_binding_revision"] = expected
+	}
+	if rendererID != "" {
+		extra["renderer_id"] = rendererID
+	}
+	if gen != 0 {
+		extra["renderer_generation"] = gen
+	}
+	return extra
+}
+
+func controlOutputPref(extra map[string]any) string {
+	pref := strings.ToLower(strings.TrimSpace(extraStringMap(extra, "output_pref")))
+	if pref == "" {
+		pref = strings.ToLower(strings.TrimSpace(extraStringMap(extra, "pref")))
+	}
+	if pref == "" {
+		pref = strings.ToLower(strings.TrimSpace(extraStringMap(extra, "renderer_kind")))
+	}
+	return pref
+}
+
+var errAcquireNoDB = errString("database unavailable")
+
+func (s *Server) jobsAcquireReady() bool {
+	return s != nil && s.Jobs != nil && s.Jobs.Started()
+}
+
+func (s *Server) withAcquirePolicy(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	pol := s.loadAcquisitionPolicy(ctx)
+	in, _ := ctx.Value(acquireKey{}).(scapex.IntentInput)
+	if in.MediaPolicyID == "" && pol.MediaPolicyID != "" {
+		in.MediaPolicyID = pol.MediaPolicyID
+	}
+	return WithAcquisitionIntent(ctx, in)
+}
+
+// resolvePlayTracks never waits on yt-dlp. Library UUIDs still go through
+// resolveQueueTracks when that path is non-blocking. YouTube-shaped refs use
+// W6-scapex enqueueYouTubeRefs when jobs are running; otherwise a restoring
+// placeholder is inserted and 200 is returned instead of 502 after a long fetch.
+func (s *Server) resolvePlayTracks(ctx context.Context, refs []string) ([]uuid.UUID, error) {
+	tracks, youtube := scapex.ParseTrackRefs(refs)
+	var out []uuid.UUID
+	if len(tracks) > 0 {
+		if s.ScapeX != nil && !s.jobsAcquireReady() {
+			out = append(out, tracks...)
+		} else {
+			ids, err := s.resolveQueueTracks(ctx, uuidStrings(tracks))
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ids...)
+		}
+	}
+	if len(youtube) == 0 {
+		return out, nil
+	}
+	if s.jobsAcquireReady() {
+		ids, err := s.enqueueYouTubeRefs(ctx, youtube)
+		if err != nil {
+			return nil, err
+		}
+		return append(out, ids...), nil
+	}
+	stubs, err := s.ensureRestoringPlaceholders(ctx, youtube)
+	if err != nil {
+		return nil, err
+	}
+	s.enqueueAcquireRefs(ctx, youtube)
+	return append(out, stubs...), nil
+}
+
+func uuidStrings(ids []uuid.UUID) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = id.String()
+	}
+	return out
+}
+
+func (s *Server) enqueueAcquireRefs(ctx context.Context, refs []string) {
+	if s == nil || s.Jobs == nil || len(refs) == 0 {
+		return
+	}
+	_, _ = s.Jobs.Enqueue(ctx, "scapex.fetch", map[string]any{"urls": refs})
+}
+
+func (s *Server) ensureRestoringPlaceholders(ctx context.Context, youtube []string) ([]uuid.UUID, error) {
+	if len(youtube) == 0 {
+		return nil, nil
+	}
+	if s == nil || s.Pool == nil {
+		return nil, errAcquireNoDB
+	}
+	lib, err := s.writableAcquireLibrary(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]uuid.UUID, 0, len(youtube))
+	for _, raw := range youtube {
+		id, err := s.ensureYouTubePlaceholder(ctx, lib, raw)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+func (s *Server) writableAcquireLibrary(ctx context.Context) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := s.Pool.QueryRow(ctx, `
+		SELECT l.id
+		FROM libraries l
+		JOIN storage_providers sp ON sp.id = l.storage_provider_id
+		WHERE l.read_only = false AND sp.type IN ('managed', 'local')
+		ORDER BY CASE WHEN l.is_default THEN 0 ELSE 1 END,
+		         CASE WHEN lower(l.name) = 'music' THEN 0 ELSE 1 END,
+		         l.created_at
+		LIMIT 1`).Scan(&id)
+	if err != nil {
+		return uuid.Nil, errString("no writable library for acquisition")
+	}
+	return id, nil
+}
+
+func (s *Server) ensureYouTubePlaceholder(ctx context.Context, lib uuid.UUID, raw string) (uuid.UUID, error) {
+	vid := youtubeVideoID(raw)
+	watch := raw
+	if u := youtubeWatchURL(raw); u != "" {
+		watch = u
+	}
+	var existing uuid.UUID
+	err := s.Pool.QueryRow(ctx, `
+		SELECT t.id FROM tracks t
+		WHERE t.acquisition IN ('youtube', 'scapex')
+		  AND t.acquisition_ref IN ($1, $2, $3)
+		ORDER BY EXISTS (
+		    SELECT 1 FROM track_files tf
+		    WHERE tf.track_id=t.id AND tf.quality='original' AND tf.deleted_at IS NULL
+		  ) DESC, t.created_at DESC
+		LIMIT 1`, vid, watch, strings.TrimSpace(raw)).Scan(&existing)
+	if err == nil && existing != uuid.Nil {
+		return existing, nil
+	}
+	title := "Restoring"
+	if vid != "" {
+		title = "YouTube " + vid
+	}
+	ref := vid
+	if ref == "" {
+		ref = strings.TrimSpace(raw)
+	}
+	var id uuid.UUID
+	err = s.Pool.QueryRow(ctx, `
+		INSERT INTO tracks (library_id, title, duration_ms, acquisition, acquisition_ref)
+		VALUES ($1, $2, 0, 'youtube', $3)
+		RETURNING id`, lib, title, ref).Scan(&id)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return id, nil
+}
+
+func youtubeWatchURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if vid := youtubeVideoID(raw); len(vid) == 11 {
+		return "https://www.youtube.com/watch?v=" + vid
+	}
+	return raw
+}
+
+func youtubeVideoID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if isYouTubeVideoID(raw) {
+		return raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if v := strings.TrimSpace(u.Query().Get("v")); isYouTubeVideoID(v) {
+		return v
+	}
+	host := strings.ToLower(u.Host)
+	if strings.Contains(host, "youtu.be") {
+		id := strings.Trim(u.Path, "/")
+		if i := strings.IndexByte(id, '/'); i >= 0 {
+			id = id[:i]
+		}
+		if isYouTubeVideoID(id) {
+			return id
+		}
+	}
+	if strings.Contains(host, "youtube.com") && strings.Contains(u.Path, "/shorts/") {
+		id := strings.Trim(strings.TrimPrefix(u.Path, "/shorts/"), "/")
+		if isYouTubeVideoID(id) {
+			return id
+		}
+	}
+	return ""
+}
+
+func isYouTubeVideoID(s string) bool {
+	if len(s) != 11 {
+		return false
+	}
+	for _, c := range s {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }

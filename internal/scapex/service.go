@@ -57,40 +57,9 @@ func (s *Service) Search(ctx context.Context, q string, limit int) ([]Hit, error
 }
 
 func (s *Service) Fetch(ctx context.Context, raw string) ([]uuid.UUID, error) {
-	if s.dock == nil {
-		return nil, fmt.Errorf("SoundDock volume/database is not attached")
-	}
-	src := WatchURL(raw)
-	if src == "" {
-		return nil, fmt.Errorf("not a YouTube URL or video id")
-	}
-	lib, err := s.dock.LibraryID(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("no writable SoundDock library: %w", err)
-	}
-	locals, err := s.yt.Fetch(ctx, src, s.dock.Inbox())
-	if err != nil {
-		return nil, err
-	}
-	if len(locals) == 0 {
-		return nil, fmt.Errorf("yt-dlp produced no audio")
-	}
-	for i := range locals {
-		locals[i], err = s.dock.FinalizeDownload(locals[i])
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := s.dock.EnqueueInboxScan(ctx, lib); err != nil {
-		return nil, err
-	}
-	var ids []uuid.UUID
-	for _, loc := range locals {
-		id, err := s.dock.WaitTrack(ctx, lib, loc.VideoID, loc.Title)
-		if err != nil {
-			return ids, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, nil
+	return s.RunFetchJob(ctx, FetchOpts{
+		JobID:  uuid.New(),
+		URLs:   []string{raw},
+		Policy: DefaultMediaPolicy,
+	})
 }

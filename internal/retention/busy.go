@@ -77,6 +77,9 @@ func (e *Engine) busy(ctx context.Context) (tracks []uuid.UUID, libs []uuid.UUID
 			}
 		}
 	}
+	for _, id := range e.live.IDs() {
+		addTrack(id)
+	}
 	for id := range trackSet {
 		tracks = append(tracks, id)
 	}

@@ -1,6 +1,7 @@
 package scan
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -119,6 +120,9 @@ func (s *Scanner) ScanLibrary(ctx context.Context, libID uuid.UUID, prov storage
 		}
 	}
 	s.reportScan(ctx, jobID, runID, seenN, total, added, failed)
+	if !s.jobCancelRequested(ctx, jobID) {
+		s.persistDuplicateGroups(ctx, jobID)
+	}
 	_, _ = s.pool.Exec(ctx, `UPDATE scan_runs SET files_seen=$2, files_added=$3, files_failed=$4, files_total=$5, finished_at=now() WHERE id=$1`,
 		runID, seenN, added, failed, total)
 	if s.hook != nil {
@@ -300,11 +304,6 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		trackArtistID, _ = s.upsertArtist(ctx, probe.Artist)
 	}
 
-	albumID, err := s.upsertAlbum(ctx, libID, albumTitle, probe, artistID)
-	if err != nil {
-		return err
-	}
-
 	title := nullTitle(probe.Title, originalName)
 	acq, acqRef := "", ""
 	if ref := InboxVideoID(e.Key, kind); ref != "" {
@@ -322,23 +321,23 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 			err = nil
 		}
 	}
-	if err == nil && trackID != uuid.Nil {
-		_, _ = s.pool.Exec(ctx, `
-			UPDATE tracks SET
-			  title=$2,
-			  album_id=$3,
-			  disc_number=$4,
-			  track_number=$5,
-			  duration_ms=CASE WHEN $6 > 0 THEN $6 ELSE duration_ms END,
-			  year=COALESCE(NULLIF($7,0), year),
-			  genre_text=CASE WHEN $8 <> '' THEN $8 ELSE genre_text END,
-			  metadata_source=CASE WHEN $9 <> '' THEN $9 ELSE metadata_source END,
-			  metadata_confidence=COALESCE($10, metadata_confidence),
-			  mbid=CASE WHEN $11 <> '' THEN $11 ELSE mbid END,
-			  updated_at=now()
-			WHERE id=$1 AND locked=false`,
-			trackID, title, albumID, max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre, probe.Source, confOrNil(probe.Confidence), probe.MBID)
-		_, _ = s.pool.Exec(ctx, `DELETE FROM track_artists WHERE track_id=$1 AND role='primary' AND EXISTS (SELECT 1 FROM tracks WHERE id=$1 AND locked=false)`, trackID)
+
+	var albumID uuid.UUID
+	if err == nil && trackID != uuid.Nil && s.trackOrFieldLocked(ctx, trackID, "album") {
+		_ = s.pool.QueryRow(ctx, `SELECT album_id FROM tracks WHERE id=$1`, trackID).Scan(&albumID)
+	}
+	if albumID == uuid.Nil {
+		albumID, err = s.upsertAlbum(ctx, libID, albumTitle, probe, artistID)
+		if err != nil {
+			return err
+		}
+	}
+
+	if trackID != uuid.Nil {
+		s.updateExistingTrack(ctx, trackID, albumID, title, probe)
+		if !s.trackOrFieldLocked(ctx, trackID, "artist") {
+			_, _ = s.pool.Exec(ctx, `DELETE FROM track_artists WHERE track_id=$1 AND role='primary'`, trackID)
+		}
 	} else {
 		err = s.pool.QueryRow(ctx, `
 			INSERT INTO tracks (library_id, album_id, title, disc_number, track_number, duration_ms, year, genre_text, metadata_source, metadata_confidence, mbid)
@@ -357,8 +356,10 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 			  updated_at=now()
 			WHERE id=$1`, trackID, acq, acqRef)
 	}
-	_, _ = s.pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'primary',0) ON CONFLICT DO NOTHING`, trackID, trackArtistID)
-	if probe.Composer != "" {
+	if !s.trackOrFieldLocked(ctx, trackID, "artist") {
+		_, _ = s.pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'primary',0) ON CONFLICT DO NOTHING`, trackID, trackArtistID)
+	}
+	if probe.Composer != "" && !s.trackOrFieldLocked(ctx, trackID, "composer") {
 		cid, _ := s.upsertArtist(ctx, probe.Composer)
 		_, _ = s.pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'composer',0) ON CONFLICT DO NOTHING`, trackID, cid)
 	}
@@ -410,16 +411,23 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		s.enqueueOnce(ctx, fingerprint.JobName, map[string]any{"track_id": trackID, "track_file_id": fileID})
 	}
 
-	if len(probe.Picture) > 0 && s.art != nil {
-		_, _ = s.art.Save(ctx, "album", albumID, "embedded", strings.NewReader(string(probe.Picture)))
-	} else if localPath != "" && s.art != nil {
+	artSrc := "embedded"
+	if len(probe.Picture) == 0 && localPath != "" {
 		if fa := artwork.FolderArt(filepath.Dir(localPath)); fa != "" {
-			f, err := os.Open(fa)
-			if err == nil {
-				_, _ = s.art.Save(ctx, "album", albumID, "folder", f)
-				f.Close()
+			if b, rerr := os.ReadFile(fa); rerr == nil && len(b) > 0 {
+				probe.Picture = b
+				artSrc = "folder"
 			}
 		}
+	}
+	if len(probe.Picture) == 0 {
+		metadata.EnrichCoverArt(ctx, s.pool, &probe)
+		if len(probe.Picture) > 0 {
+			artSrc = "coverartarchive"
+		}
+	}
+	if len(probe.Picture) > 0 && s.art != nil {
+		_, _ = s.art.Save(ctx, "album", albumID, artSrc, bytes.NewReader(probe.Picture))
 	}
 	if s.hook != nil {
 		s.hook.Emit(ctx, "track.added", map[string]any{"track_id": trackID, "library_id": libID})
@@ -432,7 +440,11 @@ func (s *Scanner) IngestKey(ctx context.Context, libID uuid.UUID, prov storage.S
 	if err != nil {
 		return err
 	}
-	return s.ingestFile(ctx, libID, prov, storage.Entry{Key: key, Size: info.Size, ModTime: info.ModTime}, originalName, "", s.knownArtistFn(ctx))
+	if err := s.ingestFile(ctx, libID, prov, storage.Entry{Key: key, Size: info.Size, ModTime: info.ModTime}, originalName, "", s.knownArtistFn(ctx)); err != nil {
+		return err
+	}
+	s.persistDuplicateGroups(ctx, uuid.Nil)
+	return nil
 }
 
 func (s *Scanner) knownArtistFn(ctx context.Context) func(string) bool {

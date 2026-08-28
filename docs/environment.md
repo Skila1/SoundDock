@@ -10,4 +10,4 @@ See `.env.example`. The installer only writes what is needed to boot. Discord cl
 | `SD_METRICS_ENABLED` | Optional Prometheus `/metrics` |
 | `SD_IMAGE` | Image to pull (`ghcr.io/skila1/sounddock:latest`) |
 | `SD_LIBRARY_HOST` | Host folder mounted at `/libraries` |
-| `SD_SCAPEX_URL` | Optional. Leave empty so YouTube search/fetch runs inside SoundDock. Set only if you still run an old sidecar |
+| `SD_SCAPEX_URL` | **Deprecated.** Leave empty. YouTube search and fetch run in-process (yt-dlp). If set, SoundDock still talks to that leftover sidecar. The sidecar is not in Compose. |

@@ -1,14 +1,13 @@
 import { useRef, useState } from "react";
-import { GripVertical, History, ListMusic, ListPlus, PanelRightClose, Pin, PinOff, Play, Trash2, X } from "lucide-react";
+import { GripVertical, History, ListMusic, ListPlus, PanelRightClose, Pin, PinOff, Play, Trash2, Undo2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Artwork } from "@/components/media/Artwork";
-import { artworkUrl, relativeTime } from "@/lib/utils";
-import { usePlayer } from "@/stores/player";
+import { artworkUrl, cn, relativeTime } from "@/lib/utils";
+import { usePlayer, type PlayerQueueItem, type RequestedBy } from "@/stores/player";
 import { useUi } from "@/stores/ui";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Track } from "@/types/api";
-import { toast } from "sonner";
+import type { Track, User } from "@/types/api";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -17,14 +16,103 @@ import { Badge } from "@/components/ui/misc";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { asListenTracks, type ListenTrack } from "@/features/stats/types";
+import type { PresenceParticipant, PresenceSource } from "@/stores/sseClient";
 
-export function QueuePanel({ onClose, onCollapse }: { onClose?: () => void; onCollapse?: () => void }) {
+const MAX_VISIBLE_AVATARS = 4;
+
+export function addedByLabel(
+  requested: RequestedBy | undefined,
+  meId: string | undefined,
+  listeners: PresenceParticipant[]
+): string | null {
+  if (!requested) return null;
+  const uid = requested.user_id;
+  if (uid && meId && uid === meId) return "Added by You";
+  const fromPresence = uid ? listeners.find((p) => p.user_id === uid) : undefined;
+  const name = requested.display_name || fromPresence?.display_name;
+  if (!name) return null;
+  return `Added by ${name}`;
+}
+
+export function orderPresence(listeners: PresenceParticipant[], meId?: string): PresenceParticipant[] {
+  return [...listeners].sort((a, b) => {
+    const aSelf = !!meId && a.user_id === meId;
+    const bSelf = !!meId && b.user_id === meId;
+    if (aSelf !== bSelf) return aSelf ? -1 : 1;
+    return a.display_name.localeCompare(b.display_name, undefined, { sensitivity: "base" });
+  });
+}
+
+function sourceLabel(source: PresenceSource) {
+  if (source === "discord") return "Discord";
+  if (source === "both") return "Web + Discord";
+  return "Web";
+}
+
+function sourcePip(source: PresenceSource) {
+  if (source === "discord") return "bg-[#5865F2]";
+  if (source === "both") return "bg-gradient-to-r from-accent to-[#5865F2]";
+  return "bg-accent";
+}
+
+export function QueuePresence({ className }: { className?: string }) {
+  const listeners = usePlayer((s) => s.listeners);
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
+  const ordered = orderPresence(listeners, me.data?.id);
+  if (!ordered.length) return null;
+  const shown = ordered.slice(0, MAX_VISIBLE_AVATARS);
+  const overflow = ordered.slice(MAX_VISIBLE_AVATARS);
+
+  return (
+    <div className={cn("flex min-w-0 items-center", className)} aria-label="Who is here" role="group">
+      <div className="flex items-center -space-x-2">
+        {shown.map((p) => {
+          const self = p.user_id === me.data?.id;
+          const label = `${p.display_name}${self ? " (you)" : ""} · ${sourceLabel(p.source)}`;
+          return (
+            <Tooltip key={p.user_id} label={label}>
+              <span className="relative inline-flex h-7 w-7 shrink-0">
+                {p.avatar_url ? (
+                  <img src={p.avatar_url} alt="" className="h-7 w-7 rounded-full object-cover ring-2 ring-surface-1" />
+                ) : (
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-3 text-[10px] font-semibold text-foreground ring-2 ring-surface-1">
+                    {p.display_name.slice(0, 1).toUpperCase()}
+                  </span>
+                )}
+                <span
+                  className={cn("absolute bottom-0 right-0 h-2 w-2 rounded-full ring-1 ring-surface-1", sourcePip(p.source))}
+                  aria-hidden
+                />
+              </span>
+            </Tooltip>
+          );
+        })}
+      </div>
+      {overflow.length > 0 && (
+        <Tooltip label={overflow.map((p) => `${p.display_name} · ${sourceLabel(p.source)}`).join(", ")}>
+          <span className="ml-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted">+{overflow.length}</span>
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
+export function QueuePanel({
+  onClose,
+  onCollapse,
+  showPresence = true
+}: {
+  onClose?: () => void;
+  onCollapse?: () => void;
+  showPresence?: boolean;
+}) {
   const p = usePlayer();
   const ui = useUi();
   const drag = useRef<number>(-1);
   const [saveOpen, setSaveOpen] = useState(false);
   const [name, setName] = useState("Queue");
   const [view, setView] = useState<"queue" | "history">("queue");
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const items = p.queue?.items || [];
   const ids = items.map((i) => i.track_id);
   const counts = ids.reduce((m, id) => m.set(id, (m.get(id) || 0) + 1), new Map<string, number>());
@@ -60,9 +148,10 @@ export function QueuePanel({ onClose, onCollapse }: { onClose?: () => void; onCo
     p.control("remove", { position: i });
   };
 
-  const row = (item: (typeof items)[number], i: number, opts: { nowPlaying?: boolean }) => {
+  const row = (item: PlayerQueueItem, i: number, opts: { nowPlaying?: boolean }) => {
     const t = map.get(item.track_id);
     const dup = (counts.get(item.track_id) || 0) > 1;
+    const addedBy = !opts.nowPlaying ? addedByLabel(item.requested_by, me.data?.id, p.listeners) : null;
     const body = (
       <div
         draggable
@@ -89,6 +178,7 @@ export function QueuePanel({ onClose, onCollapse }: { onClose?: () => void; onCo
           <div className="truncate text-xs text-muted">
             {t?.artists?.map((a) => a.name).join(", ") || t?.artist || (opts.nowPlaying ? "Now playing" : "Up next")}
           </div>
+          {addedBy && <div className="truncate text-[11px] text-subtle">{addedBy}</div>}
         </div>
         {!opts.nowPlaying && (
           <>
@@ -138,6 +228,7 @@ export function QueuePanel({ onClose, onCollapse }: { onClose?: () => void; onCo
         <div className="flex min-w-0 items-center gap-2">
           <h2 className="font-semibold">{view === "history" ? "History" : "Queue"}</h2>
           {view === "queue" && <span className="text-sm text-muted">{activeCount}</span>}
+          {showPresence && <QueuePresence className="ml-1" />}
         </div>
         <div className="flex items-center gap-1">
           {view === "queue" ? (
@@ -187,10 +278,15 @@ export function QueuePanel({ onClose, onCollapse }: { onClose?: () => void; onCo
             size="sm"
             variant="ghost"
             disabled={!upcoming.length}
-            onClick={() => p.control("clear").then(() => toast("Up next cleared"))}
+            onClick={() => p.control("clear")}
           >
             <Trash2 className="mr-1 h-3.5 w-3.5" /> Clear
           </Button>
+          {p.pendingUndo && (
+            <Button size="sm" variant="ghost" onClick={() => void p.undo()} aria-label="Undo last queue change">
+              <Undo2 className="mr-1 h-3.5 w-3.5" /> Undo
+            </Button>
+          )}
         </div>
       )}
       <div className="min-h-0 flex-1 space-y-3 overflow-auto px-2 py-3 scrollbar-thin">

@@ -52,7 +52,14 @@ func TestParseInfoHit(t *testing.T) {
 }
 
 func TestCollectDownloads(t *testing.T) {
-	dir := t.TempDir()
+	inbox := t.TempDir()
+	if err := os.WriteFile(filepath.Join(inbox, "other.m4a"), []byte("nope"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(inbox, "job")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "vid123.m4a"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -65,6 +72,27 @@ func TestCollectDownloads(t *testing.T) {
 		t.Fatalf("%+v %v", got, err)
 	}
 	if got[0].Title != "Numb" || got[0].VideoID != "vid123" {
+		t.Fatalf("%+v", got[0])
+	}
+}
+
+func TestCollectDownloadsGlobsExpectedID(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "vid123.m4a"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "otherid.m4a"), []byte("nope"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info := `{"id":"vid123","title":"Numb","artist":"Linkin Park","duration":187,"webpage_url":"https://www.youtube.com/watch?v=vid123"}`
+	if err := os.WriteFile(filepath.Join(dir, "vid123.info.json"), []byte(info), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := collectDownloads(dir, "vid123")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if got[0].VideoID != "vid123" || got[0].Title != "Numb" {
 		t.Fatalf("%+v", got[0])
 	}
 }

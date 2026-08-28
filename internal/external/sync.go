@@ -75,6 +75,11 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 		if sdID == uuid.Nil {
 			_ = pool.QueryRow(ctx, `INSERT INTO playlists (user_id, name, description) VALUES ($1,$2,$3) RETURNING id`, p.UserID, name, meta.Description).Scan(&sdID)
 		}
+		var prevSnap, prevStatus string
+		_ = pool.QueryRow(ctx, `
+			SELECT coalesce(external_snapshot,''), coalesce(last_sync_status,'')
+			FROM external_playlists WHERE user_id=$1 AND provider=$2 AND external_playlist_id=$3`,
+			p.UserID, p.Provider, p.ExternalID).Scan(&prevSnap, &prevStatus)
 		var epid uuid.UUID
 		err = pool.QueryRow(ctx, `
 			INSERT INTO external_playlists (provider_account_id, user_id, provider, external_playlist_id, sounddock_playlist_id, name, description, owner_external_id, artwork_url, track_count, external_snapshot, sync_mode, sync_interval, removal_policy, last_sync_attempt_at, last_sync_status)
@@ -89,6 +94,11 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 		).Scan(&epid, &sdID)
 		if err != nil {
 			return err
+		}
+
+		if snapshotUnchanged(prevSnap, prevStatus, meta.Snapshot) && sdID != uuid.Nil {
+			_, _ = pool.Exec(ctx, `UPDATE external_playlists SET last_sync_at=now(), last_sync_status='ok', last_error='', last_sync_attempt_at=now() WHERE id=$1`, epid)
+			return nil
 		}
 
 		var runID uuid.UUID
@@ -114,6 +124,17 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 			} else if status == "ambiguous" {
 				amb++
 				res.TrackID = nil
+			}
+			if res.TrackID != nil && !trackPlayable(ctx, pool, *res.TrackID) {
+				res.TrackID = nil
+			}
+			if res.TrackID == nil {
+				if mapped := mappedPlayable(ctx, pool, p.Provider, tr.ID); mapped != uuid.Nil {
+					res.TrackID = &mapped
+					status = "high"
+					res.Source = "mapping"
+					res.Confidence = 1
+				}
 			}
 			if res.TrackID == nil && p.shouldFill() && sx != nil {
 				tid, ferr := FillTrack(ctx, sx, p.Provider, tr.ID, tr.Title, tr.Artists)
@@ -149,22 +170,12 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 				epid, i, tr.ID, tr.SourceURL, tr.Title, arts, tr.Album, tr.DurationMS, tr.ISRC, metaJSON, res.TrackID, status, res.Confidence)
 		}
 
-		if p.Removal == "mirror" || p.Mode == "once" {
-			_, _ = pool.Exec(ctx, `DELETE FROM playlist_entries WHERE playlist_id=$1`, sdID)
-			for i, tid := range keepIDs {
-				_, _ = pool.Exec(ctx, `INSERT INTO playlist_entries (playlist_id, track_id, position) VALUES ($1,$2,$3)`, sdID, tid, i)
-			}
-		} else {
-			var max int
-			_ = pool.QueryRow(ctx, `SELECT coalesce(max(position),-1) FROM playlist_entries WHERE playlist_id=$1`, sdID).Scan(&max)
-			for _, tid := range keepIDs {
-				var n int
-				_ = pool.QueryRow(ctx, `SELECT count(*) FROM playlist_entries WHERE playlist_id=$1 AND track_id=$2`, sdID, tid).Scan(&n)
-				if n == 0 {
-					max++
-					_, _ = pool.Exec(ctx, `INSERT INTO playlist_entries (playlist_id, track_id, position) VALUES ($1,$2,$3)`, sdID, tid, max)
-				}
-			}
+		removal := p.Removal
+		if p.Mode == "once" {
+			removal = "mirror"
+		}
+		if err := reconcilePlaylistEntries(ctx, pool, sdID, keepIDs, removal); err != nil {
+			return err
 		}
 
 		var next any
@@ -260,19 +271,5 @@ func touchJob(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, progress in
 }
 
 func userToken(ctx context.Context, pool *pgxpool.Pool, box *cryptox.Box, userID uuid.UUID, provider string, st Settings) (access, extra string, err error) {
-	extra = st.Extra["developer_token"]
-	if extra == "" {
-		extra = st.Extra["api_key"]
-	}
-	var accEnc []byte
-	err = pool.QueryRow(ctx, `SELECT access_token_enc FROM external_provider_accounts WHERE user_id=$1 AND provider=$2 AND status='connected'`, userID, provider).Scan(&accEnc)
-	if err != nil {
-		return "", extra, err
-	}
-	if box != nil && len(accEnc) > 0 {
-		if p, e := box.Decrypt(accEnc); e == nil {
-			access = string(p)
-		}
-	}
-	return access, extra, nil
+	return EnsureAccess(ctx, pool, box, userID, provider, st)
 }

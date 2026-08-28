@@ -29,6 +29,7 @@ const groups = [
     links: [
       ["users", "Users"],
       ["roles", "Groups"],
+      ["grants", "Grants"],
       ["quotas", "Quotas"],
       ["discord", "Discord"]
     ]
@@ -41,8 +42,13 @@ const groups = [
       ["libraries", "Libraries"],
       ["storage", "Storage"],
       ["metadata", "Metadata"],
+      ["lyrics", "Lyrics"],
       ["transcoding", "Transcoding"],
-      ["retention", "Retention"]
+      ["retention", "Retention"],
+      ["listen-compare", "Listen compare"],
+      ["stats-rebuild", "Stats rebuild"],
+      ["acquisition-policy", "Acquisition"],
+      ["duplicate-review", "Duplicates"]
     ]
   }
 ] as const;

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -31,6 +32,7 @@ import (
 	"github.com/sounddock/sounddock/internal/httpapi/ratelimit"
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/jobs"
+	"github.com/sounddock/sounddock/internal/mediabusy"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/retention"
 	"github.com/sounddock/sounddock/internal/scapex"
@@ -42,29 +44,36 @@ import (
 )
 
 type Server struct {
-	Cfg      config.Config
-	Pool     *pgxpool.Pool
-	Auth     *auth.Service
-	Jobs     *jobs.Runner
-	Search   *search.Engine
-	Play     *playback.Engine
-	Art      *artwork.Store
-	TX       *transcode.Manager
-	Ingest   *ingest.Service
-	Backup   *backup.Service
-	Audit    *audit.Log
-	Hooks    *webhooks.Bus
-	Box      *cryptox.Box
-	Limit    *ratelimit.Limiter
-	Slots    *ratelimit.Slots
-	Log      *slog.Logger
-	Web      fs.FS
-	Draining bool
-	SignKey  []byte
-	Managed  *storage.Local
-	OpenAPI    []byte
-	ScapeX     *scapex.Client
-	Retention  *retention.Engine
+	Cfg       config.Config
+	Pool      *pgxpool.Pool
+	Auth      *auth.Service
+	Jobs      *jobs.Runner
+	Search    *search.Engine
+	Play      *playback.Engine
+	Art       *artwork.Store
+	TX        *transcode.Manager
+	Ingest    *ingest.Service
+	Backup    *backup.Service
+	Audit     *audit.Log
+	Hooks     *webhooks.Bus
+	Box       *cryptox.Box
+	Limit     *ratelimit.Limiter
+	Slots     *ratelimit.Slots
+	MediaBusy *mediabusy.Set
+	Log       *slog.Logger
+	Web       fs.FS
+	Draining  bool
+	SignKey   []byte
+	Managed   *storage.Local
+	OpenAPI   []byte
+	ScapeX    *scapex.Client
+	Retention *retention.Engine
+
+	hubOnce sync.Once
+	hub     *sessionHub
+
+	// youtubeFillHook replaces similarYouTube in tests. Production stays nil.
+	youtubeFillHook func(ctx context.Context, seed uuid.UUID, need int, have []uuid.UUID) []string
 }
 
 func (s *Server) Router() http.Handler {
@@ -122,71 +131,73 @@ func (s *Server) Router() http.Handler {
 			r.Delete("/me/tokens/{id}", s.revokeToken)
 			r.Get("/announcement", s.publicAnnouncement)
 
-			r.With(s.limit(ratelimit.ClassSearch)).Get("/search/youtube", s.searchYouTube)
-			r.With(s.limit(ratelimit.ClassSearch)).Get("/search", s.search)
-			r.Get("/tracks", s.listTracks)
-			r.Get("/tracks/{id}", s.getTrack)
+			r.With(s.limit(ratelimit.ClassSearch)).Get("/search/youtube", s.requirePerm("tracks.read", s.searchYouTube))
+			r.With(s.limit(ratelimit.ClassSearch)).Get("/search", s.requirePerm("tracks.read", s.search))
+			r.Get("/tracks", s.requirePerm("tracks.read", s.listTracks))
+			r.Get("/tracks/{id}", s.requirePerm("tracks.read", s.getTrack))
+			r.Get("/tracks/{id}/playability", s.requirePerm("tracks.read", s.getTrackPlayability))
+			r.Get("/tracks/{id}/lyrics", s.requirePerm("tracks.read", s.getTrackLyrics))
 			r.Patch("/tracks/{id}", s.patchTrack)
-			r.Get("/tracks/{id}/metadata", s.getTrackMetadata)
+			r.Get("/tracks/{id}/metadata", s.requirePerm("tracks.read", s.getTrackMetadata))
 			r.Patch("/tracks/{id}/metadata", s.patchTrackMetadata)
 			r.Post("/tracks/bulk/metadata", s.bulkTrackMetadata)
 			r.Put("/tracks/{id}/locks", s.putTrackLock)
-			r.Get("/tracks/{id}/waveform", s.getTrackWaveform)
+			r.Get("/tracks/{id}/waveform", s.requirePerm("tracks.read", s.getTrackWaveform))
 			r.Post("/tracks/{id}/artwork", s.postTrackArtwork)
 			r.Post("/tracks/bulk", s.bulkTracks)
 			r.Delete("/tracks/bulk", s.bulkTracks)
-			r.Get("/tracks/{id}/artwork", s.trackArtwork)
-			r.Get("/albums/{id}/artwork", s.albumArtwork)
-			r.Get("/artists/{id}/artwork", s.artistArtwork)
-			r.Get("/playlists/{id}/artwork", s.playlistArtwork)
+			r.Get("/tracks/{id}/artwork", s.requirePerm("tracks.read", s.trackArtwork))
+			r.Get("/albums/{id}/artwork", s.requirePerm("tracks.read", s.albumArtwork))
+			r.Get("/artists/{id}/artwork", s.requirePerm("tracks.read", s.artistArtwork))
+			r.Get("/playlists/{id}/artwork", s.requirePerm("tracks.read", s.playlistArtwork))
 			r.Post("/albums/{id}/artwork", s.postAlbumArtwork)
 			r.Post("/artists/{id}/artwork", s.postArtistArtwork)
 			r.Patch("/albums/{id}/metadata", s.patchAlbumMetadata)
 			r.Patch("/artists/{id}/metadata", s.patchArtistMetadata)
-			r.Get("/albums", s.listAlbums)
-			r.Get("/albums/{id}", s.getAlbum)
+			r.Get("/albums", s.requirePerm("tracks.read", s.listAlbums))
+			r.Get("/albums/{id}", s.requirePerm("tracks.read", s.getAlbum))
 			r.Patch("/albums/{id}", s.patchAlbum)
 			r.Post("/albums/merge", s.mergeAlbums)
-			r.Get("/artists", s.listArtists)
-			r.Get("/artists/{id}", s.getArtist)
+			r.Get("/artists", s.requirePerm("tracks.read", s.listArtists))
+			r.Get("/artists/{id}", s.requirePerm("tracks.read", s.getArtist))
 			r.Post("/artists/merge", s.mergeArtists)
-			r.Get("/genres", s.listGenres)
-			r.Get("/libraries", s.listLibraries)
-			r.Get("/playlists", s.listPlaylists)
-			r.Post("/playlists", s.createPlaylist)
-			r.Get("/playlists/folders", s.listPlaylistFolders)
+			r.Get("/genres", s.requirePerm("tracks.read", s.listGenres))
+			r.Get("/libraries", s.requirePerm("tracks.read", s.listLibraries))
+			r.Get("/playlists", s.requirePerm("tracks.read", s.listPlaylists))
+			r.Post("/playlists", s.requirePerm("playlists.write", s.createPlaylist))
+			r.Get("/playlists/folders", s.requirePerm("tracks.read", s.listPlaylistFolders))
 			r.Get("/playlists/invite", s.previewPlaylistInvite)
 			r.Post("/playlists/invite/accept", s.acceptPlaylistInvite)
-			r.Post("/playlists/import.m3u", s.importM3U)
-			r.Get("/playlists/{id}", s.getPlaylist)
-			r.Put("/playlists/{id}", s.updatePlaylist)
-			r.Delete("/playlists/{id}", s.deletePlaylist)
-			r.Post("/playlists/{id}/tracks", s.addPlaylistTracks)
-			r.Delete("/playlists/{id}/tracks/{entryID}", s.removePlaylistTrack)
-			r.Put("/playlists/{id}/tracks/order", s.reorderPlaylist)
-			r.Get("/playlists/{id}/export.m3u", s.exportM3U)
-			r.Post("/playlists/{id}/invite", s.createPlaylistInvite)
-			r.Get("/playlists/{id}/collaborators", s.listPlaylistCollaborators)
-			r.Delete("/playlists/{id}/collaborators/{userID}", s.removePlaylistCollaborator)
-			r.Get("/playlists/{id}/snapshots", s.listPlaylistSnapshots)
-			r.Post("/playlists/{id}/snapshots", s.createPlaylistSnapshot)
-			r.Get("/playlists/{id}/snapshots/{sid}", s.getPlaylistSnapshot)
-			r.Post("/playlists/{id}/snapshots/{sid}/restore", s.restorePlaylistSnapshot)
-			r.Delete("/playlists/{id}/snapshots/{sid}", s.deletePlaylistSnapshot)
-			r.Get("/playlists/{id}/smart", s.getSmartPlaylist)
-			r.Put("/playlists/{id}/smart", s.putSmartPlaylist)
-			r.Post("/playlists/{id}/smart/refresh", s.refreshSmartPlaylist)
-			r.Get("/playlists/{id}/sync-diff", s.playlistSyncDiff)
-			r.Get("/playlists/{id}/external-sync", s.playlistExternalSync)
-			r.Post("/playlists/{id}/external-sync", s.playlistExternalSync)
-			r.Get("/playlists/{id}/unmatched", s.playlistUnmatched)
-			r.Post("/playlists/{id}/items/{itemID}/match", s.matchExternalItem)
-			r.Delete("/playlists/{id}/items/{itemID}/match", s.matchExternalItem)
+			r.Post("/playlists/import.m3u", s.requirePerm("playlists.write", s.importM3U))
+			r.Get("/playlists/{id}", s.requirePerm("tracks.read", s.getPlaylist))
+			r.Put("/playlists/{id}", s.requirePerm("playlists.write", s.updatePlaylist))
+			r.Delete("/playlists/{id}", s.requirePerm("playlists.write", s.deletePlaylist))
+			r.Post("/playlists/{id}/tracks", s.requirePerm("playlists.write", s.addPlaylistTracks))
+			r.Delete("/playlists/{id}/tracks/{entryID}", s.requirePerm("playlists.write", s.removePlaylistTrack))
+			r.Put("/playlists/{id}/tracks/order", s.requirePerm("playlists.write", s.reorderPlaylist))
+			r.Get("/playlists/{id}/export.m3u", s.requirePerm("tracks.read", s.exportM3U))
+			r.Post("/playlists/{id}/invite", s.requirePerm("playlists.write", s.createPlaylistInvite))
+			r.Get("/playlists/{id}/collaborators", s.requirePerm("tracks.read", s.listPlaylistCollaborators))
+			r.Delete("/playlists/{id}/collaborators/{userID}", s.requirePerm("playlists.write", s.removePlaylistCollaborator))
+			r.Get("/playlists/{id}/snapshots", s.requirePerm("tracks.read", s.listPlaylistSnapshots))
+			r.Post("/playlists/{id}/snapshots", s.requirePerm("playlists.write", s.createPlaylistSnapshot))
+			r.Get("/playlists/{id}/snapshots/{sid}", s.requirePerm("tracks.read", s.getPlaylistSnapshot))
+			r.Post("/playlists/{id}/snapshots/{sid}/restore", s.requirePerm("playlists.write", s.restorePlaylistSnapshot))
+			r.Delete("/playlists/{id}/snapshots/{sid}", s.requirePerm("playlists.write", s.deletePlaylistSnapshot))
+			r.Get("/playlists/{id}/smart", s.requirePerm("tracks.read", s.getSmartPlaylist))
+			r.Put("/playlists/{id}/smart", s.requirePerm("playlists.write", s.putSmartPlaylist))
+			r.Post("/playlists/{id}/smart/refresh", s.requirePerm("playlists.write", s.refreshSmartPlaylist))
+			r.Get("/playlists/{id}/sync-diff", s.requirePerm("tracks.read", s.playlistSyncDiff))
+			r.Get("/playlists/{id}/external-sync", s.requirePerm("tracks.read", s.playlistExternalSync))
+			r.Post("/playlists/{id}/external-sync", s.requirePerm("playlists.write", s.playlistExternalSync))
+			r.Get("/playlists/{id}/unmatched", s.requirePerm("tracks.read", s.playlistUnmatched))
+			r.Post("/playlists/{id}/items/{itemID}/match", s.requirePerm("playlists.write", s.matchExternalItem))
+			r.Delete("/playlists/{id}/items/{itemID}/match", s.requirePerm("playlists.write", s.matchExternalItem))
 			r.Post("/playlists/{id}/items/{itemID}/youtube", s.youtubeFillExternalItem)
 
-			r.Get("/radio", s.getRadio)
-			r.Get("/radio/seeds", s.radioSeeds)
-			r.Post("/radio/refresh", s.radioRefresh)
+			r.Get("/radio", s.requirePerm("tracks.read", s.getRadio))
+			r.Get("/radio/seeds", s.requirePerm("tracks.read", s.radioSeeds))
+			r.Post("/radio/refresh", s.requirePerm("tracks.read", s.radioRefresh))
 
 			r.Get("/me/providers", s.meProviders)
 			r.With(s.limit(ratelimit.ClassExternal)).Post("/me/providers/{provider}/connect", s.connectProvider)
@@ -197,19 +208,23 @@ func (s *Server) Router() http.Handler {
 			r.With(s.limit(ratelimit.ClassExternal)).Post("/providers/{provider}/import-all", s.importAllProviderPlaylists)
 			r.With(s.limit(ratelimit.ClassExternal)).Post("/providers/import-url", s.importPlaylistURL)
 			r.Post("/favourites", s.setFavourite)
-			r.Get("/favourites", s.listFavourites)
-			r.Get("/history", s.history)
-			r.Get("/home", s.home)
-			r.Get("/me/history", s.historyRecent)
-			r.Get("/me/never-played", s.neverPlayed)
-			r.Get("/me/rediscovery", s.rediscovery)
-			r.Get("/me/stats", s.listeningStats)
-			r.Get("/me/wrapped", s.wrapped)
+			r.Get("/favourites", s.requirePerm("tracks.read", s.listFavourites))
+			r.Get("/history", s.requirePerm("history.read", s.history))
+			r.Get("/home", s.requirePerm("tracks.read", s.home))
+			r.Get("/me/history", s.requirePerm("history.read", s.historyRecent))
+			r.Get("/me/never-played", s.requirePerm("history.read", s.neverPlayed))
+			r.Get("/me/rediscovery", s.requirePerm("history.read", s.rediscovery))
+			r.Get("/me/stats", s.requirePerm("history.read", s.listeningStats))
+			r.Get("/me/wrapped", s.requirePerm("history.read", s.wrapped))
 
 			r.Get("/me/queue", s.getQueue)
 			r.Put("/me/queue", s.putQueue)
 			r.Post("/me/queue/add", s.queueAdd)
 			r.Post("/me/queue/control", s.queueControl)
+			r.Post("/me/queue/renderer/acquire", s.queueRendererAcquire)
+			r.Post("/me/queue/heartbeat", s.queueHeartbeat)
+			r.With(s.rejectSSEQueryAuth).Get("/me/queue/sse", s.queueSSE)
+			r.With(s.rejectSSEQueryAuth).Get("/me/queue/events", s.queueSSE)
 			r.Get("/me/party", s.getParty)
 			r.Post("/me/party", s.postParty)
 			r.Post("/me/party/votes", s.postPartyVote)
@@ -218,7 +233,12 @@ func (s *Server) Router() http.Handler {
 
 			s.MountP7(r)
 
-			r.Post("/stream-tokens", s.streamTokens)
+			r.Group(func(r chi.Router) {
+				r.Use(s.requirePermMW("tracks.replace_source"))
+				s.MountReplaceSource(r)
+			})
+
+			r.Post("/stream-tokens", s.requirePerm("tracks.stream", s.streamTokens))
 			r.Post("/imports/url", s.importURL)
 			r.Get("/imports/jobs", s.importJobs)
 			r.Post("/uploads", s.createUpload)
@@ -242,6 +262,10 @@ func (s *Server) Router() http.Handler {
 					r.Put("/quotas", s.adminQuotasPut)
 					r.Get("/stream-policy", s.adminGetStreamPolicy)
 					r.Put("/stream-policy", s.adminPutStreamPolicy)
+					r.Get("/acquisition-policy", s.adminGetAcquisitionPolicy)
+					r.Put("/acquisition-policy", s.adminPutAcquisitionPolicy)
+					r.Get("/lyrics", s.requirePerm("lyrics.configure", s.adminGetLyrics))
+					r.Put("/lyrics", s.requirePerm("lyrics.configure", s.adminPutLyrics))
 					r.Get("/library/health", s.libraryHealth)
 					r.Get("/library/settings", s.libraryIngestSettings)
 					r.Put("/library/settings", s.libraryPutIngestSettings)
@@ -253,6 +277,7 @@ func (s *Server) Router() http.Handler {
 					r.Get("/library/duplicates", s.libraryDuplicateGroups)
 					r.Get("/libraries/{id}/grants", s.adminLibraryGrantsGet)
 					r.Post("/libraries/{id}/grants", s.adminLibraryGrantAdd)
+					r.Patch("/libraries/{id}/grants/{grantID}", s.adminLibraryGrantPatch)
 					r.Delete("/libraries/{id}/grants/{grantID}", s.adminLibraryGrantDelete)
 					r.Get("/diagnostics", s.adminDiagnostics)
 					r.Get("/demo", s.adminDemoGet)
@@ -276,7 +301,11 @@ func (s *Server) Router() http.Handler {
 					r.Post("/libraries", s.adminCreateLibrary)
 					r.Post("/libraries/{id}/scan", s.adminScan)
 					r.Post("/libraries/{id}/migrate", s.adminMigrate)
-					r.Post("/libraries/{id}/merge", s.adminMergeLibraries)
+					r.Post("/libraries/{id}/merge", s.requirePerm("tracks.merge", s.adminMergeLibraries))
+					r.Group(func(r chi.Router) {
+						r.Use(s.requirePermMW("tracks.merge"))
+						s.MountDuplicateReview(r)
+					})
 					r.Post("/libraries/{id}/default", s.adminSetDefaultLibrary)
 					r.Patch("/libraries/{id}", s.adminPatchLibrary)
 					r.Delete("/libraries/{id}", s.adminDeleteLibrary)
@@ -328,6 +357,9 @@ func (s *Server) Router() http.Handler {
 					r.Put("/updates", s.adminUpdatesPut)
 					r.Post("/updates/check", s.adminUpdatesCheck)
 					r.Post("/updates/apply", s.adminUpdatesApply)
+					r.Get("/listen-compare", s.adminListenCompare)
+					r.Get("/stats/rebuild", s.adminStatsRebuildGet)
+					r.Post("/stats/rebuild", s.adminStatsRebuildPost)
 				})
 			})
 		})
@@ -414,13 +446,14 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) systemInfo(w http.ResponseWriter, r *http.Request) {
 	oauth := auth.LoadDiscordOAuth(r.Context(), s.Pool, s.Box)
 	writeJSON(w, 200, map[string]any{
-		"name":             s.Cfg.InstanceName,
-		"version":          version.Version,
-		"api_version":      version.APIVersion,
-		"codecs":           []string{"mp3", "flac", "aac", "m4a", "alac", "ogg", "opus", "wav"},
-		"opensubsonic":     s.Cfg.OpenSubsonic,
-		"discord_optional": true,
-		"discord_auth":     oauth.Ready(),
+		"name":                  s.Cfg.InstanceName,
+		"version":               version.Version,
+		"api_version":           version.APIVersion,
+		"codecs":                []string{"mp3", "flac", "aac", "m4a", "alac", "ogg", "opus", "wav"},
+		"opensubsonic":          s.Cfg.OpenSubsonic,
+		"discord_optional":      true,
+		"discord_auth":          oauth.Ready(),
+		"library_grants_strict": s.libraryGrantsStrict(r.Context()),
 		"features": map[string]bool{
 			"search": true, "playlists": true, "uploads": true, "remote_import": true,
 			"external_playlists": true, "webhooks": true, "pwa": true, "replaygain": true, "crossfade": true,
@@ -573,7 +606,56 @@ func idsOrEmpty(ids []uuid.UUID) []uuid.UUID {
 	return ids
 }
 
+const settingLibraryGrantsStrict = "library_grants_strict"
+
+// Catalogue actions on library_grants.actions. "admin" on a row is not a
+// catalogue action; unknown-only rows follow empty-actions compatibility.
+var knownLibraryGrantActions = map[string]struct{}{
+	"read": {}, "stream": {}, "write": {},
+}
+
+func (s *Server) libraryGrantsStrict(ctx context.Context) bool {
+	if s == nil || s.Pool == nil {
+		return false
+	}
+	var on bool
+	s.settingJSON(ctx, settingLibraryGrantsStrict, &on)
+	return on
+}
+
+// grantActionsAllow reports whether a grant row covers want.
+// Compatibility (strict=false): empty or unknown actions grant read+stream
+// (current visibility). strict=true requires the action to be listed.
+func grantActionsAllow(actions []string, want string, strict bool) bool {
+	if want == "" {
+		return false
+	}
+	hasKnown := false
+	for _, a := range actions {
+		if _, ok := knownLibraryGrantActions[a]; ok {
+			hasKnown = true
+		}
+		if a == want {
+			return true
+		}
+	}
+	if strict {
+		return false
+	}
+	if !hasKnown && (want == "read" || want == "stream") {
+		return true
+	}
+	return false
+}
+
 func (s *Server) libraryIDs(ctx context.Context, u *auth.User) []uuid.UUID {
+	return s.libraryIDsFor(ctx, u, "read")
+}
+
+func (s *Server) libraryIDsFor(ctx context.Context, u *auth.User, action string) []uuid.UUID {
+	if u == nil || s.Pool == nil {
+		return []uuid.UUID{}
+	}
 	if u.IsAdmin {
 		rows, err := s.Pool.Query(ctx, `SELECT id FROM libraries`)
 		if err != nil {
@@ -589,20 +671,72 @@ func (s *Server) libraryIDs(ctx context.Context, u *auth.User) []uuid.UUID {
 		return idsOrEmpty(ids)
 	}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT library_id FROM library_grants WHERE user_id=$1
-		UNION
-		SELECT lg.library_id FROM library_grants lg JOIN user_roles ur ON ur.role_id=lg.role_id WHERE ur.user_id=$1`, u.ID)
+		SELECT library_id, actions FROM library_grants WHERE user_id=$1
+		UNION ALL
+		SELECT lg.library_id, lg.actions FROM library_grants lg
+		JOIN user_roles ur ON ur.role_id=lg.role_id WHERE ur.user_id=$1`, u.ID)
 	if err != nil {
 		return []uuid.UUID{}
 	}
 	defer rows.Close()
+	strict := s.libraryGrantsStrict(ctx)
+	allowed := map[uuid.UUID]struct{}{}
 	var ids []uuid.UUID
 	for rows.Next() {
 		var id uuid.UUID
-		_ = rows.Scan(&id)
-		ids = append(ids, id)
+		var actions []string
+		if err := rows.Scan(&id, &actions); err != nil {
+			continue
+		}
+		if _, ok := allowed[id]; ok {
+			continue
+		}
+		if grantActionsAllow(actions, action, strict) {
+			allowed[id] = struct{}{}
+			ids = append(ids, id)
+		}
 	}
 	return idsOrEmpty(ids)
+}
+
+func (s *Server) userHasLibraryAction(ctx context.Context, u *auth.User, libID uuid.UUID, action string) bool {
+	if u == nil || libID == uuid.Nil {
+		return false
+	}
+	if u.IsAdmin {
+		return true
+	}
+	for _, id := range s.libraryIDsFor(ctx, u, action) {
+		if id == libID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) requireLibraryWrite(w http.ResponseWriter, r *http.Request, libID uuid.UUID) bool {
+	u := currentUser(r)
+	if u != nil && u.IsAdmin {
+		return true
+	}
+	if !s.userHasLibraryAction(r.Context(), u, libID, "write") {
+		writeErr(w, http.StatusForbidden, "library_grant", "library write not granted")
+		return false
+	}
+	return true
+}
+
+func (s *Server) requireTrackLibraryWrite(w http.ResponseWriter, r *http.Request, trackID uuid.UUID) bool {
+	if trackID == uuid.Nil || s.Pool == nil {
+		writeErr(w, 400, "invalid", "track id")
+		return false
+	}
+	var libID uuid.UUID
+	if err := s.Pool.QueryRow(r.Context(), `SELECT library_id FROM tracks WHERE id=$1`, trackID).Scan(&libID); err != nil {
+		writeErr(w, 404, "not_found", "track not found")
+		return false
+	}
+	return s.requireLibraryWrite(w, r, libID)
 }
 
 func (s *Server) ProviderFor(ctx context.Context, lib uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error) {

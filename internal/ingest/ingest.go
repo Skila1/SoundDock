@@ -160,43 +160,59 @@ type MigratePayload struct {
 }
 
 func (s *Service) MigrateHandler(getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) jobs.Handler {
-	return func(ctx context.Context, job jobs.Job) error {
+	return func(ctx context.Context, job jobs.Job) (err error) {
 		var p MigratePayload
-		if err := json.Unmarshal(job.Payload, &p); err != nil {
+		if err = json.Unmarshal(job.Payload, &p); err != nil {
 			return err
 		}
-		src, _, prefix, err := getProv(ctx, p.Source)
-		if err != nil {
-			return err
+		src, _, prefix, e := getProv(ctx, p.Source)
+		if e != nil {
+			return e
 		}
-		it, err := src.List(ctx, prefix)
-		if err != nil {
-			return err
+		it, e := src.List(ctx, prefix)
+		if e != nil {
+			return e
 		}
 		defer it.Close()
+		var copied []string
+		defer func() {
+			if err == nil {
+				return
+			}
+			for _, k := range copied {
+				_ = s.managed.Delete(context.Background(), k)
+			}
+		}()
 		for it.Next() {
-			e := it.Entry()
-			if e.IsDir {
+			entry := it.Entry()
+			if entry.IsDir {
 				continue
 			}
-			rc, info, err := src.Open(ctx, e.Key)
-			if err != nil {
+			rc, info, errOpen := src.Open(ctx, entry.Key)
+			if errOpen != nil {
 				continue
 			}
-			sz := e.Size
+			sz := entry.Size
 			if info != nil {
 				sz = info.Size
 			}
-			_ = s.managed.Write(ctx, path.Join("migrated", e.Key), rc, storage.WriteInfo{Size: sz})
+			key := path.Join("migrated", entry.Key)
+			if err = s.managed.Write(ctx, key, rc, storage.WriteInfo{Size: sz}); err != nil {
+				rc.Close()
+				return err
+			}
+			copied = append(copied, key)
 			rc.Close()
 			if p.Mode == "move" {
-				_ = src.Delete(ctx, e.Key)
+				_ = src.Delete(ctx, entry.Key)
 			}
 		}
-		dest, destID, _, err := getProv(ctx, p.Dest)
-		if err != nil {
+		dest, destID, _, e := getProv(ctx, p.Dest)
+		if e != nil {
+			err = e
 			return err
 		}
-		return s.scanner.ScanLibrary(ctx, destID, dest, "migrated", "migrate", job.ID)
+		err = s.scanner.ScanLibrary(ctx, destID, dest, "migrated", "migrate", job.ID)
+		return err
 	}
 }

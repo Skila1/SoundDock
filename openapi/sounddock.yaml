@@ -9,9 +9,21 @@ paths:
   /system/info:
     get:
       summary: Non-sensitive instance identity
+      description: |
+        Includes library_grants_strict (server_settings key, default false).
+        When false, library_grants rows with empty or unknown actions still
+        grant catalogue read and stream. When true, each action must be listed.
       responses:
         "200":
           description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string }
+                  version: { type: string }
+                  library_grants_strict: { type: boolean, default: false }
   /setup:
     post:
       summary: Create the first administrator when Discord sign-in is off
@@ -58,6 +70,14 @@ paths:
   /tracks/{id}/stream:
     get:
       summary: Stream audio (Range). Cookie session, bearer, or signed token.
+      description: |
+        After auth, the track's library_id is loaded and library_grants.actions
+        must include stream (empty/unknown actions still count unless
+        library_grants_strict is true). Cookie, API-key, and bearer session users
+        are always checked. HMAC ?token= with no session user stays valid for
+        that track id (HTMLAudio / PWA). Offline tokens include user_id and are
+        checked. Denied requests return 403 with code library_grant.
+        Stubs without an original still return 409 media_unavailable.
       parameters:
         - in: path
           name: id
@@ -69,6 +89,116 @@ paths:
         - in: query
           name: quality
           schema: { type: string, enum: [original, high, medium, low] }
+      responses:
+        "200":
+          description: Audio bytes
+        "403":
+          description: Session or API-key user lacks library_grants stream (or tracks.stream).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string, example: library_grant }
+                  message: { type: string }
+        "409":
+          description: Managed youtube/scapex stub with no original file. UI recovery uses playability, not this body.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string, example: media_unavailable }
+                  message: { type: string }
+        "404":
+          description: NAS/local file missing and acquisition is not youtube/scapex. Does not start ScapeX.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string, example: media_unavailable_external }
+                  message: { type: string }
+  /tracks/{id}/playability:
+    get:
+      summary: Playability state for a catalogue track
+      description: |
+        Primary UI path before HTMLAudio. Returns ready, restoring, or missing_external.
+        intent_id is omitted when acquisition_intents is missing or there is no open intent.
+        Same heuristic as queue items[].media_state. Requires session auth like other /api/v1 routes.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Playability
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Playability"
+        "404":
+          description: Track not found
+  /tracks/{id}/lyrics:
+    get:
+      summary: Lyrics for a catalogue track
+      description: |
+        Returns cached lyrics for the track. Lookup order is manual (never overwritten),
+        then embedded (from library scan), then an optional provider fetch.
+        Provider fetch runs only when an administrator has set an allowlisted
+        provider_url (LRCLIB https://lrclib.net). Empty provider_url is the default
+        and performs no network request. Failure is non-fatal: 200 with an empty body.
+        Genius and Musixmatch HTML scrape are not used. Requires session auth.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Lyrics payload (body may be empty)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackLyrics"
+        "401":
+          description: Authentication required
+        "404":
+          description: Track not found
+  /tracks/{id}/replace-source:
+    post:
+      summary: Replace a track original from an allowlisted YouTube source
+      description: |
+        Enqueues job type tracks.replace_source. The current decoder keeps the old
+        file; subsequent stream opens use the new original. Requires session auth
+        and tracks.replace_source (HasPerm). Raw yt-dlp arguments are never accepted.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplaceSourceRequest"
+      responses:
+        "202":
+          description: Job queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplaceSourceEnqueue"
+        "400":
+          description: Not an allowlisted YouTube watch URL or video id
+        "403":
+          description: tracks.replace_source permission required
+        "404":
+          description: Track not found
+        "503":
+          description: Job runner or database is not available
   /imports/url:
     post:
       summary: Remote Import of a direct HTTP(S) media URL. Playlist URLs are rejected.
@@ -110,8 +240,1013 @@ paths:
   /admin/integrations/external-providers/{provider}:
     put:
       summary: Enable a provider and store OAuth/MusicKit secrets write-only
+  /admin/listen-compare:
+    get:
+      summary: Admin listen_history vs listen_events validation report
+      description: |
+        Dual-read compare of listen_history and listen_events. Does not UNION
+        or add the two sources into one listen count. Production Home/Stats/Wrapped
+        stay on listen_history. Admin-only (requireAdmin). No rebuild.
+        If migration 0015 tables are missing, returns 200 with ready=false.
+      parameters:
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+          description: RFC3339 start (inclusive). Default last 30 days when omitted with to and period.
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+          description: RFC3339 end (exclusive).
+        - in: query
+          name: period
+          schema: { type: string, enum: [all] }
+          description: all = unbounded window. Ignored when from or to is set. Default is last 30 days.
+      responses:
+        "200":
+          description: Compare report (ready may be false)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListenCompareReport"
+        "400":
+          description: Invalid from/to
+        "403":
+          description: Administrator required
+  /admin/stats/rebuild:
+    get:
+      summary: Stats rebuild status and current listen reader mode
+      description: |
+        Returns the latest stats.rebuild job (if any) and server_settings.listen_reader.
+        Missing listen_reader is treated as "history". Production Home/Stats/Wrapped
+        stay on listen_history until a completed rebuild flips the reader to listen_events.
+        This endpoint does not UNION or add history + events into one listen total.
+        Requires administrator (requireAdmin) and stats.rebuild (HasPerm).
+      responses:
+        "200":
+          description: Rebuild status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsRebuildStatus"
+        "403":
+          description: Administrator or stats.rebuild permission required
+    post:
+      summary: Enqueue a stats.rebuild job
+      description: |
+        Enqueues job type stats.rebuild. 409 if a rebuild is already queued, running,
+        or retrying. Cancel is not offered on the admin rebuild page during cutover.
+        Requires administrator (requireAdmin) and stats.rebuild (HasPerm).
+        Returns { job_id }. Does not run reader SQL in this handler.
+      responses:
+        "202":
+          description: Job queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsRebuildEnqueue"
+        "403":
+          description: Administrator or stats.rebuild permission required
+        "409":
+          description: A stats.rebuild job is already queued or running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  code: { type: string, example: rebuild_in_progress }
+                  message: { type: string }
+                  job_id: { type: string, format: uuid }
+        "503":
+          description: Job runner is not available
+  /admin/acquisition-policy:
+    get:
+      summary: Default acquisition format profile
+      description: |
+        Returns the default media_policy_id / format_profile stored in server_settings.
+        Missing key is treated as m4a-0. Requires administrator (requireAdmin) and
+        library.acquire (HasPerm). Raw yt-dlp arguments are never returned or accepted.
+      responses:
+        "200":
+          description: Policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcquisitionPolicy"
+        "403":
+          description: Administrator or library.acquire permission required
+    put:
+      summary: Set default acquisition format profile
+      description: |
+        Stores media_policy_id and format_profile (allowlisted, e.g. m4a-0) in
+        server_settings. Rejects raw yt-dlp args. W6-scapex jobs read dest+policy.
+        Requires administrator (requireAdmin) and library.acquire (HasPerm).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcquisitionPolicy"
+      responses:
+        "200":
+          description: Saved policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcquisitionPolicy"
+        "400":
+          description: Unknown field or raw yt-dlp arguments
+        "403":
+          description: Administrator or library.acquire permission required
+  /admin/lyrics:
+    get:
+      summary: Lyrics provider configuration
+      description: |
+        Returns {enabled, provider_url} from server_settings.lyrics_provider.
+        Missing key is treated as disabled with an empty URL (no network).
+        Requires administrator (requireAdmin) and lyrics.configure (HasPerm).
+      responses:
+        "200":
+          description: Provider settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LyricsProviderConfig"
+        "403":
+          description: Administrator or lyrics.configure permission required
+    put:
+      summary: Enable or disable the lyrics provider
+      description: |
+        Stores {enabled, provider_url} in server_settings. Unknown hosts are
+        rejected; only empty (disabled) and https://lrclib.net are allowlisted.
+        Default is off. No Genius/Musixmatch scrape. Requires administrator
+        (requireAdmin) and lyrics.configure (HasPerm).
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LyricsProviderConfig"
+      responses:
+        "200":
+          description: Saved settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LyricsProviderConfig"
+        "400":
+          description: Unknown host or invalid provider_url
+        "403":
+          description: Administrator or lyrics.configure permission required
+  /admin/libraries/{id}/merge:
+    post:
+      summary: Merge source libraries into this destination library
+      description: |
+        Moves tracks from source_ids into this library. 409 track_in_use when a
+        source track is the current track of an active session. When the job
+        runner is available, returns 202 with job_id. Requires administrator
+        (requireAdmin) and tracks.merge (HasPerm).
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_ids]
+              properties:
+                source_ids:
+                  type: array
+                  items: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Merged immediately (job runner unavailable)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  moved_tracks: { type: integer }
+        "202":
+          description: Merge job queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  queued: { type: boolean }
+                  job_id: { type: string, format: uuid }
+        "403":
+          description: Administrator or tracks.merge permission required
+        "404":
+          description: Destination library not found
+        "409":
+          description: A track in the merge is currently playing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackInUseError"
+  /admin/libraries/{id}/grants:
+    get:
+      summary: List library_grants for a library
+      description: |
+        Scoped ACL rows (user XOR role) with actions read, stream, write.
+        Capabilities such as upload remain HasPerm. server_settings
+        library_grants_strict (default false) is returned on GET /system/info.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Grant rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LibraryGrant"
+    post:
+      summary: Add or update a user or role grant
+      description: Body is user_id XOR role_id plus optional actions (default read,stream).
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string, format: uuid }
+                role_id: { type: string, format: uuid }
+                actions:
+                  type: array
+                  items: { type: string, enum: [read, stream, write, admin] }
+      responses:
+        "200":
+          description: Upserted grant id
+  /admin/libraries/{id}/grants/{grantID}:
+    patch:
+      summary: Replace actions on a user or role grant
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: grantID
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actions:
+                  type: array
+                  items: { type: string, enum: [read, stream, write, admin] }
+      responses:
+        "200":
+          description: Updated
+        "404":
+          description: Grant not found
+    delete:
+      summary: Remove a user or role grant
+      description: Role grants can be deleted. Removing the User role grant hides the library from that group.
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: grantID
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Deleted
+        "404":
+          description: Grant not found
+  /admin/duplicate-review:
+    get:
+      summary: Open duplicate-review groups with member tracks
+      description: |
+        Returns open review groups (id, status, reason) and member tracks
+        (id, title, artist, duration_ms). Requires administrator (requireAdmin)
+        and tracks.merge (HasPerm). Existing GET /duplicates and
+        /admin/library/duplicates are unchanged.
+      responses:
+        "200":
+          description: Open review groups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DuplicateReviewGroup"
+        "403":
+          description: Administrator or tracks.merge permission required
+  /admin/duplicate-review/{id}/merge:
+    post:
+      summary: Merge duplicate-review losers into a winner track
+      description: |
+        Body winner_id plus loser_ids. Each loser is remapped via the merge
+        service. 409 track_in_use stops that loser (currently playing).
+        Requires administrator (requireAdmin) and tracks.merge (HasPerm).
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DuplicateReviewMergeRequest"
+      responses:
+        "200":
+          description: Merge applied
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "403":
+          description: Administrator or tracks.merge permission required
+        "404":
+          description: Review group not found
+        "409":
+          description: A loser track is currently playing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackInUseError"
+  /admin/duplicate-review/{id}/ignore:
+    post:
+      summary: Ignore a duplicate-review group
+      description: |
+        Sets the group status to ignored. Requires administrator (requireAdmin)
+        and tracks.merge (HasPerm).
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Group ignored
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  status: { type: string, example: ignored }
+        "403":
+          description: Administrator or tracks.merge permission required
+        "404":
+          description: Review group not found
+  /me/queue:
+    get:
+      summary: Attached playback queue
+      description: |
+        Returns Engine.Get for the attached session. Verified Discord users
+        (user_identities.provider=discord) who are in the bot's bound voice
+        channel (discord_user_voice.channel_id == discord_voice_runtime.voice_channel_id)
+        receive runtime.session_id. Everyone else receives their personal
+        web_device session. Unlinked users never auto-attach. Leaving VC is
+        resolved on the next GET — no queue copy.
+        Query target=discord is not a second-queue selector; GET never binds.
+        Response includes server_time (RFC3339) for client RTT clock offset and
+        listeners (in-process presence avatars, not listen stats). GET counts as
+        presence activity.
+      parameters:
+        - in: query
+          name: device_id
+          schema: { type: string }
+        - in: query
+          name: target
+          schema: { type: string, enum: [browser, discord] }
+          description: Ignored for session selection. Mutating routes may treat discord as "I want Discord output" (BindDiscordRenderer on the attached session).
+      responses:
+        "200":
+          description: Queue state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueState"
+    put:
+      summary: Replace the attached session queue
+      description: |
+        Play HTTP returns quickly. Library UUIDs are resolved without waiting on yt-dlp.
+        YouTube-shaped refs enqueue restoring placeholders (media_state restoring) instead
+        of 502 after a long fetch. Acquisition jobs are owned by ScapeX.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                track_ids: { type: array, items: { type: string } }
+                start: { type: integer }
+                device_id: { type: string }
+                target: { type: string, enum: [browser, discord] }
+                expected_binding_revision: { type: integer, format: int64 }
+                renderer_id: { type: string }
+                renderer_generation: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Queue state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueState"
+        "409":
+          description: not_in_voice, bind_conflict, lease_conflict, or command_conflict
+  /me/queue/add:
+    post:
+      summary: Append tracks to the attached session
+      description: Same non-blocking resolve as PUT /me/queue. YouTube refs return 200 with restoring placeholders.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                track_ids: { type: array, items: { type: string } }
+                next: { type: boolean }
+                device_id: { type: string }
+                target: { type: string, enum: [browser, discord] }
+                expected_binding_revision: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Queue state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueState"
+        "409":
+          description: not_in_voice, bind_conflict, lease_conflict, or command_conflict
+  /me/queue/control:
+    post:
+      summary: Control the attached session
+      description: |
+        command_id is optional in Wave 1 (backward compatible). When present it is
+        stored as an idempotent receipt; a different payload with the same
+        command_id returns 409 command_conflict. action=output_pref extra.output_pref=browser
+        calls SwitchRendererToBrowser (keeps runtime.session_id). action=output_pref
+        extra.output_pref=discord binds the attached session via BindDiscordRenderer.
+        action=undo restores a remove/clear snapshot when extra.undo_generation still
+        matches the session state_revision; otherwise 409 undo_stale.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                action: { type: string }
+                extra:
+                  type: object
+                  additionalProperties: true
+                  properties:
+                    command_id: { type: string, format: uuid, description: Optional in Wave 1; receipts apply when present }
+                    output_pref: { type: string, enum: [browser, discord] }
+                    renderer_id: { type: string }
+                    renderer_generation: { type: integer, format: int64 }
+                    expected_binding_revision: { type: integer, format: int64 }
+                    undo_generation: { type: integer, format: int64, description: state_revision after remove/clear; required for action=undo }
+                    items:
+                      type: array
+                      description: Removed-row snapshot for action=undo when not persisted server-side
+                      items:
+                        $ref: "#/components/schemas/QueueUndoItem"
+                command_id: { type: string, format: uuid }
+                device_id: { type: string }
+                target: { type: string, enum: [browser, discord] }
+                expected_binding_revision: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Queue state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/QueueState"
+        "409":
+          description: not_in_voice, bind_conflict, lease_conflict, command_conflict, or undo_stale
+  /me/queue/renderer/acquire:
+    post:
+      summary: CAS-acquire a browser renderer lease on the attached session
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                renderer_id: { type: string }
+                expected_generation: { type: integer, format: int64 }
+                device_id: { type: string }
+      responses:
+        "200":
+          description: Queue state plus generation
+        "409":
+          description: lease_conflict
+  /me/queue/heartbeat:
+    post:
+      summary: Refresh in-process queue presence
+      description: |
+        Client presence heartbeat. Updates last_seen for this user on the attached
+        session. Multi-tab is one user. Does not write a Postgres heartbeat.
+        Cookie session auth. Presence expires ~45s without heartbeat, playhead
+        checkpoint, control, or GET /me/queue.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                client_id: { type: string }
+                device_id: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  server_time: { type: string, format: date-time }
+  /me/queue/sse:
+    get:
+      summary: Typed SSE for the attached playback session
+      description: |
+        Same-origin EventSource with credentials (cookie sd_session). Do not put a
+        bearer token in the query string. Named events: session.state (structural
+        snapshot + state_revision, not 1s playhead), session.playhead (checkpoint
+        fields), session.presence (avatars), acquisition.status (stub intents until
+        Wave 6). Comment `: ping` every 15s proves the server/proxy path is alive;
+        it is not client presence. Header X-Accel-Buffering: no.
+      parameters:
+        - in: query
+          name: device_id
+          schema: { type: string }
+        - in: query
+          name: client_id
+          schema: { type: string }
+      responses:
+        "200":
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401":
+          description: missing cookie or query token rejected
+  /me/queue/events:
+    get:
+      summary: Alias of GET /me/queue/sse
+      description: Same EventSource contract as /me/queue/sse.
+      responses:
+        "200":
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+  /me/discord/voice-state:
+    get:
+      summary: Current Discord link and voice-channel presence
+  /me/discord/join:
+    post:
+      summary: Bind the attached session to the user's current VC
+      description: |
+        Calls BindDiscordRenderer(guild, attachedSessionID, channel, expected_binding_revision or 0,
+        renderer_id or "pending-http", generation or 0). Does not copy queues. Worker later
+        BindDiscordRenderer with its real renderer id on the same session.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expected_binding_revision: { type: integer, format: int64 }
+                renderer_id: { type: string }
+                renderer_generation: { type: integer, format: int64 }
+                device_id: { type: string }
+      responses:
+        "200":
+          description: Bind result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  guild_id: { type: string }
+                  channel_id: { type: string }
+                  session_id: { type: string, format: uuid }
+                  binding_revision: { type: integer, format: int64 }
+                  state_revision: { type: integer, format: int64 }
+        "409":
+          description: not_in_voice or bind_conflict
+  /me/discord/play:
+    post:
+      summary: Bind attached session then optionally play track_ids on it
+      description: |
+        Does not Play.Replace a separate discord_guild queue as an output switch.
+        If track_ids is present, Replace applies to the attached session after bind.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                track_ids: { type: array, items: { type: string } }
+                start: { type: integer }
+                expected_binding_revision: { type: integer, format: int64 }
+                renderer_id: { type: string }
+                renderer_generation: { type: integer, format: int64 }
+                device_id: { type: string }
+      responses:
+        "200":
+          description: Bind result
+        "409":
+          description: not_in_voice or bind_conflict
+
+components:
+  schemas:
+    QueueState:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        kind: { type: string }
+        owner_key: { type: string }
+        volume: { type: number }
+        repeat: { type: string }
+        shuffle: { type: boolean }
+        crossfade_seconds: { type: integer }
+        replaygain_mode: { type: string }
+        current_index: { type: integer }
+        current_track_id: { type: string, format: uuid, nullable: true }
+        current_media_state: { type: string, enum: [ready, restoring, missing_external] }
+        current_intent_id: { type: string, format: uuid, nullable: true }
+        position_ms: { type: integer }
+        status: { type: string }
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              position: { type: integer }
+              track_id: { type: string, format: uuid }
+              origin: { type: string }
+              requested_by:
+                $ref: "#/components/schemas/RequestedBy"
+              media_state: { type: string, enum: [ready, restoring, missing_external] }
+              intent_id: { type: string, format: uuid }
+        undo_generation: { type: integer, format: int64, description: Present on remove/clear control responses; state_revision after the mutation }
+        undo:
+          $ref: "#/components/schemas/QueueUndo"
+        shuffle_mode: { type: string }
+        stop_after_current: { type: boolean }
+        device_id: { type: string, nullable: true }
+        state_revision: { type: integer, format: int64 }
+        playhead_sequence: { type: integer, format: int64 }
+        playback_instance_id: { type: string, format: uuid, nullable: true }
+        muted: { type: boolean }
+        output_pref: { type: string, enum: [browser, discord] }
+        autoplay: { type: boolean }
+        renderer_kind: { type: string, enum: [none, browser, discord] }
+        renderer_id: { type: string, nullable: true }
+        renderer_generation: { type: integer, format: int64 }
+        checkpoint_at: { type: string, format: date-time, nullable: true }
+        duration_ms: { type: integer }
+        playback_rate: { type: number }
+        renderer_heartbeat_at: { type: string, format: date-time, nullable: true }
+        binding_revision: { type: integer, format: int64, nullable: true, description: nil if this session is not bound to a guild runtime }
+        server_time: { type: string, format: date-time, description: Server clock for client RTT offset }
+        listeners:
+          type: array
+          items: { $ref: "#/components/schemas/QueueListener" }
+    RequestedBy:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        discord_user_id: { type: string }
+        display_name: { type: string }
+    QueueUndoItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        track_id: { type: string, format: uuid }
+        position: { type: integer }
+        origin: { type: string }
+        requested_by_user_id: { type: string, format: uuid, nullable: true }
+        requested_by_discord_user_id: { type: string, nullable: true }
+        requested_by:
+          $ref: "#/components/schemas/RequestedBy"
+    QueueUndo:
+      type: object
+      properties:
+        undo_generation: { type: integer, format: int64 }
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/QueueUndoItem"
+    QueueListener:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid, nullable: true }
+        display_name: { type: string }
+        avatar_url: { type: string, nullable: true }
+        source: { type: string, enum: [web, discord, both] }
+    SessionStateEvent:
+      type: object
+      description: SSE event session.state — structural/control snapshot, not 1s playhead
+      properties:
+        id: { type: string, format: uuid }
+        state_revision: { type: integer, format: int64 }
+        status: { type: string }
+        volume: { type: number }
+        muted: { type: boolean }
+        output_pref: { type: string, enum: [browser, discord] }
+        playback_instance_id: { type: string, format: uuid, nullable: true }
+        repeat: { type: string }
+        shuffle: { type: boolean }
+        autoplay: { type: boolean }
+        current_index: { type: integer }
+        current_track_id: { type: string, format: uuid, nullable: true }
+        items: { type: array, items: { type: object } }
+        renderer_kind: { type: string }
+        renderer_id: { type: string, nullable: true }
+        renderer_generation: { type: integer, format: int64 }
+        binding_revision: { type: integer, format: int64, nullable: true }
+    SessionPlayheadEvent:
+      type: object
+      description: SSE event session.playhead
+      properties:
+        playback_instance_id: { type: string, format: uuid, nullable: true }
+        checkpoint_position_ms: { type: integer }
+        checkpoint_at: { type: string, format: date-time, nullable: true }
+        status: { type: string }
+        playhead_sequence: { type: integer, format: int64 }
+        playback_rate: { type: number }
+        duration_ms: { type: integer }
+    SessionPresenceEvent:
+      type: object
+      description: SSE event session.presence — participant avatars, not listen stats
+      properties:
+        listeners:
+          type: array
+          items: { $ref: "#/components/schemas/QueueListener" }
+    AcquisitionStatusEvent:
+      type: object
+      description: SSE event acquisition.status. Stub {intents:[]} until intents exist.
+      properties:
+        intents:
+          type: array
+          items: { type: object }
+    ListenComparePair:
+      type: object
+      description: Side-by-side counts. delta is history minus events, never a sum.
+      properties:
+        history: { type: integer, format: int64 }
+        events: { type: integer, format: int64 }
+        delta: { type: integer, format: int64, description: history minus events (a gap, not a combined listen count) }
+    ListenCompareReport:
+      type: object
+      description: |
+        Admin validation report. ready=false when listen_events / listen_output_segments
+        are missing (migration 0015 pending). Never includes a field that adds
+        history + events into one canonical listen total.
+      required: [ready, note, period, history, events]
+      properties:
+        ready: { type: boolean }
+        message: { type: string, description: Present when ready is false }
+        note:
+          type: string
+          description: States that this is a comparison, not a merged statistic
+        period:
+          type: object
+          properties:
+            from: { type: string, format: date-time, nullable: true }
+            to: { type: string, format: date-time, nullable: true }
+            preset: { type: string, enum: [last_30_days, all, custom] }
+            note: { type: string }
+        history:
+          type: object
+          properties:
+            row_count: { type: integer, format: int64 }
+            row_count_excluding_import: { type: integer, format: int64 }
+            import_row_count: { type: integer, format: int64 }
+            distinct_users: { type: integer, format: int64 }
+            distinct_users_excluding_import: { type: integer, format: int64 }
+            distinct_tracks: { type: integer, format: int64 }
+            distinct_tracks_excluding_import: { type: integer, format: int64 }
+            duration_ms_sum: { type: integer, format: int64 }
+            duration_ms_sum_excluding_import: { type: integer, format: int64 }
+            estimated_minutes: { type: number, description: sum(duration_ms) / 60000 including import }
+            estimated_minutes_excluding_import: { type: number }
+            estimated_minutes_import: { type: number }
+            estimated_minutes_source: { type: string }
+        events:
+          type: object
+          properties:
+            row_count: { type: integer, format: int64 }
+            qualified_play: { type: integer, format: int64 }
+            qualified_play_live: { type: integer, format: int64 }
+            qualified_play_backfill: { type: integer, format: int64 }
+            skipped: { type: integer, format: int64 }
+            kind_skip: { type: integer, format: int64 }
+            kind_skip_unqualified: { type: integer, format: int64 }
+            legacy_backfill: { type: integer, format: int64 }
+            live: { type: integer, format: int64 }
+            distinct_users: { type: integer, format: int64 }
+            distinct_tracks: { type: integer, format: int64 }
+            listened_ms_sum: { type: integer, format: int64, description: Sum of non-null listened_ms only }
+            listened_ms_incomplete: { type: boolean }
+            null_listened_ms_count: { type: integer, format: int64 }
+            listened_minutes_incomplete: { type: number }
+            output_segment_count: { type: integer, format: int64 }
+            listened_ms_note: { type: string }
+        diffs:
+          type: object
+          nullable: true
+          properties:
+            match_key: { type: string }
+            match_key_note: { type: string }
+            delta_meaning: { type: string }
+            history_plays_vs_qualifies_live: { $ref: "#/components/schemas/ListenComparePair" }
+            history_plays_vs_qualifies_including_backfill: { $ref: "#/components/schemas/ListenComparePair" }
+            history_rows_with_no_matching_event: { type: integer, format: int64 }
+            live_events_with_no_matching_history: { type: integer, format: int64 }
+            play_counts_skip_count: { type: integer, format: int64, description: Lifetime sum(play_counts.skip_count); not period-filtered }
+            skip_events: { type: integer, format: int64 }
+            skip_events_unqualified: { type: integer, format: int64 }
+            skip_delta: { type: integer, format: int64 }
+            skip_note: { type: string }
+    StatsRebuildEnqueue:
+      type: object
+      required: [job_id]
+      properties:
+        job_id: { type: string, format: uuid }
+    StatsRebuildJob:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status:
+          type: string
+          description: queued, running, retry, completed, failed, or cancelled
+        progress: { type: integer }
+        last_error: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+    StatsRebuildStatus:
+      type: object
+      description: |
+        Current production listen reader plus the latest stats.rebuild job.
+        listen_reader is "history" until cutover; then "events". Never a merged total.
+      required: [listen_reader, busy]
+      properties:
+        listen_reader:
+          type: string
+          enum: [history, events]
+          description: Production reader source. Missing server_settings key is treated as history.
+        busy:
+          type: boolean
+          description: True when a stats.rebuild job is queued, running, or retrying
+        job:
+          allOf:
+            - $ref: "#/components/schemas/StatsRebuildJob"
+          nullable: true
+
+    Playability:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [ready, restoring, missing_external] }
+        intent_id: { type: string, format: uuid }
+    TrackLyrics:
+      type: object
+      required: [body, timed, source]
+      properties:
+        body: { type: string, description: Full lyrics text (empty when none) }
+        timed: { type: boolean, description: True when the body contains LRC timestamps }
+        source:
+          type: string
+          description: Cache source (manual, user, embedded, lrclib, or empty)
+        lines:
+          type: array
+          description: Synced cues when timed is true
+          items:
+            type: object
+            required: [t_ms, text]
+            properties:
+              t_ms: { type: integer, description: Cue time in milliseconds }
+              text: { type: string }
+    LyricsProviderConfig:
+      type: object
+      required: [enabled, provider_url]
+      properties:
+        enabled:
+          type: boolean
+          description: False when provider_url is empty (default; no network)
+        provider_url:
+          type: string
+          description: Empty or https://lrclib.net. Other hosts are rejected.
+          example: https://lrclib.net
+    LibraryGrant:
+      type: object
+      description: |
+        Scoped ACL row. library_grants.actions are read (catalogue), stream
+        (GET stream), write (mutations in that library). Empty or unknown
+        actions still grant read+stream unless server_settings
+        library_grants_strict is true.
+      properties:
+        id: { type: string, format: uuid }
+        library_id: { type: string, format: uuid }
+        kind: { type: string, enum: [user, role] }
+        user_id: { type: string, format: uuid, nullable: true }
+        role_id: { type: string, format: uuid, nullable: true }
+        username: { type: string, nullable: true }
+        role: { type: string, nullable: true }
+        actions:
+          type: array
+          items: { type: string, enum: [read, stream, write, admin] }
+    AcquisitionPolicy:
+      type: object
+      required: [media_policy_id, format_profile]
+      properties:
+        media_policy_id:
+          type: string
+          example: m4a-0
+          description: Default policy id for acquisition jobs (allowlisted profile, not yt-dlp args)
+        format_profile:
+          type: string
+          enum: [m4a-0, mp3-0, opus-0]
+          example: m4a-0
+    ReplaceSourceRequest:
+      type: object
+      properties:
+        url: { type: string, description: Allowlisted YouTube watch URL }
+        source_ref: { type: string, description: Canonical video id or watch URL; used when url is empty }
+        provider: { type: string, enum: [youtube, scapex] }
+    ReplaceSourceEnqueue:
+      type: object
+      required: [job_id]
+      properties:
+        job_id: { type: string, format: uuid }
+        track_id: { type: string, format: uuid }
+        coalesce_key: { type: string }
+    TrackInUseError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, example: track_in_use }
+        message: { type: string }
+    DuplicateReviewTrack:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        artist: { type: string }
+        duration_ms: { type: integer }
+        duration: { type: integer, description: Alias some handlers may return instead of duration_ms }
+    DuplicateReviewGroup:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        group_id: { type: string, format: uuid }
+        status: { type: string, enum: [open, merged, ignored] }
+        reason: { type: string }
+        tracks:
+          type: array
+          items: { $ref: "#/components/schemas/DuplicateReviewTrack" }
+    DuplicateReviewMergeRequest:
+      type: object
+      required: [winner_id, loser_ids]
+      properties:
+        winner_id: { type: string, format: uuid }
+        loser_ids:
+          type: array
+          items: { type: string, format: uuid }
+
 tags:
   - name: auth
   - name: search
   - name: tracks
   - name: admin
+  - name: queue
+  - name: discord

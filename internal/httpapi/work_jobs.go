@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/jobs"
+	"github.com/sounddock/sounddock/internal/library/merge"
 )
 
 type libraryMergePayload struct {
@@ -44,16 +45,12 @@ func (s *Server) jobLibraryMerge(ctx context.Context, job jobs.Job) error {
 	if err := json.Unmarshal(job.Payload, &p); err != nil {
 		return err
 	}
-	var destProv uuid.UUID
-	if err := s.Pool.QueryRow(ctx, `SELECT storage_provider_id FROM libraries WHERE id=$1`, p.Dest).Scan(&destProv); err != nil {
-		return err
-	}
 	moved := 0
 	for _, src := range p.SourceIDs {
 		if src == p.Dest {
 			continue
 		}
-		n, err := s.mergeLibraryInto(ctx, src, p.Dest, destProv)
+		n, err := merge.LibraryInto(ctx, s.Pool, src, p.Dest)
 		if err != nil {
 			return err
 		}
@@ -129,36 +126,31 @@ func (s *Server) jobTracksDelete(ctx context.Context, job jobs.Job) error {
 	if err := json.Unmarshal(job.Payload, &p); err != nil {
 		return err
 	}
-	n, err := s.deleteTrackIDs(ctx, p.IDs, p.All, p.LibraryID, p.DeleteFiles)
+	n, skipped, err := s.deleteTrackIDs(ctx, p.IDs, p.All, p.LibraryID, p.DeleteFiles)
 	if err != nil {
 		return err
 	}
-	s.Jobs.SetResult(ctx, job.ID, map[string]any{"deleted": n, "deleted_files": p.DeleteFiles})
+	s.Jobs.SetResult(ctx, job.ID, map[string]any{"deleted": n, "deleted_files": p.DeleteFiles, "skipped": skipped})
 	if p.ActorID != uuid.Nil {
 		s.Audit.Event(ctx, &p.ActorID, "tracks.delete", "", "", nil)
 	}
 	return nil
 }
 
-func (s *Server) deleteTrackIDs(ctx context.Context, ids []uuid.UUID, all bool, lib uuid.UUID, deleteFiles bool) (int64, error) {
+func (s *Server) deleteTrackIDs(ctx context.Context, ids []uuid.UUID, all bool, lib uuid.UUID, deleteFiles bool) (int64, []map[string]any, error) {
 	if all {
 		var err error
 		ids, err = s.collectDeleteIDs(ctx, lib)
 		if err != nil {
-			return 0, err
+			return 0, nil, err
 		}
 	}
+	skipped := []map[string]any{}
 	if len(ids) == 0 {
-		return 0, nil
+		return 0, skipped, nil
 	}
 	if deleteFiles {
-		for _, id := range ids {
-			var libID uuid.UUID
-			_ = s.Pool.QueryRow(ctx, `SELECT library_id FROM tracks WHERE id=$1`, id).Scan(&libID)
-			if !managedStorage(s.libraryStorageType(ctx, libID)) {
-				return 0, errString("physical delete is only offered for SoundDock-managed tracks")
-			}
-		}
+		skipped = s.nonManagedTrackSkips(ctx, ids)
 	}
 	files := []storedFile{}
 	if deleteFiles {
@@ -166,12 +158,12 @@ func (s *Server) deleteTrackIDs(ctx context.Context, ids []uuid.UUID, all bool, 
 	}
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM tracks WHERE id = ANY($1)`, ids)
 	if err != nil {
-		return 0, err
+		return 0, skipped, err
 	}
 	if deleteFiles {
 		s.deleteManagedFiles(ctx, files)
 	}
-	return tag.RowsAffected(), nil
+	return tag.RowsAffected(), skipped, nil
 }
 
 func (s *Server) collectDeleteIDs(ctx context.Context, lib uuid.UUID) ([]uuid.UUID, error) {

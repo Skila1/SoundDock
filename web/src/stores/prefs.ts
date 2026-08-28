@@ -55,9 +55,11 @@ export function syncPrefsToDom(state?: { accent?: string; density?: Density }) {
 type PrefsState = {
   accent: string;
   density: Density;
+  keyboardShortcuts: boolean;
   setAccent: (accent: string) => void;
   setDensity: (density: Density) => void;
   toggleDensity: () => void;
+  setKeyboardShortcuts: (on: boolean) => void;
 };
 
 export const usePrefs = create<PrefsState>()(
@@ -65,6 +67,7 @@ export const usePrefs = create<PrefsState>()(
     (set, get) => ({
       accent: DEFAULT_ACCENT,
       density: "comfortable",
+      keyboardShortcuts: false,
       setAccent: (accent) => {
         const next = normalizeAccent(accent);
         syncPrefsToDom({ accent: next, density: get().density });
@@ -77,10 +80,12 @@ export const usePrefs = create<PrefsState>()(
       toggleDensity: () => {
         const density: Density = get().density === "compact" ? "comfortable" : "compact";
         get().setDensity(density);
-      }
+      },
+      setKeyboardShortcuts: (on) => set({ keyboardShortcuts: on })
     }),
     {
       name: "sd-prefs",
+      partialize: (s) => ({ accent: s.accent, density: s.density, keyboardShortcuts: s.keyboardShortcuts }),
       onRehydrateStorage: () => (s) => s && syncPrefsToDom(s)
     }
   )

@@ -175,7 +175,7 @@ function ManageUserDialog({
               <dd>{user.discord_id || "Not linked"}</dd>
               <dt className="text-muted">Created</dt><dd>{relativeTime(user.created_at)}</dd>
             </dl>
-            <Field label="Role">
+            <Field label="Role" hint="Updates User vs Administrator only. Custom groups stay assigned.">
               <Select value={role} onValueChange={setRole} options={[{ value: "User", label: "User" }, { value: "Administrator", label: "Administrator" }]} />
             </Field>
             <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2">

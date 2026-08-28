@@ -29,8 +29,20 @@ func TestEvalHalfDurationShortTrack(t *testing.T) {
 func TestEvalSkipBeforeThreshold(t *testing.T) {
 	id := uuid.New()
 	st, out := Eval(State{TrackID: id}, Event{TrackID: id, PositionMS: 5000, DurationMS: 185000, Kind: "skip"})
-	if !out.CountSkip || out.CountPlay || out.InsertHistory || st.Counted {
+	if !out.CountSkip || out.CountPlay || out.InsertHistory || !st.Counted {
 		t.Fatalf("skip before threshold: %#v %#v", st, out)
+	}
+	_, out2 := Eval(st, Event{TrackID: id, PositionMS: 5000, DurationMS: 185000, Kind: "skip"})
+	if out2.CountSkip {
+		t.Fatal("duplicate skip must not increment skip_count")
+	}
+}
+
+func TestEvalStopAfterIsNotSkip(t *testing.T) {
+	id := uuid.New()
+	st, out := Eval(State{TrackID: id}, Event{TrackID: id, PositionMS: 5000, DurationMS: 185000, Kind: "skip", StopAfter: true})
+	if out.CountSkip || out.CountPlay || out.InsertHistory || st.Counted {
+		t.Fatalf("stop after current is not a skip: %#v %#v", st, out)
 	}
 }
 

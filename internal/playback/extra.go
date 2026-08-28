@@ -3,6 +3,8 @@ package playback
 import (
 	"encoding/json"
 	"strconv"
+
+	"github.com/google/uuid"
 )
 
 func extraInt(extra map[string]any, key string) (int, bool) {
@@ -31,6 +33,49 @@ func extraInt(extra map[string]any, key string) (int, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// normalizeControlExtra maps UI control payloads onto engine extra keys.
+// action=stop_after_current + extra.enabled becomes extra.stop_after_current.
+func normalizeControlExtra(action string, extra map[string]any) map[string]any {
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	if action == "stop_after_current" {
+		if _, ok := extraBool(extra, "stop_after_current"); !ok {
+			if v, ok := extraBool(extra, "enabled"); ok {
+				extra["stop_after_current"] = v
+			}
+		}
+	}
+	return extra
+}
+
+func extraUUIDs(extra map[string]any, key string) []uuid.UUID {
+	if extra == nil {
+		return nil
+	}
+	raw, ok := extra[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	var out []uuid.UUID
+	switch t := raw.(type) {
+	case []uuid.UUID:
+		return t
+	case []any:
+		for _, v := range t {
+			switch x := v.(type) {
+			case uuid.UUID:
+				out = append(out, x)
+			case string:
+				if id, err := uuid.Parse(x); err == nil {
+					out = append(out, id)
+				}
+			}
+		}
+	}
+	return out
 }
 
 func extraString(extra map[string]any, key string) string {

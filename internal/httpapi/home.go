@@ -34,7 +34,8 @@ func (s *Server) listFavourites(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.Pool.Query(r.Context(), `SELECT track_id, played_at, duration_ms, source FROM listen_history WHERE user_id=$1 ORDER BY played_at DESC LIMIT 200`, currentUser(r).ID)
+	events := s.listenReaderEvents(r.Context())
+	rows, err := s.Pool.Query(r.Context(), historyListSQL(events, 200), currentUser(r).ID)
 	if err != nil {
 		writeJSON(w, 200, []any{})
 		return
@@ -53,18 +54,8 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) homeContinue(r *http.Request, u *auth.User) []map[string]any {
-	hist, err := s.Pool.Query(r.Context(), `
-		SELECT id, title, duration_ms, album_id, album, artist FROM (
-			SELECT DISTINCT ON (h.track_id) t.id, t.title, t.duration_ms, t.album_id, coalesce(al.title,'') AS album,
-				coalesce((SELECT string_agg(ar.name, ', ' ORDER BY ta.position)
-					FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
-					WHERE ta.track_id=t.id AND ta.role='primary'),'') AS artist, h.played_at
-			FROM listen_history h
-			JOIN tracks t ON t.id=h.track_id
-			LEFT JOIN albums al ON al.id=t.album_id
-			WHERE h.user_id=$1
-			ORDER BY h.track_id, h.played_at DESC
-		) x ORDER BY played_at DESC LIMIT 15`, u.ID)
+	events := s.listenReaderEvents(r.Context())
+	hist, err := s.Pool.Query(r.Context(), homeContinueSQL(events), u.ID)
 	if err != nil {
 		return []map[string]any{}
 	}
@@ -95,7 +86,7 @@ func (s *Server) exportMe(w http.ResponseWriter, r *http.Request) {
 		favs = scanMaps(rows, "type", "id", "created_at")
 	}
 	hist := []map[string]any{}
-	if rows, err := s.Pool.Query(r.Context(), `SELECT track_id, played_at, duration_ms, source FROM listen_history WHERE user_id=$1 ORDER BY played_at DESC LIMIT 5000`, u.ID); err == nil {
+	if rows, err := s.Pool.Query(r.Context(), historyListSQL(s.listenReaderEvents(r.Context()), 5000), u.ID); err == nil {
 		defer rows.Close()
 		hist = scanMaps(rows, "track_id", "played_at", "duration_ms", "source")
 	}

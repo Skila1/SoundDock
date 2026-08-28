@@ -77,6 +77,35 @@ func TestExtraInt(t *testing.T) {
 	}
 }
 
+func TestStopAfterExtraKeys(t *testing.T) {
+	tests := []struct {
+		name   string
+		action string
+		extra  map[string]any
+		want   bool
+		ok     bool
+	}{
+		{name: "action enabled true", action: "stop_after_current", extra: map[string]any{"enabled": true}, want: true, ok: true},
+		{name: "action enabled false", action: "stop_after_current", extra: map[string]any{"enabled": false}, want: false, ok: true},
+		{name: "extra stop_after_current", action: "pause", extra: map[string]any{"stop_after_current": true}, want: true, ok: true},
+		{name: "stop_after_current wins over enabled", action: "stop_after_current", extra: map[string]any{"stop_after_current": false, "enabled": true}, want: false, ok: true},
+		{name: "enabled ignored on other actions", action: "pause", extra: map[string]any{"enabled": true}, ok: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			extra := map[string]any{}
+			for k, v := range tc.extra {
+				extra[k] = v
+			}
+			got := normalizeControlExtra(tc.action, extra)
+			v, ok := extraBool(got, "stop_after_current")
+			if ok != tc.ok || (ok && v != tc.want) {
+				t.Fatalf("got %v %v want %v %v", v, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 func TestPartyActive(t *testing.T) {
 	now := mustTime("2026-01-15T12:00:00Z")
 	exp := mustTime("2026-01-15T13:00:00Z")
@@ -99,5 +128,21 @@ func TestReplayGainOff(t *testing.T) {
 	g := 6.0
 	if ReplayGainMultiplier("off", &g, &g, -18) != 1 {
 		t.Fatal("off")
+	}
+}
+
+func TestRequestHashExcludesCommandID(t *testing.T) {
+	a := requestHash("volume", map[string]any{"volume": 0.5, "command_id": "aaa"})
+	b := requestHash("volume", map[string]any{"volume": 0.5, "command_id": "bbb"})
+	if a != b {
+		t.Fatal("command_id must not affect hash")
+	}
+	c := requestHash("volume", map[string]any{"volume": 0.4, "command_id": "aaa"})
+	if a == c {
+		t.Fatal("volume must affect hash")
+	}
+	d := requestHash("pause", map[string]any{"volume": 0.5, "command_id": "aaa"})
+	if a == d {
+		t.Fatal("action must affect hash")
 	}
 }

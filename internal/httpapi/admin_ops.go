@@ -383,31 +383,84 @@ func (s *Server) adminLibraryGrantAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		UserID  uuid.UUID `json:"user_id"`
+		RoleID  uuid.UUID `json:"role_id"`
 		Actions []string  `json:"actions"`
 	}
-	if err := decodeJSON(r, &body); err != nil || body.UserID == uuid.Nil {
-		writeErr(w, 400, "invalid", "user_id is required")
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
-	actions := body.Actions
+	if (body.UserID == uuid.Nil) == (body.RoleID == uuid.Nil) {
+		writeErr(w, 400, "invalid", "exactly one of user_id or role_id is required")
+		return
+	}
+	actions := normalizeGrantActions(body.Actions)
 	if len(actions) == 0 {
 		actions = []string{"read", "stream"}
 	}
 	var existing uuid.UUID
-	err = s.Pool.QueryRow(r.Context(), `SELECT id FROM library_grants WHERE library_id=$1 AND user_id=$2 LIMIT 1`, libID, body.UserID).Scan(&existing)
-	if err == nil && existing != uuid.Nil {
-		_, err = s.Pool.Exec(r.Context(), `UPDATE library_grants SET actions=$2 WHERE id=$1 AND user_id IS NOT NULL`, existing, actions)
+	if body.UserID != uuid.Nil {
+		err = s.Pool.QueryRow(r.Context(), `SELECT id FROM library_grants WHERE library_id=$1 AND user_id=$2 LIMIT 1`, libID, body.UserID).Scan(&existing)
+		if err == nil && existing != uuid.Nil {
+			_, err = s.Pool.Exec(r.Context(), `UPDATE library_grants SET actions=$2 WHERE id=$1 AND user_id IS NOT NULL`, existing, actions)
+		} else {
+			err = s.Pool.QueryRow(r.Context(), `
+				INSERT INTO library_grants (library_id, user_id, actions) VALUES ($1,$2,$3) RETURNING id`,
+				libID, body.UserID, actions).Scan(&existing)
+		}
+		if err != nil {
+			writeErr(w, 400, "grant", err.Error())
+			return
+		}
+		s.Audit.Event(r.Context(), &currentUser(r).ID, "library.grant.user", libID.String()+":"+body.UserID.String(), r.RemoteAddr, nil)
 	} else {
-		err = s.Pool.QueryRow(r.Context(), `
-			INSERT INTO library_grants (library_id, user_id, actions) VALUES ($1,$2,$3) RETURNING id`,
-			libID, body.UserID, actions).Scan(&existing)
+		err = s.Pool.QueryRow(r.Context(), `SELECT id FROM library_grants WHERE library_id=$1 AND role_id=$2 LIMIT 1`, libID, body.RoleID).Scan(&existing)
+		if err == nil && existing != uuid.Nil {
+			_, err = s.Pool.Exec(r.Context(), `UPDATE library_grants SET actions=$2 WHERE id=$1 AND role_id IS NOT NULL`, existing, actions)
+		} else {
+			err = s.Pool.QueryRow(r.Context(), `
+				INSERT INTO library_grants (library_id, role_id, actions) VALUES ($1,$2,$3) RETURNING id`,
+				libID, body.RoleID, actions).Scan(&existing)
+		}
+		if err != nil {
+			writeErr(w, 400, "grant", err.Error())
+			return
+		}
+		s.Audit.Event(r.Context(), &currentUser(r).ID, "library.grant.role", libID.String()+":"+body.RoleID.String(), r.RemoteAddr, nil)
 	}
+	writeJSON(w, 200, map[string]any{"id": existing, "ok": true, "actions": actions})
+}
+
+func (s *Server) adminLibraryGrantPatch(w http.ResponseWriter, r *http.Request) {
+	libID, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
-		writeErr(w, 400, "grant", err.Error())
+		writeErr(w, 400, "invalid", "invalid library id")
 		return
 	}
-	s.Audit.Event(r.Context(), &currentUser(r).ID, "library.grant.user", libID.String()+":"+body.UserID.String(), r.RemoteAddr, nil)
-	writeJSON(w, 200, map[string]any{"id": existing, "ok": true})
+	gid, err := uuid.Parse(chi.URLParam(r, "grantID"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "invalid grant id")
+		return
+	}
+	var body struct {
+		Actions []string `json:"actions"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
+	actions := normalizeGrantActions(body.Actions)
+	tag, err := s.Pool.Exec(r.Context(), `UPDATE library_grants SET actions=$3 WHERE id=$1 AND library_id=$2`, gid, libID, actions)
+	if err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeErr(w, 404, "not_found", "grant not found")
+		return
+	}
+	s.Audit.Event(r.Context(), &currentUser(r).ID, "library.grant.patch", gid.String(), r.RemoteAddr, nil)
+	writeJSON(w, 200, map[string]any{"ok": true, "actions": actions})
 }
 
 func (s *Server) adminLibraryGrantDelete(w http.ResponseWriter, r *http.Request) {
@@ -421,17 +474,35 @@ func (s *Server) adminLibraryGrantDelete(w http.ResponseWriter, r *http.Request)
 		writeErr(w, 400, "invalid", "invalid grant id")
 		return
 	}
-	tag, err := s.Pool.Exec(r.Context(), `DELETE FROM library_grants WHERE id=$1 AND library_id=$2 AND user_id IS NOT NULL`, gid, libID)
+	tag, err := s.Pool.Exec(r.Context(), `DELETE FROM library_grants WHERE id=$1 AND library_id=$2`, gid, libID)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return
 	}
 	if tag.RowsAffected() == 0 {
-		writeErr(w, 409, "role_grant", "role grants cannot be removed here; per-user grants are additive")
+		writeErr(w, 404, "not_found", "grant not found")
 		return
 	}
 	s.Audit.Event(r.Context(), &currentUser(r).ID, "library.grant.delete", gid.String(), r.RemoteAddr, nil)
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func normalizeGrantActions(in []string) []string {
+	allowed := map[string]struct{}{"read": {}, "stream": {}, "write": {}, "admin": {}}
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, a := range in {
+		a = strings.ToLower(strings.TrimSpace(a))
+		if _, ok := allowed[a]; !ok {
+			continue
+		}
+		if _, ok := seen[a]; ok {
+			continue
+		}
+		seen[a] = struct{}{}
+		out = append(out, a)
+	}
+	return out
 }
 
 func (s *Server) adminBackupPreview(w http.ResponseWriter, r *http.Request) {

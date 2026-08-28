@@ -70,8 +70,22 @@ func (b *Bot) deferReply(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	})
 }
 
+func (b *Bot) deferReplyEphemeral(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral},
+	})
+}
+
 func (b *Bot) followup(s *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
 	_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
+}
+
+func (b *Bot) followupEphemeral(s *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
+	_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+		Content: msg,
+		Flags:   discordgo.MessageFlagsEphemeral,
+	})
 }
 
 func (b *Bot) handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -213,36 +227,40 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "previous":
 		b.sessionControl(ctx, s, i, "previous", nil, "Previous track.")
 	case "stop":
-		sid, err := b.play.Session(ctx, "discord_guild", i.GuildID, nil)
-		if err == nil {
-			_ = b.play.Control(ctx, sid, "stop", nil)
-			_ = b.play.Control(ctx, sid, "clear", map[string]any{"all": true})
+		b.deferReplyEphemeral(s, i)
+		sid, err := b.ensureBoundSession(ctx, i.GuildID, b.voiceChannelForGuild(i.GuildID))
+		if err != nil {
+			b.followupEphemeral(s, i, err.Error())
+			return
 		}
-		b.reply(s, i, "Stopped and cleared.")
+		_ = b.play.Control(ctx, sid, "stop", extraWithCommandID(nil, i.ID))
+		_ = b.play.Control(ctx, sid, "clear", map[string]any{"all": true})
+		b.followupEphemeral(s, i, "Stopped and cleared.")
 	case "clear":
 		b.sessionControl(ctx, s, i, "clear", nil, "Queue cleared.")
 	case "shuffle":
 		b.sessionControl(ctx, s, i, "shuffle", nil, "Shuffle toggled.")
 	case "repeat":
-		sid, err := b.play.Session(ctx, "discord_guild", i.GuildID, nil)
+		b.deferReplyEphemeral(s, i)
+		sid, err := b.ensureBoundSession(ctx, i.GuildID, b.voiceChannelForGuild(i.GuildID))
 		if err != nil {
-			b.reply(s, i, err.Error())
+			b.followupEphemeral(s, i, err.Error())
 			return
 		}
 		st, _ := b.play.Get(ctx, sid)
 		mode, _ := st["repeat"].(string)
-		next := map[string]string{"off": "track", "track": "queue", "queue": "off"}[mode]
-		if next == "" {
-			next = "queue"
+		next := nextRepeatMode(mode)
+		if err := b.play.Control(ctx, sid, "repeat", extraWithCommandID(map[string]any{"mode": next}, i.ID)); err != nil {
+			b.followupEphemeral(s, i, err.Error())
+			return
 		}
-		_ = b.play.Control(ctx, sid, "repeat", map[string]any{"mode": next})
-		b.reply(s, i, "Repeat: **"+next+"**")
+		b.followupEphemeral(s, i, "Repeat: **"+repeatModeLabel(next)+"**")
 	case "volume":
 		level := optionInt(data.Options, "level")
 		vol := float64(level) / 100
 		b.sessionControl(ctx, s, i, "volume", map[string]any{"volume": vol}, fmt.Sprintf("Volume %d%%", level))
 	case "queue":
-		sid, err := b.play.Session(ctx, "discord_guild", i.GuildID, nil)
+		sid, err := b.ensureBoundSession(ctx, i.GuildID, b.voiceChannelForGuild(i.GuildID))
 		if err != nil {
 			b.reply(s, i, err.Error())
 			return
@@ -270,7 +288,7 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 		}
 		b.replyPublic(s, i, bld.String())
 	case "nowplaying":
-		sid, err := b.play.Session(ctx, "discord_guild", i.GuildID, nil)
+		sid, err := b.ensureBoundSession(ctx, i.GuildID, b.voiceChannelForGuild(i.GuildID))
 		if err != nil {
 			b.reply(s, i, err.Error())
 			return
@@ -292,17 +310,46 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	}
 }
 
+// engineRepeatMode maps Discord-facing names onto playback.Engine values (off|queue|one).
+func engineRepeatMode(mode string) string {
+	if mode == "track" {
+		return "one"
+	}
+	return mode
+}
+
+func nextRepeatMode(current string) string {
+	switch engineRepeatMode(current) {
+	case "off", "":
+		return "one"
+	case "one":
+		return "queue"
+	case "queue":
+		return "off"
+	default:
+		return "queue"
+	}
+}
+
+func repeatModeLabel(mode string) string {
+	if mode == "one" {
+		return "track"
+	}
+	return mode
+}
+
 func (b *Bot) sessionControl(ctx context.Context, s *discordgo.Session, i *discordgo.InteractionCreate, action string, extra map[string]any, ok string) {
-	sid, err := b.play.Session(ctx, "discord_guild", i.GuildID, nil)
+	b.deferReplyEphemeral(s, i)
+	sid, err := b.ensureBoundSession(ctx, i.GuildID, b.voiceChannelForGuild(i.GuildID))
 	if err != nil {
-		b.reply(s, i, err.Error())
+		b.followupEphemeral(s, i, err.Error())
 		return
 	}
-	if err := b.play.Control(ctx, sid, action, extra); err != nil {
-		b.reply(s, i, err.Error())
+	if err := b.play.Control(ctx, sid, action, extraWithCommandID(extra, i.ID)); err != nil {
+		b.followupEphemeral(s, i, err.Error())
 		return
 	}
-	b.reply(s, i, ok)
+	b.followupEphemeral(s, i, ok)
 }
 
 func trackTitle(ctx context.Context, b *Bot, id string) string {

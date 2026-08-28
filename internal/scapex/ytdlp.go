@@ -196,6 +196,15 @@ func parseFlatHits(raw []byte) []Hit {
 }
 
 func (y *ytDLP) Fetch(ctx context.Context, mediaURL, destDir string) ([]LocalTrack, error) {
+	return y.FetchPolicy(ctx, mediaURL, destDir, DefaultMediaPolicy)
+}
+
+func (y *ytDLP) FetchPolicy(ctx context.Context, mediaURL, destDir, policy string) ([]LocalTrack, error) {
+	src := WatchURL(mediaURL)
+	vid := VideoID(src)
+	if src == "" || vid == "" {
+		return nil, fmt.Errorf("not an allowlisted YouTube watch URL or video id")
+	}
 	if destDir == "" {
 		return nil, fmt.Errorf("dest dir required")
 	}
@@ -206,22 +215,20 @@ func (y *ytDLP) Fetch(ctx context.Context, mediaURL, destDir string) ([]LocalTra
 		"--no-warnings",
 		"--no-progress",
 		"--newline",
-		"-x",
-		"--audio-format", "m4a",
-		"--audio-quality", "0",
+	}
+	args = append(args, FormatArgs(policy)...)
+	args = append(args,
 		"--embed-metadata",
 		"--write-info-json",
 		"--no-write-playlist-metafiles",
+		"--no-playlist",
 		"-o", filepath.Join(destDir, "%(id)s.%(ext)s"),
-	}
-	if !isYouTubePlaylist(mediaURL) {
-		args = append(args, "--no-playlist")
-	}
-	args = append(args, mediaURL)
+		src,
+	)
 	if _, err := y.run(ctx, args...); err != nil {
 		return nil, err
 	}
-	return collectDownloads(destDir)
+	return collectDownloads(destDir, vid)
 }
 
 var uploadExt = map[string]bool{
@@ -229,33 +236,72 @@ var uploadExt = map[string]bool{
 	".ogg": true, ".opus": true, ".wav": true, ".oga": true, ".aif": true, ".aiff": true,
 }
 
-func collectDownloads(dir string) ([]LocalTrack, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
+func collectDownloads(dir string, videoIDs ...string) ([]LocalTrack, error) {
+	if _, err := os.Stat(dir); err != nil {
 		return nil, err
+	}
+	ids := make([]string, 0, len(videoIDs))
+	seenID := map[string]bool{}
+	for _, id := range videoIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seenID[id] {
+			continue
+		}
+		seenID[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		matches, err := filepath.Glob(filepath.Join(dir, "*.info.json"))
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range matches {
+			base := filepath.Base(p)
+			id := strings.TrimSuffix(base, ".info.json")
+			if id == "" || id == base || seenID[id] {
+				continue
+			}
+			seenID[id] = true
+			ids = append(ids, id)
+		}
 	}
 	infos := map[string]ytdlpInfo{}
 	var files []string
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
+	seenFile := map[string]bool{}
+	addAudio := func(p string) {
+		ext := strings.ToLower(filepath.Ext(p))
+		if !uploadExt[ext] || seenFile[p] {
+			return
 		}
-		name := e.Name()
-		ext := strings.ToLower(filepath.Ext(name))
-		if ext == ".json" && strings.HasSuffix(strings.ToLower(name), ".info.json") {
-			raw, err := os.ReadFile(filepath.Join(dir, name))
+		seenFile[p] = true
+		files = append(files, p)
+	}
+	if len(ids) > 0 {
+		for _, id := range ids {
+			raw, err := os.ReadFile(filepath.Join(dir, id+".info.json"))
+			if err == nil {
+				var inf ytdlpInfo
+				if json.Unmarshal(raw, &inf) == nil && inf.ID != "" {
+					infos[inf.ID] = inf
+				}
+			}
+			matches, err := filepath.Glob(filepath.Join(dir, id+".*"))
 			if err != nil {
-				continue
+				return nil, err
 			}
-			var inf ytdlpInfo
-			if json.Unmarshal(raw, &inf) != nil || inf.ID == "" {
-				continue
+			for _, p := range matches {
+				addAudio(p)
 			}
-			infos[inf.ID] = inf
-			continue
 		}
-		if uploadExt[ext] {
-			files = append(files, filepath.Join(dir, name))
+	} else {
+		for ext := range uploadExt {
+			matches, err := filepath.Glob(filepath.Join(dir, "*"+ext))
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range matches {
+				addAudio(p)
+			}
 		}
 	}
 	if len(files) == 0 {

@@ -94,11 +94,10 @@ func (d *Dock) EnqueueInboxScan(ctx context.Context, lib uuid.UUID) error {
 
 func (d *Dock) WaitTrack(ctx context.Context, lib uuid.UUID, videoID, title string) (uuid.UUID, error) {
 	needle := strings.TrimSpace(videoID)
-	title = strings.TrimSpace(title)
 	t := time.NewTicker(400 * time.Millisecond)
 	defer t.Stop()
 	for {
-		id, ok, err := d.findTrack(ctx, lib, needle, title)
+		id, ok, err := d.findTrack(ctx, lib, needle)
 		if err != nil {
 			return uuid.Nil, err
 		}
@@ -113,34 +112,24 @@ func (d *Dock) WaitTrack(ctx context.Context, lib uuid.UUID, videoID, title stri
 	}
 }
 
-func (d *Dock) findTrack(ctx context.Context, lib uuid.UUID, videoID, title string) (uuid.UUID, bool, error) {
+func (d *Dock) findTrack(ctx context.Context, lib uuid.UUID, videoID string) (uuid.UUID, bool, error) {
+	if videoID == "" {
+		return uuid.Nil, false, nil
+	}
 	var id uuid.UUID
-	if videoID != "" {
-		err := d.pool.QueryRow(ctx, `
-			SELECT t.id FROM tracks t
-			JOIN track_files tf ON tf.track_id = t.id AND tf.deleted_at IS NULL
-			WHERE t.library_id=$1 AND (
-			  tf.storage_key ILIKE '%' || $2 || '%'
-			  OR t.acquisition_ref = $2
-			)
-			ORDER BY t.created_at DESC LIMIT 1`, lib, videoID).Scan(&id)
-		if err == nil {
-			d.tagAcquisition(ctx, id, videoID)
-			return id, true, nil
-		}
+	err := d.pool.QueryRow(ctx, `
+		SELECT t.id FROM tracks t
+		JOIN track_files tf ON tf.track_id = t.id AND tf.deleted_at IS NULL
+		WHERE t.library_id=$1 AND (
+		  tf.storage_key ILIKE '%' || $2 || '%'
+		  OR t.acquisition_ref = $2
+		)
+		ORDER BY t.created_at DESC LIMIT 1`, lib, videoID).Scan(&id)
+	if err != nil {
+		return uuid.Nil, false, nil
 	}
-	if title != "" {
-		err := d.pool.QueryRow(ctx, `
-			SELECT t.id FROM tracks t
-			JOIN track_files tf ON tf.track_id = t.id AND tf.deleted_at IS NULL
-			WHERE t.library_id=$1 AND t.title ILIKE $2
-			ORDER BY t.created_at DESC LIMIT 1`, lib, title).Scan(&id)
-		if err == nil {
-			d.tagAcquisition(ctx, id, videoID)
-			return id, true, nil
-		}
-	}
-	return uuid.Nil, false, nil
+	d.tagAcquisition(ctx, id, videoID)
+	return id, true, nil
 }
 
 func (d *Dock) tagAcquisition(ctx context.Context, id uuid.UUID, videoID string) {
@@ -156,35 +145,10 @@ func (d *Dock) tagAcquisition(ctx context.Context, id uuid.UUID, videoID string)
 		WHERE id=$1`, id, strings.TrimSpace(videoID))
 }
 
+// FinalizeDownload keeps job-scoped paths. It must not copy to inbox/{videoID}.ext.
 func (d *Dock) FinalizeDownload(src LocalTrack) (LocalTrack, error) {
 	if src.VideoID == "" {
 		src.VideoID = strings.TrimSuffix(filepath.Base(src.Path), filepath.Ext(src.Path))
 	}
-	ext := filepath.Ext(src.Path)
-	dest := filepath.Join(d.inbox, src.VideoID+ext)
-	if filepath.Clean(src.Path) == filepath.Clean(dest) {
-		return src, nil
-	}
-	if err := os.MkdirAll(d.inbox, 0o775); err != nil {
-		return src, err
-	}
-	in, err := os.Open(src.Path)
-	if err != nil {
-		return src, err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o664)
-	if err != nil {
-		return src, err
-	}
-	_, copyErr := out.ReadFrom(in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return src, copyErr
-	}
-	if closeErr != nil {
-		return src, closeErr
-	}
-	src.Path = dest
 	return src, nil
 }

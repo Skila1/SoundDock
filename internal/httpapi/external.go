@@ -246,8 +246,11 @@ func (s *Server) importProviderPlaylist(w http.ResponseWriter, r *http.Request) 
 	prov := chi.URLParam(r, "provider")
 	extID := chi.URLParam(r, "id")
 	var body struct {
-		Mode, Name, Interval, Removal string
-		FillYouTube                   *bool `json:"fill_youtube"`
+		Mode        string `json:"mode"`
+		Name        string `json:"name"`
+		Interval    string `json:"sync_interval"`
+		Removal     string `json:"removal_policy"`
+		FillYouTube *bool  `json:"fill_youtube"`
 	}
 	_ = decodeJSON(r, &body)
 	if body.Mode == "" {
@@ -275,8 +278,12 @@ func (s *Server) importPlaylistURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		URL, Mode, Name, Interval, Removal string
-		FillYouTube                        *bool `json:"fill_youtube"`
+		URL         string `json:"url"`
+		Mode        string `json:"mode"`
+		Name        string `json:"name"`
+		Interval    string `json:"sync_interval"`
+		Removal     string `json:"removal_policy"`
+		FillYouTube *bool  `json:"fill_youtube"`
 	}
 	_ = decodeJSON(r, &body)
 	ref, ok := external.ParsePlaylistURL(body.URL)
@@ -317,8 +324,10 @@ func (s *Server) importAllProviderPlaylists(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var body struct {
-		Mode, Interval, Removal string
-		FillYouTube             *bool `json:"fill_youtube"`
+		Mode        string `json:"mode"`
+		Interval    string `json:"sync_interval"`
+		Removal     string `json:"removal_policy"`
+		FillYouTube *bool  `json:"fill_youtube"`
 	}
 	_ = decodeJSON(r, &body)
 	if body.Mode == "" {
@@ -574,22 +583,7 @@ func (s *Server) adminPutExternalProvider(w http.ResponseWriter, r *http.Request
 }
 
 func (s *Server) accountAccess(r *http.Request, userID uuid.UUID, prov string, st external.Settings) (string, string, error) {
-	extra := st.Extra["developer_token"]
-	if extra == "" {
-		extra = st.Extra["api_key"]
-	}
-	var accEnc []byte
-	err := s.Pool.QueryRow(r.Context(), `SELECT access_token_enc FROM external_provider_accounts WHERE user_id=$1 AND provider=$2 AND status='connected'`, userID, prov).Scan(&accEnc)
-	if err != nil {
-		return "", extra, err
-	}
-	access := ""
-	if s.Box != nil && len(accEnc) > 0 {
-		if p, e := s.Box.Decrypt(accEnc); e == nil {
-			access = string(p)
-		}
-	}
-	return access, extra, nil
+	return external.EnsureAccess(r.Context(), s.Pool, s.Box, userID, prov, st)
 }
 
 func publicPair(r *http.Request, st external.Settings) (string, string) {

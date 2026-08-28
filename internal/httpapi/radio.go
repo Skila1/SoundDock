@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -56,14 +57,33 @@ func (s *Server) getRadio(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if fillYouTube && seed != uuid.Nil {
+	if fillYouTube && seed != uuid.Nil && s.hasAudioListener(r) {
 		need := limit - len(res.TrackIDs)
 		if need > 0 {
 			have := append(append([]uuid.UUID{}, res.TrackIDs...), req.Exclude...)
-			res.YoutubeIDs = s.similarYouTube(r.Context(), seed, need, have)
+			res.YoutubeIDs = s.youtubeFillIDs(r.Context(), seed, need, have)
 		}
 	}
 	writeJSON(w, 200, res)
+}
+
+func (s *Server) youtubeFillIDs(ctx context.Context, seed uuid.UUID, need int, have []uuid.UUID) []string {
+	if s != nil && s.youtubeFillHook != nil {
+		return s.youtubeFillHook(ctx, seed, need, have)
+	}
+	return s.similarYouTube(ctx, seed, need, have)
+}
+
+func (s *Server) hasAudioListener(r *http.Request) bool {
+	if s == nil || s.Play == nil {
+		return false
+	}
+	sid, err := s.attachedPlaySession(r, nil, "")
+	if err != nil || sid == uuid.Nil {
+		return false
+	}
+	ok, err := s.Play.HasAudioListener(r.Context(), sid)
+	return err == nil && ok
 }
 
 func (s *Server) radioSeeds(w http.ResponseWriter, r *http.Request) {

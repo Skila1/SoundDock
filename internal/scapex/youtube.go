@@ -56,21 +56,6 @@ func IsYouTubeURL(raw string) bool {
 	return strings.HasSuffix(host, ".youtube.com")
 }
 
-func isYouTubePlaylist(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return false
-	}
-	p := strings.ToLower(u.Path)
-	if strings.Contains(p, "/playlist") {
-		return true
-	}
-	if u.Query().Get("list") != "" && u.Query().Get("v") == "" && !strings.Contains(p, "/watch") && !strings.Contains(p, "/shorts") {
-		return true
-	}
-	return false
-}
-
 func VideoID(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if videoIDRe.MatchString(raw) {

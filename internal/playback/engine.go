@@ -4,11 +4,83 @@ import (
 	"context"
 	"math"
 	"math/rand"
+	"sort"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+type requesterCtxKey struct{}
+type originCtxKey struct{}
+
+// Requester is the user (and optional Discord id) attributed on queue INSERTs.
+type Requester struct {
+	UserID        uuid.UUID
+	DiscordUserID string
+}
+
+func WithRequester(ctx context.Context, userID uuid.UUID, discordID string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, requesterCtxKey{}, Requester{UserID: userID, DiscordUserID: discordID})
+}
+
+func WithOrigin(ctx context.Context, origin string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, originCtxKey{}, origin)
+}
+
+func originFrom(ctx context.Context) string {
+	if ctx != nil {
+		if v, ok := ctx.Value(originCtxKey{}).(string); ok {
+			switch v {
+			case OriginUser, OriginAutoplay, OriginRadio:
+				return v
+			}
+		}
+	}
+	return OriginUser
+}
+
+func requesterFrom(ctx context.Context) (userID any, discordID any) {
+	if ctx == nil {
+		return nil, nil
+	}
+	v, ok := ctx.Value(requesterCtxKey{}).(Requester)
+	if !ok {
+		return nil, nil
+	}
+	if v.UserID != uuid.Nil {
+		userID = v.UserID
+	}
+	if s := strings.TrimSpace(v.DiscordUserID); s != "" {
+		discordID = s
+	}
+	return userID, discordID
+}
+
+func insertQueueTrack(ctx context.Context, tx db, sid uuid.UUID, position int, trackID uuid.UUID) error {
+	origin := originFrom(ctx)
+	userID, discordID := requesterFrom(ctx)
+	_, err := tx.Exec(ctx, `
+		INSERT INTO playback_queue_items (session_id, position, track_id, origin, requested_by_user_id, requested_by_discord_user_id)
+		VALUES ($1,$2,$3,$4,$5,$6)`, sid, position, trackID, origin, userID, discordID)
+	return err
+}
+
+type db interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
 
 type Engine struct {
 	pool *pgxpool.Pool
@@ -22,6 +94,34 @@ func New(pool *pgxpool.Pool) *Engine { return &Engine{pool: pool} }
 func (e *Engine) lock(key string) *sync.Mutex {
 	v, _ := e.mu.LoadOrStore(key, &sync.Mutex{})
 	return v.(*sync.Mutex)
+}
+
+func (e *Engine) lockSessions(ids ...uuid.UUID) func() {
+	seen := map[string]struct{}{}
+	var keys []string
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		k := id.String()
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var mus []*sync.Mutex
+	for _, k := range keys {
+		m := e.lock(k)
+		m.Lock()
+		mus = append(mus, m)
+	}
+	return func() {
+		for i := len(mus) - 1; i >= 0; i-- {
+			mus[i].Unlock()
+		}
+	}
 }
 
 func (e *Engine) intn(n int) int {
@@ -38,17 +138,26 @@ func (e *Engine) intn(n int) int {
 
 func (e *Engine) Get(ctx context.Context, sid uuid.UUID) (map[string]any, error) {
 	row := e.pool.QueryRow(ctx, `
-		SELECT id, kind, owner_key, volume, repeat_mode, shuffle, crossfade_seconds, replaygain_mode,
-			current_index, current_track_id, position_ms, status, shuffle_mode, stop_after_current, device_id
-		FROM playback_sessions WHERE id=$1`, sid)
+		SELECT s.id, s.kind, s.owner_key, s.volume, s.repeat_mode, s.shuffle, s.crossfade_seconds, s.replaygain_mode,
+			s.current_index, s.current_track_id, s.position_ms, s.status, s.shuffle_mode, s.stop_after_current, s.device_id,
+			s.state_revision, s.playhead_sequence, s.playback_instance_id, s.muted, s.output_pref, s.autoplay,
+			s.renderer_kind, s.renderer_id, s.renderer_generation, s.checkpoint_at, s.duration_ms, s.playback_rate,
+			s.renderer_heartbeat_at,
+			(SELECT r.binding_revision FROM discord_voice_runtime r WHERE r.session_id=s.id ORDER BY r.binding_revision DESC LIMIT 1)
+		FROM playback_sessions s WHERE s.id=$1`, sid)
 	var id uuid.UUID
-	var kind, owner, repeat, rg, status, shuffleMode string
-	var vol float64
-	var shuffle, stopAfter bool
-	var xf, idx, pos int
-	var cur *uuid.UUID
-	var deviceID *string
-	if err := row.Scan(&id, &kind, &owner, &vol, &repeat, &shuffle, &xf, &rg, &idx, &cur, &pos, &status, &shuffleMode, &stopAfter, &deviceID); err != nil {
+	var kind, owner, repeat, rg, status, shuffleMode, outputPref, rendererKind string
+	var vol, playbackRate float64
+	var shuffle, stopAfter, muted, autoplay bool
+	var xf, idx, pos, durationMS int
+	var stateRev, playheadSeq, rendererGen int64
+	var cur, instanceID *uuid.UUID
+	var deviceID, rendererID *string
+	var checkpointAt, heartbeatAt *time.Time
+	var bindingRev *int64
+	if err := row.Scan(&id, &kind, &owner, &vol, &repeat, &shuffle, &xf, &rg, &idx, &cur, &pos, &status, &shuffleMode, &stopAfter, &deviceID,
+		&stateRev, &playheadSeq, &instanceID, &muted, &outputPref, &autoplay,
+		&rendererKind, &rendererID, &rendererGen, &checkpointAt, &durationMS, &playbackRate, &heartbeatAt, &bindingRev); err != nil {
 		return nil, err
 	}
 	items, _ := e.Queue(ctx, sid)
@@ -57,11 +166,26 @@ func (e *Engine) Get(ctx context.Context, sid uuid.UUID) (map[string]any, error)
 		"crossfade_seconds": xf, "replaygain_mode": rg, "current_index": idx, "current_track_id": cur,
 		"position_ms": pos, "status": status, "items": items,
 		"shuffle_mode": shuffleMode, "stop_after_current": stopAfter, "device_id": deviceID,
+		"state_revision": stateRev, "playhead_sequence": playheadSeq, "playback_instance_id": instanceID,
+		"muted": muted, "output_pref": outputPref, "autoplay": autoplay,
+		"renderer_kind": rendererKind, "renderer_id": rendererID, "renderer_generation": rendererGen,
+		"checkpoint_at": checkpointAt, "duration_ms": durationMS, "playback_rate": playbackRate,
+		"renderer_heartbeat_at": heartbeatAt, "binding_revision": bindingRev,
 	}, nil
 }
 
 func (e *Engine) Queue(ctx context.Context, sid uuid.UUID) ([]map[string]any, error) {
-	rows, err := e.pool.Query(ctx, `SELECT id, position, track_id FROM playback_queue_items WHERE session_id=$1 ORDER BY position`, sid)
+	return e.queue(ctx, e.pool, sid)
+}
+
+func (e *Engine) queue(ctx context.Context, q db, sid uuid.UUID) ([]map[string]any, error) {
+	rows, err := q.Query(ctx, `
+		SELECT q.id, q.position, q.track_id, q.origin,
+			q.requested_by_user_id, q.requested_by_discord_user_id, u.display_name
+		FROM playback_queue_items q
+		LEFT JOIN users u ON u.id = q.requested_by_user_id
+		WHERE q.session_id=$1
+		ORDER BY q.position`, sid)
 	if err != nil {
 		return nil, err
 	}
@@ -71,15 +195,39 @@ func (e *Engine) Queue(ctx context.Context, sid uuid.UUID) ([]map[string]any, er
 		var id uuid.UUID
 		var pos int
 		var tid uuid.UUID
-		if err := rows.Scan(&id, &pos, &tid); err != nil {
+		var origin string
+		var reqUser *uuid.UUID
+		var reqDiscord, display *string
+		if err := rows.Scan(&id, &pos, &tid, &origin, &reqUser, &reqDiscord, &display); err != nil {
 			return nil, err
 		}
-		out = append(out, map[string]any{"id": id, "position": pos, "track_id": tid})
+		item := map[string]any{"id": id, "position": pos, "track_id": tid, "origin": origin}
+		if rb := requestedByMap(reqUser, reqDiscord, display); rb != nil {
+			item["requested_by"] = rb
+		}
+		out = append(out, item)
 	}
 	if out == nil {
 		out = []map[string]any{}
 	}
 	return out, rows.Err()
+}
+
+func requestedByMap(userID *uuid.UUID, discordID, displayName *string) map[string]any {
+	out := map[string]any{}
+	if userID != nil && *userID != uuid.Nil {
+		out["user_id"] = *userID
+	}
+	if discordID != nil && strings.TrimSpace(*discordID) != "" {
+		out["discord_user_id"] = strings.TrimSpace(*discordID)
+	}
+	if displayName != nil && strings.TrimSpace(*displayName) != "" {
+		out["display_name"] = strings.TrimSpace(*displayName)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (e *Engine) Replace(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, start int) error {
@@ -91,11 +239,24 @@ func (e *Engine) Replace(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID,
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := lockSessionRow(ctx, tx, sid); err != nil {
+		return err
+	}
+	if err := replaceQueueTx(ctx, tx, sid, tracks, start); err != nil {
+		return err
+	}
+	if err := bumpRevision(ctx, tx, sid); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+func replaceQueueTx(ctx context.Context, tx db, sid uuid.UUID, tracks []uuid.UUID, start int) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM playback_queue_items WHERE session_id=$1`, sid); err != nil {
 		return err
 	}
 	for i, t := range tracks {
-		if _, err := tx.Exec(ctx, `INSERT INTO playback_queue_items (session_id, position, track_id) VALUES ($1,$2,$3)`, sid, i, t); err != nil {
+		if err := insertQueueTrack(ctx, tx, sid, i, t); err != nil {
 			return err
 		}
 	}
@@ -106,11 +267,23 @@ func (e *Engine) Replace(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID,
 	if start < len(tracks) {
 		cur = tracks[start]
 	}
-	_, err = tx.Exec(ctx, `UPDATE playback_sessions SET current_index=$2, current_track_id=$3, status='playing', position_ms=0, updated_at=now() WHERE id=$1`, sid, start, cur)
-	if err != nil {
-		return err
+	var err error
+	if len(tracks) == 0 {
+		_, err = tx.Exec(ctx, `
+			UPDATE playback_sessions
+			SET current_index=0, current_track_id=NULL, status='stopped', position_ms=0,
+				playback_instance_id=NULL, playhead_sequence=0, duration_ms=0, updated_at=now()
+			WHERE id=$1`, sid)
+	} else {
+		_, err = tx.Exec(ctx, `
+			UPDATE playback_sessions
+			SET current_index=$2, current_track_id=$3, status='playing',
+				`+sqlNewInstance+`,
+				duration_ms=COALESCE((SELECT t.duration_ms FROM tracks t WHERE t.id=$3), 0),
+				updated_at=now()
+			WHERE id=$1`, sid, start, cur)
 	}
-	return tx.Commit(ctx)
+	return err
 }
 
 func (e *Engine) Add(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, next bool) error {
@@ -122,6 +295,9 @@ func (e *Engine) Add(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, nex
 		return err
 	}
 	defer tx.Rollback(ctx)
+	if err := lockSessionRow(ctx, tx, sid); err != nil {
+		return err
+	}
 	if next {
 		var cur int
 		if err := tx.QueryRow(ctx, `SELECT current_index FROM playback_sessions WHERE id=$1`, sid).Scan(&cur); err != nil {
@@ -131,20 +307,23 @@ func (e *Engine) Add(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, nex
 			return err
 		}
 		for i, t := range tracks {
-			if _, err := tx.Exec(ctx, `INSERT INTO playback_queue_items (session_id, position, track_id) VALUES ($1,$2,$3)`, sid, cur+1+i, t); err != nil {
+			if err := insertQueueTrack(ctx, tx, sid, cur+1+i, t); err != nil {
 				return err
 			}
 		}
-		return tx.Commit(ctx)
-	}
-	var max int
-	if err := tx.QueryRow(ctx, `SELECT coalesce(max(position),-1) FROM playback_queue_items WHERE session_id=$1`, sid).Scan(&max); err != nil {
-		return err
-	}
-	for i, t := range tracks {
-		if _, err := tx.Exec(ctx, `INSERT INTO playback_queue_items (session_id, position, track_id) VALUES ($1,$2,$3)`, sid, max+1+i, t); err != nil {
+	} else {
+		var max int
+		if err := tx.QueryRow(ctx, `SELECT coalesce(max(position),-1) FROM playback_queue_items WHERE session_id=$1`, sid).Scan(&max); err != nil {
 			return err
 		}
+		for i, t := range tracks {
+			if err := insertQueueTrack(ctx, tx, sid, max+1+i, t); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE playback_sessions SET state_revision=state_revision+1, updated_at=now() WHERE id=$1`, sid); err != nil {
+		return err
 	}
 	return tx.Commit(ctx)
 }

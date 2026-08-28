@@ -25,6 +25,10 @@ type QueueDeviceState = {
   current_track_id?: string | null;
   position_ms: number;
   items: { id: string; position: number; track_id: string }[];
+  output_pref?: string;
+  renderer_kind?: string;
+  renderer_id?: string | null;
+  binding_revision?: number | null;
 };
 
 const controls = ["resume", "pause", "stop", "previous", "next"] as const;
@@ -36,7 +40,7 @@ export function DevicesPage() {
   const discord = output === "discord" && discordReady(voice);
   const queue = useQuery({
     queryKey: ["me-queue-devices", discord],
-    queryFn: () => api.get<QueueDeviceState>(discord ? "/api/v1/me/queue?target=discord" : "/api/v1/me/queue"),
+    queryFn: () => api.get<QueueDeviceState>("/api/v1/me/queue"),
     refetchInterval: 2000
   });
   const q = queue.data;
@@ -48,7 +52,7 @@ export function DevicesPage() {
 
   async function control(action: string) {
     try {
-      await api.post("/api/v1/me/queue/control", { action, extra: {}, ...(discord ? { target: "discord" } : {}) });
+      await api.post("/api/v1/me/queue/control", { action, extra: {} });
       toast.success(action === "resume" ? (discord ? "Resumed" : "Playing here") : action[0].toUpperCase() + action.slice(1));
       qc.invalidateQueries({ queryKey: ["me-queue-devices"] });
     } catch (err) {
@@ -61,8 +65,8 @@ export function DevicesPage() {
       <PageHeader
         title="Devices"
         description={discord
-          ? "This is the Discord voice queue for the server you are in. Pause, resume, and skip stay in sync with the bot."
-          : "Handoff playback for this browser. Switch output to Discord to control the voice queue."}
+          ? "Attached session while you are in the bound voice channel. Pause, resume, and skip stay in sync with the bot."
+          : "Handoff playback for this browser. Join a voice channel to attach to the Discord session."}
       />
       {!q && !queue.isLoading && (
         <EmptyState icon={Speaker} title="No playback session" description="Start playing a track to create a web device session." />
@@ -73,7 +77,7 @@ export function DevicesPage() {
             <div>
               <div className="flex items-center gap-2">
                 <Speaker className="h-4 w-4 text-accent" />
-                <h2 className="font-semibold">{q.kind === "discord_guild" || discord ? "Discord" : "Web player"}</h2>
+                <h2 className="font-semibold">{q.kind === "discord_guild" || q.output_pref === "discord" || q.renderer_kind === "discord" || discord ? "Discord" : "Web player"}</h2>
                 <Badge tone={q.status === "playing" ? "success" : "neutral"}>{q.status}</Badge>
               </div>
               <p className="mt-1 text-sm text-muted">

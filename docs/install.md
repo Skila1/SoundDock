@@ -8,7 +8,7 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/ma
 
 The wizard does not ask for an install path or a library folder. Run it from the directory that should contain `sounddock`. If that folder is already named `sounddock`, it installs in place. Cloudflared, if enabled, is a systemd service. It does not ask for an IP, a public URL, or Discord credentials.
 
-Open `http://<host>:8080` (or your tunnel) and create the first local administrator. Configure Discord later under **Admin → Discord**. Paste your Discord user ID under **Administrators** so you keep admin when Discord sign-in is on. The first Discord user to sign in (when there is not already an administrator) is also marked administrator.
+Open `http://<host>:8080` (or your tunnel) and create the first local administrator. Configure Discord later under **Admin → Discord**. The Discord voice worker is already in the Compose stack. Paste your Discord user ID under **Administrators** so you keep admin when Discord sign-in is on. The first Discord user to sign in (when there is not already an administrator) is also marked administrator.
 
 ```bash
 cd ~/sounddock

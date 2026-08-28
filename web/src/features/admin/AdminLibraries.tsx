@@ -34,6 +34,8 @@ export function AdminLibraries() {
   const [remove, setRemove] = useState<Library | null>(null);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [mergeSrc, setMergeSrc] = useState<string[]>([]);
+  const [migrateFrom, setMigrateFrom] = useState<Library | null>(null);
+  const [migrateDest, setMigrateDest] = useState("");
 
   const list = libs.data || [];
   const defaultId = list.find((l) => l.is_default)?.id || list[0]?.id;
@@ -114,6 +116,18 @@ export function AdminLibraries() {
                   >
                     {busy ? "Scanning…" : "Scan"}
                   </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      const others = list.filter((x) => x.id !== l.id);
+                      const preferred = others.find((x) => x.storage_type === "managed") || others.find((x) => x.is_default) || others[0];
+                      setMigrateFrom(l);
+                      setMigrateDest(preferred?.id || "");
+                    }}
+                  >
+                    Migrate
+                  </Button>
                   <Button size="sm" variant="destructive" onClick={() => { setRemove(l); setDeleteFiles(false); }}>Delete</Button>
                 </div>
               </div>
@@ -162,6 +176,36 @@ export function AdminLibraries() {
             <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
             <Field label="Storage"><Select value={form.storage_id} onValueChange={(storage_id) => setForm({ ...form, storage_id })} options={(storage.data || []).map((s: any) => ({ value: s.id, label: s.name }))} /></Field>
             <Button type="submit">Create</Button>
+          </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!migrateFrom} onOpenChange={(v) => { if (!v) setMigrateFrom(null); }}>
+        <DialogContent title={migrateFrom ? `Migrate ${migrateFrom.name}` : "Migrate"}>
+          <form className="space-y-3" onSubmit={async (e) => {
+            e.preventDefault();
+            if (!migrateFrom) return;
+            if (!migrateDest) {
+              toast.error("Choose a destination library");
+              return;
+            }
+            await api.post(`/api/v1/admin/libraries/${migrateFrom.id}/migrate`, { dest_library_id: migrateDest });
+            toast.success("Migration started");
+            setMigrateFrom(null);
+            qc.invalidateQueries({ queryKey: ["libraries"] });
+          }}>
+            <p className="text-sm text-muted">Files are copied into the destination library. A destination is required — nothing is copied without one.</p>
+            <Field label="Destination library">
+              <Select
+                value={migrateDest}
+                onValueChange={setMigrateDest}
+                placeholder="Select destination"
+                options={list.filter((x) => x.id !== migrateFrom?.id).map((x) => ({
+                  value: x.id,
+                  label: `${x.name}${x.storage_type === "managed" ? " (managed)" : ""}${x.is_default ? " · default" : ""}`
+                }))}
+              />
+            </Field>
+            <Button type="submit" disabled={!migrateDest}>Start migrate</Button>
           </form>
         </DialogContent>
       </Dialog>

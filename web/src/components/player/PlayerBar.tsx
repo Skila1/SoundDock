@@ -3,6 +3,7 @@ import {
   Heart,
   ListMusic,
   Maximize2,
+  Mic2,
   Minimize2,
   Moon,
   Pause,
@@ -162,6 +163,7 @@ export function PlayerBar() {
           <div className="mr-1 hidden items-center rounded-full bg-surface-2 p-0.5 text-[10px] font-semibold sm:flex" role="group" aria-label="Output">
             <button
               type="button"
+              aria-pressed={p.output === "browser"}
               className={`rounded-full px-2 py-1 ${p.output === "browser" ? "bg-surface-1 text-foreground" : "text-muted"}`}
               onClick={() => p.setOutput("browser")}
             >
@@ -170,6 +172,7 @@ export function PlayerBar() {
             <button
               type="button"
               disabled={!discordOn}
+              aria-pressed={p.output === "discord"}
               title={!discordOn ? "Join a Discord voice channel" : "Play in Discord"}
               className={`rounded-full px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${p.output === "discord" ? "bg-surface-1 text-foreground" : "text-muted"}`}
               onClick={() => discordOn && p.setOutput("discord")}
@@ -181,6 +184,17 @@ export function PlayerBar() {
         <Button size="icon" variant="ghost" className="md:hidden" onClick={() => p.control(p.playing ? "pause" : "resume")}>
           {p.playing ? <Pause /> : <Play />}
         </Button>
+        <Tooltip label="Lyrics">
+          <Button
+            size="icon"
+            variant="ghost"
+            className={ui.nowPlayingOpen ? "text-accent" : ""}
+            onClick={() => ui.set({ nowPlayingOpen: true })}
+            aria-label="Lyrics"
+          >
+            <Mic2 />
+          </Button>
+        </Tooltip>
         <Tooltip label="Queue">
           <Button
             size="icon"

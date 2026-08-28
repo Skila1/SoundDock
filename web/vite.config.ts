@@ -11,7 +11,7 @@ export default defineConfig({
     VitePWA({
       registerType: "prompt",
       injectRegister: false,
-      includeAssets: ["logo.png", "favicon.svg"],
+      includeAssets: ["logo.png", "favicon.svg", "manifest.webmanifest"],
       workbox: {
         navigateFallback: "index.html",
         navigateFallbackDenylist: [
@@ -21,31 +21,9 @@ export default defineConfig({
           /^\/readyz/,
           /^\/metrics/,
           /^\/openapi/
-        ],
-        runtimeCaching: [
-          {
-            urlPattern: ({ url }) =>
-              url.pathname.startsWith("/api/") ||
-              url.pathname.startsWith("/rest/") ||
-              url.pathname === "/healthz" ||
-              url.pathname === "/readyz",
-            handler: "NetworkOnly"
-          }
         ]
       },
-      manifest: {
-        name: "SoundDock",
-        short_name: "SoundDock",
-        description: "Self-hosted music library",
-        theme_color: "#0c1117",
-        background_color: "#0c1117",
-        display: "standalone",
-        start_url: "/",
-        icons: [
-          { src: "/logo.png", sizes: "192x192", type: "image/png", purpose: "any" },
-          { src: "/logo.png", sizes: "512x512", type: "image/png", purpose: "any" }
-        ]
-      }
+      manifest: false
     })
   ],
   resolve: { alias: { "@": path.resolve(__dirname, "./src") } },

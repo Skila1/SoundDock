@@ -11,6 +11,44 @@ import (
 	"github.com/sounddock/sounddock/internal/storage"
 )
 
+// updateExistingTrackSQL skips globally locked tracks and leaves per-field
+// metadata_locks untouched so a rescan cannot overwrite editor locks.
+const updateExistingTrackSQL = `
+	UPDATE tracks SET
+	  title=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='title') THEN title ELSE $2 END,
+	  album_id=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='album') THEN album_id ELSE $3 END,
+	  disc_number=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='disc_number') THEN disc_number ELSE $4 END,
+	  track_number=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='track_number') THEN track_number ELSE $5 END,
+	  duration_ms=CASE WHEN $6 > 0 THEN $6 ELSE duration_ms END,
+	  year=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='year') THEN year ELSE COALESCE(NULLIF($7,0), year) END,
+	  genre_text=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='genre') THEN genre_text ELSE CASE WHEN $8 <> '' THEN $8 ELSE genre_text END END,
+	  metadata_source=CASE WHEN $9 <> '' THEN $9 ELSE metadata_source END,
+	  metadata_confidence=COALESCE($10, metadata_confidence),
+	  mbid=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='mbid') THEN mbid ELSE CASE WHEN $11 <> '' THEN $11 ELSE mbid END END,
+	  updated_at=now()
+	WHERE id=$1 AND locked=false`
+
+func (s *Scanner) trackOrFieldLocked(ctx context.Context, trackID uuid.UUID, field string) bool {
+	if s == nil || s.pool == nil || trackID == uuid.Nil || field == "" {
+		return false
+	}
+	var locked bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT t.locked OR EXISTS (
+			SELECT 1 FROM metadata_locks ml
+			WHERE ml.entity_type='track' AND ml.entity_id=t.id AND ml.field=$2
+		) FROM tracks t WHERE t.id=$1`, trackID, field).Scan(&locked)
+	return err == nil && locked
+}
+
+func (s *Scanner) updateExistingTrack(ctx context.Context, trackID, albumID uuid.UUID, title string, probe metadata.Probe) {
+	if s.pool == nil || trackID == uuid.Nil {
+		return
+	}
+	_, _ = s.pool.Exec(ctx, updateExistingTrackSQL,
+		trackID, title, albumID, max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre, probe.Source, confOrNil(probe.Confidence), probe.MBID)
+}
+
 func confOrNil(c float64) any {
 	if c <= 0 {
 		return nil
@@ -30,6 +68,9 @@ func (s *Scanner) insertLyrics(ctx context.Context, trackID uuid.UUID, probe met
 	if body == "" || s.pool == nil {
 		return
 	}
+	if s.trackOrFieldLocked(ctx, trackID, "lyrics") {
+		return
+	}
 	var exists bool
 	_ = s.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM lyrics WHERE track_id=$1 AND source='embedded')`, trackID).Scan(&exists)
 	if exists {
@@ -44,10 +85,150 @@ func (s *Scanner) writeDuplicateGroup(ctx context.Context, fileID uuid.UUID, has
 		return
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id FROM track_files
-		WHERE content_hash=$1 AND id<>$2 AND deleted_at IS NULL`, hash, fileID)
+		SELECT id, track_id FROM track_files
+		WHERE content_hash=$1 AND deleted_at IS NULL`, hash)
 	if err != nil {
 		return
+	}
+	defer rows.Close()
+	var fileIDs, trackIDs []uuid.UUID
+	for rows.Next() {
+		var fid, tid uuid.UUID
+		if err := rows.Scan(&fid, &tid); err == nil {
+			fileIDs = append(fileIDs, fid)
+			trackIDs = append(trackIDs, tid)
+		}
+	}
+	fileIDs = uniqueSortedUUIDs(fileIDs)
+	if len(fileIDs) < DuplicateGroupMinMembers {
+		return
+	}
+	s.upsertDuplicateGroup(ctx, dupMethodContentHash, contentHashBlockingKey(hash), fileIDs, uniqueSortedUUIDs(trackIDs))
+}
+
+// persistDuplicateGroups writes content-hash and artist+title groups (threshold ≥2).
+// Cancellable: returns immediately if ctx is done or the maintenance-pool job was cancelled.
+func (s *Scanner) persistDuplicateGroups(ctx context.Context, jobID uuid.UUID) {
+	if s == nil || s.pool == nil {
+		return
+	}
+	if s.jobCancelRequested(ctx, jobID) {
+		return
+	}
+	s.persistContentHashReviewGroups(ctx)
+	if s.jobCancelRequested(ctx, jobID) {
+		return
+	}
+	s.persistArtistTitleGroups(ctx, jobID)
+}
+
+func (s *Scanner) jobCancelRequested(ctx context.Context, jobID uuid.UUID) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	if s == nil || s.pool == nil || jobID == uuid.Nil {
+		return false
+	}
+	var cancel bool
+	_ = s.pool.QueryRow(ctx, `SELECT cancel_requested FROM jobs WHERE id=$1`, jobID).Scan(&cancel)
+	return cancel
+}
+
+func (s *Scanner) persistContentHashReviewGroups(ctx context.Context) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT g.id, array_agg(DISTINCT tf.track_id)
+		FROM duplicate_groups g
+		JOIN duplicates d ON d.group_id=g.id
+		JOIN track_files tf ON tf.id=d.track_file_id
+		WHERE tf.deleted_at IS NULL AND g.method=$1
+		GROUP BY g.id
+		HAVING count(DISTINCT tf.track_id) >= $2`, dupMethodContentHash, DuplicateGroupMinMembers)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var group uuid.UUID
+		var tracks []uuid.UUID
+		if err := rows.Scan(&group, &tracks); err != nil {
+			continue
+		}
+		s.upsertReviewGroup(ctx, group, dupMethodContentHash, uniqueSortedUUIDs(tracks))
+	}
+}
+
+func (s *Scanner) persistArtistTitleGroups(ctx context.Context, jobID uuid.UUID) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT t.id, t.title, t.duration_ms,
+		  coalesce((
+		    SELECT string_agg(ar.name, ' ' ORDER BY ta.position)
+		    FROM track_artists ta
+		    JOIN artists ar ON ar.id=ta.artist_id
+		    WHERE ta.track_id=t.id AND ta.role='primary'
+		  ), '') AS artist
+		FROM tracks t`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	type blockMem struct {
+		tracks []timedTrack
+	}
+	blocks := map[string]*blockMem{}
+	n := 0
+	for rows.Next() {
+		if n%200 == 199 && s.jobCancelRequested(ctx, jobID) {
+			return
+		}
+		n++
+		var id uuid.UUID
+		var title, artist string
+		var dur int
+		if err := rows.Scan(&id, &title, &dur, &artist); err != nil {
+			continue
+		}
+		if skipArtistTitleBlock(artist, title) {
+			continue
+		}
+		key := ArtistTitleBlockingKey(artist, title)
+		b := blocks[key]
+		if b == nil {
+			b = &blockMem{}
+			blocks[key] = b
+		}
+		b.tracks = append(b.tracks, timedTrack{ID: id, DurationMS: dur})
+	}
+	for key, b := range blocks {
+		if s.jobCancelRequested(ctx, jobID) {
+			return
+		}
+		if len(b.tracks) < DuplicateGroupMinMembers {
+			continue
+		}
+		clusters := ClusterByDuration(b.tracks, DurationWindowMS)
+		for i, cluster := range clusters {
+			if len(cluster) < DuplicateGroupMinMembers {
+				continue
+			}
+			var trackIDs []uuid.UUID
+			for _, t := range cluster {
+				trackIDs = append(trackIDs, t.ID)
+			}
+			trackIDs = uniqueSortedUUIDs(trackIDs)
+			fileIDs := s.trackFileIDs(ctx, trackIDs)
+			s.upsertDuplicateGroup(ctx, dupMethodArtistTitle, artistTitleClusterKey(key, i), fileIDs, trackIDs)
+		}
+	}
+}
+
+func (s *Scanner) trackFileIDs(ctx context.Context, trackIDs []uuid.UUID) []uuid.UUID {
+	if len(trackIDs) == 0 {
+		return nil
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id FROM track_files WHERE track_id=ANY($1) AND deleted_at IS NULL`, trackIDs)
+	if err != nil {
+		return nil
 	}
 	defer rows.Close()
 	var ids []uuid.UUID
@@ -57,24 +238,79 @@ func (s *Scanner) writeDuplicateGroup(ctx context.Context, fileID uuid.UUID, has
 			ids = append(ids, id)
 		}
 	}
-	if len(ids) == 0 {
+	return uniqueSortedUUIDs(ids)
+}
+
+func (s *Scanner) upsertDuplicateGroup(ctx context.Context, method, blockingKey string, fileIDs, trackIDs []uuid.UUID) {
+	if len(fileIDs) < DuplicateGroupMinMembers && len(trackIDs) < DuplicateGroupMinMembers {
 		return
 	}
-	var group uuid.UUID
-	_ = s.pool.QueryRow(ctx, `
-		SELECT d.group_id FROM duplicates d
-		JOIN track_files tf ON tf.id=d.track_file_id
-		WHERE tf.content_hash=$1
-		LIMIT 1`, hash).Scan(&group)
+	group := s.lookupOrCreateGroup(ctx, method, blockingKey)
 	if group == uuid.Nil {
-		if err := s.pool.QueryRow(ctx, `INSERT INTO duplicate_groups (method) VALUES ('content_hash') RETURNING id`).Scan(&group); err != nil {
-			return
-		}
+		return
 	}
-	ids = append(ids, fileID)
-	for _, id := range ids {
+	for _, id := range fileIDs {
 		_, _ = s.pool.Exec(ctx, `INSERT INTO duplicates (group_id, track_file_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, group, id)
 	}
+	s.upsertReviewGroup(ctx, group, method, trackIDs)
+}
+
+func (s *Scanner) lookupOrCreateGroup(ctx context.Context, method, blockingKey string) uuid.UUID {
+	var group uuid.UUID
+	if blockingKey != "" {
+		_ = s.pool.QueryRow(ctx, `SELECT id FROM duplicate_groups WHERE blocking_key=$1`, blockingKey).Scan(&group)
+		if group != uuid.Nil {
+			return group
+		}
+	}
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO duplicate_groups (method, blocking_key) VALUES ($1, NULLIF($2,'')) RETURNING id`,
+		method, blockingKey).Scan(&group)
+	if err == nil && group != uuid.Nil {
+		return group
+	}
+	if blockingKey != "" {
+		_ = s.pool.QueryRow(ctx, `SELECT id FROM duplicate_groups WHERE blocking_key=$1`, blockingKey).Scan(&group)
+		if group != uuid.Nil {
+			return group
+		}
+	}
+	if method == dupMethodContentHash && strings.HasPrefix(blockingKey, dupMethodContentHash+":") {
+		hash := strings.TrimPrefix(blockingKey, dupMethodContentHash+":")
+		_ = s.pool.QueryRow(ctx, `
+			SELECT d.group_id FROM duplicates d
+			JOIN track_files tf ON tf.id=d.track_file_id
+			WHERE tf.content_hash=$1
+			LIMIT 1`, hash).Scan(&group)
+		if group != uuid.Nil {
+			_, _ = s.pool.Exec(ctx, `UPDATE duplicate_groups SET blocking_key=$2 WHERE id=$1 AND (blocking_key IS NULL OR blocking_key='')`, group, blockingKey)
+			return group
+		}
+	}
+	_ = s.pool.QueryRow(ctx, `INSERT INTO duplicate_groups (method) VALUES ($1) RETURNING id`, method).Scan(&group)
+	return group
+}
+
+func (s *Scanner) upsertReviewGroup(ctx context.Context, groupID uuid.UUID, reason string, trackIDs []uuid.UUID) {
+	trackIDs = uniqueSortedUUIDs(trackIDs)
+	if groupID == uuid.Nil || len(trackIDs) < DuplicateGroupMinMembers {
+		return
+	}
+	var existing uuid.UUID
+	var status string
+	err := s.pool.QueryRow(ctx, `SELECT id, status FROM duplicate_review_groups WHERE group_id=$1`, groupID).Scan(&existing, &status)
+	if err != nil || existing == uuid.Nil {
+		_, _ = s.pool.Exec(ctx, `
+			INSERT INTO duplicate_review_groups (group_id, status, reason, track_ids)
+			VALUES ($1, 'open', $2, $3)`, groupID, reason, trackIDs)
+		return
+	}
+	if status != "open" {
+		return
+	}
+	_, _ = s.pool.Exec(ctx, `
+		UPDATE duplicate_review_groups SET reason=$2, track_ids=$3, updated_at=now() WHERE id=$1`,
+		existing, reason, trackIDs)
 }
 
 func (s *Scanner) maybeReorganise(ctx context.Context, libID uuid.UUID, prov storage.StorageProvider, fileID uuid.UUID, e *storage.Entry, probe metadata.Probe, tmpl string) {

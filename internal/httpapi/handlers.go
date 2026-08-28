@@ -237,11 +237,14 @@ func (s *Server) namedArtists(ctx context.Context, trackID uuid.UUID) []map[stri
 }
 
 func (s *Server) patchTrack(w http.ResponseWriter, r *http.Request) {
+	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	if !s.requireTrackLibraryWrite(w, r, id) {
+		return
+	}
 	if !currentUser(r).IsAdmin {
 		writeErr(w, 403, "forbidden", "admin or editor required")
 		return
 	}
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
 	var body map[string]any
 	_ = decodeJSON(r, &body)
 	if t, ok := body["title"].(string); ok {
@@ -265,6 +268,14 @@ func (s *Server) bulkTracks(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 403, "forbidden", "admin required")
 		return
 	}
+	if body.LibraryID != uuid.Nil && !s.requireLibraryWrite(w, r, body.LibraryID) {
+		return
+	}
+	for _, id := range body.IDs {
+		if !s.requireTrackLibraryWrite(w, r, id) {
+			return
+		}
+	}
 	if body.Delete || body.All || r.Method == http.MethodDelete {
 		s.deleteTracks(w, r, body.IDs, body.All, body.LibraryID, body.DeleteFiles)
 		return
@@ -283,27 +294,24 @@ func (s *Server) bulkTracks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteTracks(w http.ResponseWriter, r *http.Request, ids []uuid.UUID, all bool, lib uuid.UUID, deleteFiles bool) {
 	ctx := r.Context()
 	if !all && len(ids) == 0 {
-		writeJSON(w, 200, map[string]int{"deleted": 0})
+		writeJSON(w, 200, map[string]any{"deleted": 0, "skipped": []any{}})
 		return
 	}
-	if deleteFiles && !all {
-		for _, id := range ids {
-			var libID uuid.UUID
-			_ = s.Pool.QueryRow(ctx, `SELECT library_id FROM tracks WHERE id=$1`, id).Scan(&libID)
-			if !managedStorage(s.libraryStorageType(ctx, libID)) {
-				writeErr(w, 400, "storage", "physical delete is only offered for SoundDock-managed tracks")
-				return
-			}
-		}
+	skipped := []map[string]any{}
+	if deleteFiles {
+		skipped = s.previewNonManagedDeletes(ctx, ids, all, lib)
 	}
 	if s.Jobs == nil {
-		n, err := s.deleteTrackIDs(ctx, ids, all, lib, deleteFiles)
+		n, skippedNow, err := s.deleteTrackIDs(ctx, ids, all, lib, deleteFiles)
 		if err != nil {
 			writeErr(w, 400, "delete", err.Error())
 			return
 		}
+		if skippedNow != nil {
+			skipped = skippedNow
+		}
 		s.Audit.Event(ctx, &currentUser(r).ID, "tracks.delete", "", r.RemoteAddr, nil)
-		writeJSON(w, 200, map[string]any{"deleted": n, "deleted_files": deleteFiles})
+		writeJSON(w, 200, map[string]any{"deleted": n, "deleted_files": deleteFiles, "skipped": skipped})
 		return
 	}
 	jid, err := s.Jobs.Enqueue(ctx, "tracks.bulk_delete", tracksDeletePayload{
@@ -313,7 +321,7 @@ func (s *Server) deleteTracks(w http.ResponseWriter, r *http.Request, ids []uuid
 		s.writeJobErr(w, err)
 		return
 	}
-	writeJSON(w, 202, map[string]any{"queued": true, "job_id": jid, "deleted_files": deleteFiles})
+	writeJSON(w, 202, map[string]any{"queued": true, "job_id": jid, "deleted_files": deleteFiles, "skipped": skipped})
 }
 
 func (s *Server) serveArtwork(w http.ResponseWriter, r *http.Request, ownerType string, ownerID uuid.UUID) {
@@ -537,6 +545,9 @@ func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "library", "could not create a default library")
 		return
 	}
+	if !s.requireLibraryWrite(w, r, libID) {
+		return
+	}
 	body.LibraryID = libID
 	body.URL = ""
 	body.Extra = list
@@ -582,6 +593,9 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 500, "library", "could not create a default library")
 		return
 	}
+	if !s.requireLibraryWrite(w, r, libID) {
+		return
+	}
 	if err := s.CheckQuota(r.Context(), u.ID, libID, body.Size); err != nil {
 		writeErr(w, 403, "quota", err.Error())
 		return
@@ -610,6 +624,14 @@ func (s *Server) patchUpload(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) completeUpload(w http.ResponseWriter, r *http.Request) {
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	if s.Pool != nil {
+		var libID uuid.UUID
+		if err := s.Pool.QueryRow(r.Context(), `SELECT library_id FROM upload_sessions WHERE id=$1`, id).Scan(&libID); err == nil {
+			if !s.requireLibraryWrite(w, r, libID) {
+				return
+			}
+		}
+	}
 	var body struct {
 		Scan *bool `json:"scan"`
 	}
@@ -643,6 +665,9 @@ func (s *Server) finalizeUploads(w http.ResponseWriter, r *http.Request) {
 	libID, err := s.resolveLibraryID(r.Context(), uuid.Nil)
 	if err != nil {
 		writeErr(w, 500, "library", "could not create a default library")
+		return
+	}
+	if !s.requireLibraryWrite(w, r, libID) {
 		return
 	}
 	id, err := s.Jobs.Enqueue(r.Context(), "library.scan", scan.Payload{LibraryID: libID, Kind: "upload"})

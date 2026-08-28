@@ -55,6 +55,12 @@ const AdminWebhooks = lazy(() => import("@/features/admin/AdminPages").then((m) 
 const AdminMetadata = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminMetadata })));
 const AdminTranscode = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminTranscode })));
 const AdminRetention = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminRetention })));
+const AdminListenCompare = lazy(() => import("@/features/admin/AdminListenCompare").then((m) => ({ default: m.AdminListenCompare })));
+const AdminStatsRebuild = lazy(() => import("@/features/admin/AdminStatsRebuild").then((m) => ({ default: m.AdminStatsRebuild })));
+const AdminAcquisitionPolicy = lazy(() => import("@/features/admin/AdminAcquisitionPolicy").then((m) => ({ default: m.AdminAcquisitionPolicy })));
+const AdminDuplicateReview = lazy(() => import("@/features/admin/AdminDuplicateReview").then((m) => ({ default: m.AdminDuplicateReview })));
+const AdminLyrics = lazy(() => import("@/features/admin/AdminLyrics").then((m) => ({ default: m.AdminLyrics })));
+const AdminGrants = lazy(() => import("@/features/admin/AdminGrants").then((m) => ({ default: m.AdminGrants })));
 const AdminSecurity = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminSecurity })));
 const AdminLogs = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminLogs })));
 const AdminUpdates = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminUpdates })));
@@ -136,7 +142,7 @@ export function AppRouter() {
             <Route path="backup-preview" element={<Navigate to="/admin" replace />} />
             <Route path="diagnostics" element={<AdminDiagnostics />} />
             <Route path="demo" element={<Navigate to="/admin" replace />} />
-            <Route path="grants" element={<Navigate to="/admin/roles" replace />} />
+            <Route path="grants" element={<AdminGrants />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="roles" element={<AdminRoles />} />
             <Route path="storage" element={<AdminStorage />} />
@@ -150,8 +156,13 @@ export function AppRouter() {
             <Route path="providers" element={<AdminExternal />} />
             <Route path="webhooks" element={<AdminWebhooks />} />
             <Route path="metadata" element={<AdminMetadata />} />
+            <Route path="lyrics" element={<AdminLyrics />} />
             <Route path="transcoding" element={<AdminTranscode />} />
             <Route path="retention" element={<AdminRetention />} />
+            <Route path="listen-compare" element={<AdminListenCompare />} />
+            <Route path="stats-rebuild" element={<AdminStatsRebuild />} />
+            <Route path="acquisition-policy" element={<AdminAcquisitionPolicy />} />
+            <Route path="duplicate-review" element={<AdminDuplicateReview />} />
             <Route path="security" element={<AdminSecurity />} />
             <Route path="logs" element={<AdminLogs />} />
             <Route path="cloudflare" element={<Navigate to="/admin" replace />} />

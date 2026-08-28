@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/library/merge"
 )
 
 func (s *Server) libraryStorageType(ctx context.Context, lib uuid.UUID) string {
@@ -65,9 +67,14 @@ func (s *Server) collectTrackFiles(ctx context.Context, trackIDs []uuid.UUID, ma
 func (s *Server) PurgeTrackMedia(ctx context.Context, trackID uuid.UUID) (int64, error) {
 	var size int64
 	_ = s.Pool.QueryRow(ctx, `
-		SELECT coalesce(sum(size_bytes),0) FROM track_files
-		WHERE track_id=$1 AND deleted_at IS NULL`, trackID).Scan(&size)
-	files := s.collectTrackFiles(ctx, []uuid.UUID{trackID}, false)
+		SELECT coalesce(sum(tf.size_bytes),0)
+		FROM track_files tf
+		JOIN libraries l ON l.id = tf.library_id
+		JOIN storage_providers sp ON sp.id = l.storage_provider_id
+		WHERE tf.track_id=$1 AND tf.deleted_at IS NULL AND sp.type='managed'`, trackID).Scan(&size)
+	// Physical delete only for managed storage. NAS/S3/local files stay on disk
+	// even when libraries.retention_opt_in is true.
+	files := s.collectTrackFiles(ctx, []uuid.UUID{trackID}, true)
 	if _, err := s.Pool.Exec(ctx, `DELETE FROM track_files WHERE track_id=$1`, trackID); err != nil {
 		return 0, err
 	}
@@ -82,6 +89,9 @@ func (s *Server) PurgeTrackMedia(ctx context.Context, trackID uuid.UUID) (int64,
 
 func (s *Server) deleteManagedFiles(ctx context.Context, files []storedFile) {
 	for _, f := range files {
+		if !managedStorage(f.Typ) {
+			continue
+		}
 		var n int
 		_ = s.Pool.QueryRow(ctx, `SELECT count(*) FROM track_files WHERE storage_key=$1`, f.Key).Scan(&n)
 		if n > 0 {
@@ -93,6 +103,50 @@ func (s *Server) deleteManagedFiles(ctx context.Context, files []storedFile) {
 		}
 		_ = prov.Delete(ctx, f.Key)
 	}
+}
+
+func (s *Server) nonManagedTrackSkips(ctx context.Context, ids []uuid.UUID) []map[string]any {
+	out := []map[string]any{}
+	if len(ids) == 0 {
+		return out
+	}
+	rows, err := s.Pool.Query(ctx, `
+		SELECT t.id, sp.type
+		FROM tracks t
+		JOIN libraries l ON l.id = t.library_id
+		JOIN storage_providers sp ON sp.id = l.storage_provider_id
+		WHERE t.id = ANY($1)`, ids)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var typ string
+		if err := rows.Scan(&id, &typ); err != nil {
+			continue
+		}
+		if managedStorage(typ) {
+			continue
+		}
+		out = append(out, map[string]any{
+			"track_id":     id,
+			"storage_type": typ,
+			"reason":       "physical delete is only offered for SoundDock-managed tracks",
+		})
+	}
+	return out
+}
+
+func (s *Server) previewNonManagedDeletes(ctx context.Context, ids []uuid.UUID, all bool, lib uuid.UUID) []map[string]any {
+	if all {
+		got, err := s.collectDeleteIDs(ctx, lib)
+		if err != nil {
+			return []map[string]any{}
+		}
+		ids = got
+	}
+	return s.nonManagedTrackSkips(ctx, ids)
 }
 
 func (s *Server) adminDeleteLibrary(w http.ResponseWriter, r *http.Request) {
@@ -217,6 +271,10 @@ func (s *Server) adminMergeLibraries(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			n, err := s.mergeLibraryInto(r.Context(), src, dest, destProv)
+			if errors.Is(err, merge.ErrTrackInUse) {
+				writeErr(w, 409, "track_in_use", "cannot merge a track that is currently playing")
+				return
+			}
 			if err != nil {
 				writeErr(w, 400, "merge", err.Error())
 				return
@@ -237,98 +295,6 @@ func (s *Server) adminMergeLibraries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 202, map[string]any{"ok": true, "queued": true, "job_id": jid})
 }
 
-func (s *Server) mergeLibraryInto(ctx context.Context, src, dest, destProv uuid.UUID) (int, error) {
-	var srcProv uuid.UUID
-	if err := s.Pool.QueryRow(ctx, `SELECT storage_provider_id FROM libraries WHERE id=$1`, src).Scan(&srcProv); err != nil {
-		return 0, err
-	}
-	if srcProv != destProv {
-		return 0, errString("libraries must share the same storage to merge without reimporting")
-	}
-	tx, err := s.Pool.Begin(ctx)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback(ctx)
-
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM playlist_entries pe
-		USING track_files s
-		JOIN track_files d ON d.content_hash = s.content_hash AND d.library_id=$2 AND d.quality='original'
-		WHERE pe.track_id = s.track_id AND s.library_id=$1 AND s.quality='original'
-		  AND s.content_hash IS NOT NULL AND s.content_hash <> ''
-		  AND EXISTS (SELECT 1 FROM playlist_entries x WHERE x.playlist_id=pe.playlist_id AND x.track_id=d.track_id)`, src, dest); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE playlist_entries pe SET track_id = d.track_id
-		FROM track_files s
-		JOIN track_files d ON d.content_hash = s.content_hash AND d.library_id=$2 AND d.quality='original'
-		WHERE pe.track_id = s.track_id AND s.library_id=$1 AND s.quality='original'
-		  AND s.content_hash IS NOT NULL AND s.content_hash <> '' AND d.track_id <> s.track_id`, src, dest); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM favourites f
-		USING track_files s
-		JOIN track_files d ON d.content_hash = s.content_hash AND d.library_id=$2 AND d.quality='original'
-		WHERE f.entity_type='track' AND f.entity_id = s.track_id AND s.library_id=$1 AND s.quality='original'
-		  AND s.content_hash IS NOT NULL AND s.content_hash <> ''
-		  AND EXISTS (SELECT 1 FROM favourites x WHERE x.user_id=f.user_id AND x.entity_type='track' AND x.entity_id=d.track_id)`, src, dest); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE favourites f SET entity_id = d.track_id
-		FROM track_files s
-		JOIN track_files d ON d.content_hash = s.content_hash AND d.library_id=$2 AND d.quality='original'
-		WHERE f.entity_type='track' AND f.entity_id = s.track_id AND s.library_id=$1 AND s.quality='original'
-		  AND s.content_hash IS NOT NULL AND s.content_hash <> ''`, src, dest); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(ctx, `
-		DELETE FROM tracks WHERE library_id=$1 AND id IN (
-			SELECT s.track_id FROM track_files s
-			JOIN track_files d ON d.content_hash = s.content_hash AND d.library_id=$2 AND d.quality='original'
-			WHERE s.library_id=$1 AND s.quality='original' AND s.content_hash IS NOT NULL AND s.content_hash <> ''
-		)`, src, dest); err != nil {
-		return 0, err
-	}
-
-	tag, err := tx.Exec(ctx, `UPDATE tracks SET library_id=$2 WHERE library_id=$1`, src, dest)
-	if err != nil {
-		return 0, err
-	}
-	moved := int(tag.RowsAffected())
-	if _, err := tx.Exec(ctx, `
-		UPDATE track_files tf SET library_id=$2
-		WHERE library_id=$1
-		  AND NOT EXISTS (
-			SELECT 1 FROM track_files d WHERE d.library_id=$2 AND d.storage_key=tf.storage_key
-		  )`, src, dest); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM track_files WHERE library_id=$1`, src); err != nil {
-		return 0, err
-	}
-	if _, err := tx.Exec(ctx, `UPDATE albums SET library_id=$2 WHERE library_id=$1`, src, dest); err != nil {
-		return 0, err
-	}
-
-	var srcDefault bool
-	_ = tx.QueryRow(ctx, `SELECT is_default FROM libraries WHERE id=$1`, src).Scan(&srcDefault)
-	if _, err := tx.Exec(ctx, `DELETE FROM libraries WHERE id=$1`, src); err != nil {
-		return 0, err
-	}
-	if srcDefault {
-		if _, err := tx.Exec(ctx, `UPDATE libraries SET is_default=FALSE WHERE is_default`); err != nil {
-			return 0, err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE libraries SET is_default=TRUE WHERE id=$1`, dest); err != nil {
-			return 0, err
-		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return 0, err
-	}
-	return moved, nil
+func (s *Server) mergeLibraryInto(ctx context.Context, src, dest, _ uuid.UUID) (int, error) {
+	return merge.LibraryInto(ctx, s.Pool, src, dest)
 }

@@ -286,6 +286,10 @@ export function pauseAll() {
   }
 }
 
+export function htmlAudioPaused() {
+  return both().every((el) => !!el.paused);
+}
+
 export function stopElement(el: HTMLAudioElement | null) {
   if (!el) return;
   try {
@@ -297,7 +301,30 @@ export function stopElement(el: HTMLAudioElement | null) {
   }
 }
 
-export async function bindTrack(el: HTMLAudioElement, id: string) {
+/**
+ * Playable media: explicit "ready", or absent/empty (library files that have always been ready).
+ * restoring / missing_external must not set HTMLAudio src (avoids stream 409 as the control path).
+ */
+export function isMediaReady(mediaState?: string | null): boolean {
+  if (mediaState == null || mediaState === "") return true;
+  return mediaState === "ready";
+}
+
+function clearTrackSrc(el: HTMLAudioElement) {
+  stopElement(el);
+  try {
+    delete el.dataset.trackId;
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Bind HTMLAudio only when media is playable. Absent media_state is treated as ready. */
+export async function bindTrack(el: HTMLAudioElement, id: string, mediaState?: string | null) {
+  if (!isMediaReady(mediaState)) {
+    clearTrackSrc(el);
+    return;
+  }
   let next = streamUrl(id);
   try {
     const blob = await offlineObjectUrl(id);
@@ -310,10 +337,11 @@ export async function bindTrack(el: HTMLAudioElement, id: string) {
   el.src = next;
 }
 
-export function preloadTrack(id: string) {
+export function preloadTrack(id: string, mediaState?: string | null) {
+  if (!id || !isMediaReady(mediaState)) return;
   const idle = getIdleAudio();
-  if (!idle || !id) return;
-  void bindTrack(idle, id).then(() => {
+  if (!idle) return;
+  void bindTrack(idle, id, mediaState).then(() => {
     try {
       idle.load();
     } catch {

@@ -136,7 +136,10 @@ export function AdminRetention() {
     setBatch(String(p.batch_size ?? 50));
     setDryRun(!!p.dry_run);
     const next: Record<string, string> = {};
-    (d.log_policies || []).forEach((r) => { next[r.key] = String(r.days); });
+    (d.log_policies || []).forEach((r) => {
+      if (r.key === "operational_logs") return;
+      next[r.key] = String(r.days);
+    });
     setDays(next);
     const o: Record<string, boolean> = {};
     (d.libraries || []).forEach((l) => { o[l.id] = !!l.retention_opt_in; });
@@ -144,9 +147,10 @@ export function AdminRetention() {
   }, [q.data]);
 
   const st = q.data?.status;
+  const logPolicies = (q.data?.log_policies || []).filter((r) => r.key !== "operational_logs");
   const save = async () => {
     await api.put("/api/v1/admin/retention", {
-      log_policies: Object.fromEntries((q.data?.log_policies || []).map((r) => [r.key, Number(days[r.key] ?? r.days) || 0])),
+      log_policies: Object.fromEntries(logPolicies.map((r) => [r.key, Number(days[r.key] ?? r.days) || 0])),
       media: {
         enabled,
         mode,
@@ -347,7 +351,7 @@ export function AdminRetention() {
       <section className="mb-8 max-w-md space-y-3">
         <h2 className="font-semibold">Logs and history</h2>
         <p className="text-sm text-muted">0 days means keep forever. These only expire database rows, not music files.</p>
-        {(q.data?.log_policies || []).map((r) => (
+        {(logPolicies).map((r) => (
           <Field key={r.key} label={r.label || r.key}>
             <Input type="number" min={0} value={days[r.key] ?? r.days} onChange={(e) => setDays({ ...days, [r.key]: e.target.value })} />
           </Field>

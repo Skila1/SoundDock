@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sounddock/sounddock/internal/audit"
 	"github.com/sounddock/sounddock/internal/jobs"
+	"github.com/sounddock/sounddock/internal/mediabusy"
 )
 
 type PurgeFunc func(ctx context.Context, trackID uuid.UUID) (reclaimed int64, err error)
@@ -20,10 +21,25 @@ type Engine struct {
 	audit      *audit.Log
 	managedDir string
 	purge      PurgeFunc
+	live       *mediabusy.Set
 }
 
 func New(pool *pgxpool.Pool, runner *jobs.Runner, log *audit.Log, managedDir string, purge PurgeFunc) *Engine {
-	return &Engine{pool: pool, jobs: runner, audit: log, managedDir: managedDir, purge: purge}
+	return &Engine{pool: pool, jobs: runner, audit: log, managedDir: managedDir, purge: purge, live: mediabusy.New()}
+}
+
+func (e *Engine) SetLive(s *mediabusy.Set) {
+	if e == nil || s == nil {
+		return
+	}
+	e.live = s
+}
+
+func (e *Engine) Live() *mediabusy.Set {
+	if e == nil {
+		return nil
+	}
+	return e.live
 }
 
 type Payload struct {
@@ -33,47 +49,47 @@ type Payload struct {
 }
 
 type Candidate struct {
-	ID              uuid.UUID  `json:"id"`
-	Title           string     `json:"title"`
-	Artist          string     `json:"artist"`
-	SizeBytes       int64      `json:"size_bytes"`
-	PlayCount       int        `json:"play_count"`
-	LastPlayed      *time.Time `json:"last_played_at"`
-	Acquisition     string     `json:"acquisition"`
-	AcquisitionRef  string     `json:"acquisition_ref"`
-	CreatedAt       time.Time  `json:"created_at"`
-	AgeEligible     bool       `json:"age_eligible"`
-	Reason          string     `json:"reason"`
+	ID             uuid.UUID  `json:"id"`
+	Title          string     `json:"title"`
+	Artist         string     `json:"artist"`
+	SizeBytes      int64      `json:"size_bytes"`
+	PlayCount      int        `json:"play_count"`
+	LastPlayed     *time.Time `json:"last_played_at"`
+	Acquisition    string     `json:"acquisition"`
+	AcquisitionRef string     `json:"acquisition_ref"`
+	CreatedAt      time.Time  `json:"created_at"`
+	AgeEligible    bool       `json:"age_eligible"`
+	Reason         string     `json:"reason"`
 }
 
 type RunResult struct {
-	DryRun         bool      `json:"dry_run"`
-	Mode           string    `json:"mode"`
-	EligibleCount  int       `json:"eligible_count"`
-	EligibleBytes  int64     `json:"eligible_bytes"`
-	DeletedCount   int       `json:"deleted_count"`
-	ReclaimedBytes int64     `json:"reclaimed_bytes"`
-	Interrupted    bool      `json:"interrupted"`
+	DryRun         bool        `json:"dry_run"`
+	Mode           string      `json:"mode"`
+	EligibleCount  int         `json:"eligible_count"`
+	EligibleBytes  int64       `json:"eligible_bytes"`
+	DeletedCount   int         `json:"deleted_count"`
+	ReclaimedBytes int64       `json:"reclaimed_bytes"`
+	Interrupted    bool        `json:"interrupted"`
 	Preview        []Candidate `json:"preview,omitempty"`
 }
 
 type Status struct {
-	Policy           Policy     `json:"policy"`
-	ManagedBytes     int64      `json:"managed_bytes"`
-	DiskPath         string     `json:"disk_path"`
-	DiskTotal        int64      `json:"disk_total"`
-	DiskFree         int64      `json:"disk_free"`
-	DiskError        string     `json:"disk_error,omitempty"`
-	EligibleCount    int        `json:"eligible_count"`
-	EligibleBytes    int64      `json:"eligible_bytes"`
-	LastPruneAt      *time.Time `json:"last_prune_at"`
-	LastReclaimed    int64      `json:"last_reclaimed_bytes"`
-	LastDeleted      int        `json:"last_deleted_count"`
-	LastDryRun       bool       `json:"last_dry_run"`
-	NextPruneAt      *time.Time `json:"next_prune_at"`
-	Running          bool       `json:"running"`
-	PressureStorage  bool       `json:"pressure_storage"`
-	PressureFree     bool       `json:"pressure_free"`
+	Policy          Policy     `json:"policy"`
+	ManagedBytes    int64      `json:"managed_bytes"`
+	DiskPath        string     `json:"disk_path"`
+	DiskTotal       int64      `json:"disk_total"`
+	DiskFree        int64      `json:"disk_free"`
+	DiskError       string     `json:"disk_error,omitempty"`
+	EligibleCount   int        `json:"eligible_count"`
+	EligibleBytes   int64      `json:"eligible_bytes"`
+	LastPruneAt     *time.Time `json:"last_prune_at"`
+	LastReclaimed   int64      `json:"last_reclaimed_bytes"`
+	LastDeleted     int        `json:"last_deleted_count"`
+	LastDryRun      bool       `json:"last_dry_run"`
+	NextPruneAt     *time.Time `json:"next_prune_at"`
+	Running         bool       `json:"running"`
+	PressureStorage bool       `json:"pressure_storage"`
+	PressureFree    bool       `json:"pressure_free"`
 }
 
 func Handler(e *Engine) jobs.Handler {
@@ -284,9 +300,6 @@ func (e *Engine) prune(ctx context.Context, job jobs.Job, policy Policy, dry boo
 		if err != nil {
 			_, _ = e.pool.Exec(ctx, `UPDATE retention_runs SET error=$2, interrupted=true, finished_at=now() WHERE id=$1`, runID, err.Error())
 			return out, err
-		}
-		if n <= 0 {
-			n = c.SizeBytes
 		}
 		if err := e.insertEvent(ctx, runID, c, false); err != nil {
 			return out, err

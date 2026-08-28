@@ -27,6 +27,7 @@ import (
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/integrity"
 	"github.com/sounddock/sounddock/internal/jobs"
+	"github.com/sounddock/sounddock/internal/mediabusy"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/radio"
 	"github.com/sounddock/sounddock/internal/retention"
@@ -97,6 +98,7 @@ func main() {
 	tx := transcode.New(pool, cfg.CacheDir, 10<<30, 2)
 	bk := backup.New(pool, cfg.BackupDir, cfg.DatabaseURL)
 
+	busy := mediabusy.New()
 	srv := &httpapi.Server{
 		Cfg:     cfg,
 		Pool:    pool,
@@ -113,6 +115,7 @@ func main() {
 		Box:     box,
 		Limit:   ratelimit.New(),
 		Slots:   ratelimit.NewSlots(httpapi.DefaultRemoteConcurrency),
+		MediaBusy: busy,
 		Log:     log,
 		SignKey: cryptox.SigningKey(cfg.MasterKey),
 		Managed: managed,
@@ -138,6 +141,7 @@ func main() {
 	runner.Register("ingest.zip", ing.ZipHandler(srv.ProviderFor))
 	runner.Register("library.migrate", ing.MigrateHandler(srv.ProviderFor))
 	srv.Retention = retention.New(pool, runner, srv.Audit, cfg.ManagedDir, srv.PurgeTrackMedia)
+	srv.Retention.SetLive(busy)
 	runner.Register("maintenance.retention", retention.Handler(srv.Retention))
 	runner.Register("external.playlist.import", external.Handler(pool, box, hooks, srv.YouTube()))
 	runner.Register("external.playlist.tick", external.TickHandler(pool, runner.Enqueue))
@@ -207,6 +211,7 @@ func main() {
 
 	if role == config.RoleAll || role == config.RoleDiscord {
 		bot := discordx.New(pool, box, se, play, log, srv.ProviderFor)
+		bot.MediaBusy = busy
 		go func() {
 			if err := bot.Run(ctx); err != nil {
 				log.Error("discord", "err", err)

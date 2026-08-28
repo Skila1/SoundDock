@@ -1,4 +1,7 @@
 const KEY = "sd-device";
+const RENDERER_ID_KEY = "sd-renderer-id";
+const RENDERER_GEN_KEY = "sd-renderer-generation";
+export const RENDERER_CHANNEL = "sd-renderer";
 
 export type OutputTarget = "browser" | "discord";
 
@@ -76,6 +79,77 @@ export function saveDevicePrefs(partial: Partial<DevicePrefs>): DevicePrefs {
 
 export function getDeviceId() {
   return loadDevicePrefs().deviceId;
+}
+
+let memoryRendererId = "";
+
+function newRendererId() {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `tab-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+}
+
+/** Per-tab browser renderer identity. sessionStorage only — never localStorage. */
+export function getTabRendererId(): string {
+  try {
+    if (typeof sessionStorage === "undefined") {
+      if (!memoryRendererId) memoryRendererId = newRendererId();
+      return memoryRendererId;
+    }
+    let id = sessionStorage.getItem(RENDERER_ID_KEY);
+    if (!id) {
+      id = newRendererId();
+      sessionStorage.setItem(RENDERER_ID_KEY, id);
+      if (!sessionStorage.getItem(RENDERER_GEN_KEY)) sessionStorage.setItem(RENDERER_GEN_KEY, "1");
+    }
+    return id;
+  } catch {
+    if (!memoryRendererId) memoryRendererId = newRendererId();
+    return memoryRendererId;
+  }
+}
+
+export function getTabRendererGeneration(): number {
+  try {
+    const n = Number(sessionStorage.getItem(RENDERER_GEN_KEY) || "1");
+    return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1;
+  } catch {
+    return 1;
+  }
+}
+
+export type RendererChannelMessage = {
+  type: "stop-request";
+  renderer_id: string;
+};
+
+let rendererChannel: BroadcastChannel | null = null;
+let rendererStopHandler: (() => void) | null = null;
+
+function ensureRendererChannel(): BroadcastChannel | null {
+  if (typeof BroadcastChannel === "undefined") return null;
+  if (!rendererChannel) {
+    rendererChannel = new BroadcastChannel(RENDERER_CHANNEL);
+    rendererChannel.onmessage = (ev: MessageEvent<RendererChannelMessage>) => {
+      const data = ev.data;
+      if (data?.type === "stop-request" && data.renderer_id && data.renderer_id !== getTabRendererId()) {
+        rendererStopHandler?.();
+      }
+    };
+  }
+  return rendererChannel;
+}
+
+/** Tab B asks A to stop HTMLAudio before CAS-acquiring the browser lease. */
+export function askRendererTabsToStop() {
+  ensureRendererChannel()?.postMessage({ type: "stop-request", renderer_id: getTabRendererId() } satisfies RendererChannelMessage);
+}
+
+export function subscribeRendererChannel(onStopRequest: () => void) {
+  rendererStopHandler = onStopRequest;
+  ensureRendererChannel();
 }
 
 export function setManualOutput(output: OutputTarget) {

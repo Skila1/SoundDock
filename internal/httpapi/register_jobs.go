@@ -9,4 +9,6 @@ func (s *Server) RegisterJobs() {
 	s.Jobs.Register("tracks.bulk_delete", s.jobTracksDelete)
 	s.Jobs.Register("tracks.metadata", s.jobTracksMetadata)
 	s.Jobs.Register("scapex.fetch", s.jobScapeXFetch)
+	s.RegisterStatsJobs()
+	s.RegisterReplaceJobs()
 }

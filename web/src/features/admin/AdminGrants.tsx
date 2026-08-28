@@ -7,15 +7,9 @@ import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/misc";
 import { PageHeader } from "@/components/ui/empty";
 import { toast } from "sonner";
+import type { LibraryGrant } from "@/types/api";
 
-type Grant = {
-  id: string;
-  kind: "role" | "user";
-  actions?: string[];
-  username?: string | null;
-  role?: string | null;
-  user_id?: string | null;
-};
+const ACTION_OPTS = ["read", "stream", "write"] as const;
 
 export function AdminGrants() {
   const qc = useQueryClient();
@@ -25,14 +19,23 @@ export function AdminGrants() {
   const [userId, setUserId] = useState("");
   const grants = useQuery({
     queryKey: ["admin-grants", lib],
-    queryFn: () => api.get<Grant[]>(`/api/v1/admin/libraries/${lib}/grants`),
+    queryFn: () => api.get<LibraryGrant[]>(`/api/v1/admin/libraries/${lib}/grants`),
     enabled: !!lib
   });
   const libOptions = (libs.data || []).map((l: any) => ({ value: l.id, label: l.name }));
   const userOptions = (users.data || []).map((u: any) => ({ value: u.id, label: u.display_name || u.username }));
+
+  async function patchActions(g: LibraryGrant, next: string[]) {
+    await api.patch(`/api/v1/admin/libraries/${lib}/grants/${g.id}`, { actions: next });
+    qc.invalidateQueries({ queryKey: ["admin-grants", lib] });
+  }
+
   return (
     <div>
-      <PageHeader title="Library grants" description="Per-user grants add to role grants. Removing a user grant never deletes Administrator or User role access." />
+      <PageHeader
+        title="Library grants"
+        description="Scoped ACL per library: read (catalogue), stream (playback), write (mutations). Capabilities such as upload still use permissions. A User role grant on a library is why everyone sees it — do not remove that row unless you intend to hide the library from the group."
+      />
       <div className="mb-4 max-w-sm">
         <Field label="Library">
           <Select value={lib} onValueChange={setLib} options={libOptions} placeholder="Select library" />
@@ -57,17 +60,33 @@ export function AdminGrants() {
               <li key={g.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border px-4 py-3">
                 <div>
                   <div className="font-medium">{g.kind === "role" ? g.role : g.username}</div>
-                  <div className="text-xs text-muted">{(g.actions || []).join(", ")}</div>
+                  <div className="mt-1 flex flex-wrap gap-3 text-xs text-muted">
+                    {ACTION_OPTS.map((a) => (
+                      <label key={a} className="inline-flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={(g.actions || []).includes(a)}
+                          onChange={(e) => {
+                            const cur = g.actions || [];
+                            const next = e.target.checked ? [...cur.filter((x) => x !== a), a] : cur.filter((x) => x !== a);
+                            patchActions(g, next).catch((err) => toast.error(err instanceof Error ? err.message : "Could not update actions"));
+                          }}
+                        />
+                        {a}
+                      </label>
+                    ))}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge tone={g.kind === "role" ? "neutral" : "accent"}>{g.kind}</Badge>
-                  {g.kind === "user" && (
-                    <Button size="sm" variant="ghost" onClick={async () => {
-                      await api.del(`/api/v1/admin/libraries/${lib}/grants/${g.id}`);
-                      toast.success("User grant removed");
-                      qc.invalidateQueries({ queryKey: ["admin-grants", lib] });
-                    }}>Remove</Button>
-                  )}
+                  <Button size="sm" variant="ghost" onClick={async () => {
+                    if (g.kind === "role" && !window.confirm("Remove this role grant? Everyone in the group loses this library until you add the grant back.")) {
+                      return;
+                    }
+                    await api.del(`/api/v1/admin/libraries/${lib}/grants/${g.id}`);
+                    toast.success(g.kind === "role" ? "Role grant removed" : "User grant removed");
+                    qc.invalidateQueries({ queryKey: ["admin-grants", lib] });
+                  }}>Remove</Button>
                 </div>
               </li>
             ))}
