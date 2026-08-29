@@ -1,23 +1,26 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
-import { ListPlus, Search } from "lucide-react";
+import { ListMusic, ListPlus, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { Artwork } from "@/components/media/Artwork";
 import { api } from "@/lib/api";
+import { isYouTubePlaylistQuery } from "@/lib/youtube";
 import { artworkUrl, cn } from "@/lib/utils";
-import type { SearchHit } from "@/types/api";
+import type { SearchHit, YoutubePlaylistMeta, YoutubeSearchResponse } from "@/types/api";
 import { useUi } from "@/stores/ui";
 import { usePlayer } from "@/stores/player";
 
 type RecentRow = { kind: "recent"; key: string; label: string };
 type HitRow = { kind: "hit"; key: string; hit: SearchHit; source: "library" | "youtube" };
+type PlaylistRow = { kind: "playlist"; key: string; count: number; title?: string; truncated?: boolean };
 type CatalogRow = { kind: "catalog"; key: string; q: string };
-type Row = RecentRow | HitRow | CatalogRow;
+type Row = RecentRow | HitRow | PlaylistRow | CatalogRow;
 
 const LIBRARY_LIMIT = 2;
 const YOUTUBE_LIMIT = 5;
+const YOUTUBE_PLAYLIST_LIMIT = 400;
 
 function isYouTubeQuery(q: string) {
   const t = q.trim();
@@ -48,9 +51,11 @@ export function CommandSearch() {
   const [open, setOpen] = useState(false);
   const [library, setLibrary] = useState<SearchHit[]>([]);
   const [youtube, setYoutube] = useState<SearchHit[]>([]);
+  const [ytPlaylist, setYtPlaylist] = useState<YoutubePlaylistMeta | null>(null);
   const [libLoading, setLibLoading] = useState(false);
   const [ytLoading, setYtLoading] = useState(false);
   const [i, setI] = useState(0);
+  const pendingQueueAll = useRef(false);
   const [panel, setPanel] = useState({ top: 0, left: 0, width: 480 });
   const recents = JSON.parse(localStorage.getItem("sd-recent-search") || "[]") as string[];
 
@@ -114,32 +119,47 @@ export function CommandSearch() {
     if (!term) {
       setLibrary([]);
       setYoutube([]);
+      setYtPlaylist(null);
       setLibLoading(false);
       setYtLoading(false);
+      pendingQueueAll.current = false;
       return;
     }
     let cancelled = false;
-    setLibLoading(true);
+    const playlistQ = isYouTubePlaylistQuery(term);
+    setLibLoading(!playlistQ);
     setYtLoading(true);
+    if (playlistQ) {
+      setLibrary([]);
+      setYtPlaylist(null);
+    }
     const t = setTimeout(() => {
+      if (!playlistQ) {
+        api
+          .get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(term)}&type=track&limit=${LIBRARY_LIMIT}`)
+          .then((r) => {
+            if (!cancelled) setLibrary((r.results || []).filter((h) => h.type === "track").slice(0, LIBRARY_LIMIT));
+          })
+          .catch(() => {
+            if (!cancelled) setLibrary([]);
+          })
+          .finally(() => {
+            if (!cancelled) setLibLoading(false);
+          });
+      }
+      const ytLimit = playlistQ ? YOUTUBE_PLAYLIST_LIMIT : YOUTUBE_LIMIT + 4;
       api
-        .get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(term)}&type=track&limit=${LIBRARY_LIMIT}`)
+        .get<YoutubeSearchResponse>(`/api/v1/search/youtube?q=${encodeURIComponent(term)}&limit=${ytLimit}`)
         .then((r) => {
-          if (!cancelled) setLibrary((r.results || []).filter((h) => h.type === "track").slice(0, LIBRARY_LIMIT));
+          if (cancelled) return;
+          setYoutube(r.results || []);
+          setYtPlaylist(r.playlist || null);
         })
         .catch(() => {
-          if (!cancelled) setLibrary([]);
-        })
-        .finally(() => {
-          if (!cancelled) setLibLoading(false);
-        });
-      api
-        .get<{ results: SearchHit[] }>(`/api/v1/search/youtube?q=${encodeURIComponent(term)}&limit=${YOUTUBE_LIMIT + 4}`)
-        .then((r) => {
-          if (!cancelled) setYoutube(r.results || []);
-        })
-        .catch(() => {
-          if (!cancelled) setYoutube([]);
+          if (!cancelled) {
+            setYoutube([]);
+            setYtPlaylist(null);
+          }
         })
         .finally(() => {
           if (!cancelled) setYtLoading(false);
@@ -158,19 +178,39 @@ export function CommandSearch() {
   };
 
   const libraryHits = library.slice(0, LIBRARY_LIMIT);
-  const ytHits = useMemo(
-    () =>
-      youtube
-        .filter((h) => h.type === "youtube" && !sameSong(h.title, h.artist || "", libraryHits))
-        .slice(0, YOUTUBE_LIMIT),
-    [youtube, libraryHits]
-  );
-  const youtubeFirst = isYouTubeQuery(q);
+  const playlistQuery = isYouTubePlaylistQuery(q);
+  const ytHits = useMemo(() => {
+    const rows = youtube.filter((h) => h.type === "youtube" && !sameSong(h.title, h.artist || "", libraryHits));
+    return playlistQuery ? rows : rows.slice(0, YOUTUBE_LIMIT);
+  }, [youtube, libraryHits, playlistQuery]);
+  const youtubeFirst = isYouTubeQuery(q) || playlistQuery;
 
   const queueHit = (h: SearchHit) => {
     remember(q);
     const hints = [{ id: h.id, title: h.title, artist: h.artist, duration_ms: h.duration_ms }];
     add([h.id], false, hints).then(() => toast.success(h.type === "youtube" ? "Downloading and adding to queue" : "Added to queue"));
+  };
+
+  const queuePlaylist = (hits: SearchHit[], meta: YoutubePlaylistMeta | null) => {
+    if (!hits.length) {
+      toast.error("Could not read that playlist. It may be private.");
+      return;
+    }
+    remember(q);
+    const hints = hits.map((h) => ({ id: h.id, title: h.title, artist: h.artist, duration_ms: h.duration_ms }));
+    add(
+      hits.map((h) => h.id),
+      false,
+      hints
+    ).then(() => {
+      const n = hits.length;
+      toast.success(
+        meta?.truncated
+          ? `Queued the first ${n} songs. The rest of the playlist was over the limit.`
+          : `Downloading ${n} songs and adding to queue`
+      );
+    });
+    setOpen(false);
   };
 
   const recentRows: RecentRow[] = !q.trim()
@@ -188,19 +228,45 @@ export function CommandSearch() {
     hit: h,
     source: "youtube"
   }));
-  const catalogRow: CatalogRow | null = q.trim()
+  const playlistRow: PlaylistRow | null =
+    playlistQuery && ytHits.length > 0
+      ? {
+          kind: "playlist",
+          key: "playlist-all",
+          count: ytHits.length,
+          title: ytPlaylist?.title,
+          truncated: ytPlaylist?.truncated
+        }
+      : null;
+  const catalogRow: CatalogRow | null = q.trim() && !playlistQuery
     ? { kind: "catalog", key: "catalog", q: q.trim() }
     : null;
   const hitBlocks = youtubeFirst ? [...youtubeRows, ...libraryRows] : [...libraryRows, ...youtubeRows];
-  const rows: Row[] = [...recentRows, ...hitBlocks, ...(catalogRow ? [catalogRow] : [])];
+  const rows: Row[] = [
+    ...recentRows,
+    ...(playlistRow ? [playlistRow] : []),
+    ...hitBlocks,
+    ...(catalogRow ? [catalogRow] : [])
+  ];
 
   useEffect(() => {
     setI(0);
-  }, [q, libraryHits.length, ytHits.length]);
+  }, [q, libraryHits.length, ytHits.length, playlistRow ? playlistRow.count : 0]);
+
+  useEffect(() => {
+    if (!pendingQueueAll.current || ytLoading) return;
+    pendingQueueAll.current = false;
+    if (playlistQuery && ytHits.length) queuePlaylist(ytHits, ytPlaylist);
+    else if (playlistQuery) toast.error("Could not read that playlist. It may be private.");
+  }, [ytLoading, playlistQuery, ytHits, ytPlaylist]);
 
   const activate = (row: Row) => {
     if (row.kind === "recent") {
       setQ(row.label);
+      return;
+    }
+    if (row.kind === "playlist") {
+      queuePlaylist(ytHits, ytPlaylist);
       return;
     }
     if (row.kind === "hit") {
@@ -219,6 +285,12 @@ export function CommandSearch() {
       inputRef.current?.blur();
       return;
     }
+    if (e.key === "Enter" && playlistQuery && (ytLoading || !ytHits.length)) {
+      e.preventDefault();
+      pendingQueueAll.current = true;
+      if (ytLoading) toast.message("Reading playlist…");
+      return;
+    }
     if (!rows.length) return;
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -231,12 +303,42 @@ export function CommandSearch() {
       e.preventDefault();
       const row = rows[i];
       if (row) activate(row);
+      else if (playlistQuery && ytHits.length) queuePlaylist(ytHits, ytPlaylist);
     }
   };
 
   const searching = Boolean(q.trim());
   const empty = searching && !libLoading && !ytLoading && libraryHits.length === 0 && ytHits.length === 0;
   const showPanel = open;
+
+  const renderPlaylist = (r: PlaylistRow) => {
+    const idx = rows.indexOf(r);
+    const label = r.title ? `Queue all ${r.count} songs from “${r.title}”` : `Queue all ${r.count} songs`;
+    return (
+      <button
+        key={r.key}
+        type="button"
+        className={cn(
+          "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left",
+          idx === i ? "bg-surface-2" : "hover:bg-surface-2"
+        )}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => activate(r)}
+        onMouseEnter={() => setI(idx)}
+      >
+        <div className="flex h-11 w-11 items-center justify-center rounded-md bg-surface-3">
+          <ListMusic className="h-5 w-5 text-muted" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm">{label}</div>
+          <div className="truncate text-xs text-muted">
+            {r.truncated ? "Public playlist · first songs only" : "Public playlist · download into the queue"}
+          </div>
+        </div>
+        <ListPlus className="h-4 w-4 shrink-0 text-muted" />
+      </button>
+    );
+  };
 
   const renderHit = (r: HitRow) => {
     const idx = rows.indexOf(r);
@@ -285,7 +387,7 @@ export function CommandSearch() {
         >
           <div className="max-h-[min(28rem,calc(100vh-5.5rem))] overflow-auto p-2">
             {!searching && recentRows.length === 0 && (
-              <p className="px-2 py-3 text-sm text-muted">Search your library, or paste a YouTube URL. Click a result to add it to the queue.</p>
+              <p className="px-2 py-3 text-sm text-muted">Search your library, or paste a YouTube song or public playlist URL. Click a result to add it to the queue.</p>
             )}
             {recentRows.map((r) => {
               const idx = rows.indexOf(r);
@@ -306,7 +408,11 @@ export function CommandSearch() {
             })}
             {searching && youtubeFirst && (
               <>
-                <Section label="YouTube" loading={ytLoading} />
+                <Section label={playlistQuery ? "YouTube playlist" : "YouTube"} loading={ytLoading} />
+                {playlistQuery && ytLoading && (
+                  <p className="px-2 py-2 text-sm text-muted">Reading playlist…</p>
+                )}
+                {playlistRow && renderPlaylist(playlistRow)}
                 {youtubeRows.map(renderHit)}
                 {(libraryRows.length > 0 || libLoading) && <Section label="Library" loading={libLoading} />}
                 {libraryRows.map(renderHit)}
@@ -320,7 +426,13 @@ export function CommandSearch() {
                 {youtubeRows.map(renderHit)}
               </>
             )}
-            {empty && <p className="px-2 py-3 text-sm text-muted">No songs matched. Try another spelling or a YouTube URL.</p>}
+            {empty && (
+              <p className="px-2 py-3 text-sm text-muted">
+                {playlistQuery
+                  ? "Could not read that playlist. It may be private or empty."
+                  : "No songs matched. Try another spelling or a YouTube URL."}
+              </p>
+            )}
             {catalogRow && (
               <button
                 type="button"
@@ -356,7 +468,7 @@ export function CommandSearch() {
           placePanel();
         }}
         onKeyDown={onKey}
-        placeholder="Song, artist, or YouTube URL"
+        placeholder="Song, artist, YouTube URL, or playlist"
         className="h-10 rounded-full border-border bg-surface-2 pl-9 pr-14 focus-visible:border-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         role="combobox"
         aria-expanded={showPanel}

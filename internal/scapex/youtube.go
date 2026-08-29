@@ -38,6 +38,14 @@ type LocalTrack struct {
 
 var videoIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{11}$`)
 
+// MaxPlaylistQueue is the most tracks search-bar playlist expansion will return.
+const MaxPlaylistQueue = 400
+
+var skipPlaylistIDs = map[string]bool{
+	"WL": true,
+	"LL": true,
+}
+
 func IsYouTubeURL(raw string) bool {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Host == "" {
@@ -96,6 +104,64 @@ func WatchURL(raw string) string {
 		return raw
 	}
 	return ""
+}
+
+// PlaylistID returns the list= id from a YouTube URL. Watch Later and Liked are ignored.
+func PlaylistID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if !IsYouTubeURL(raw) {
+		return ""
+	}
+	id := strings.TrimSpace(u.Query().Get("list"))
+	if id == "" || skipPlaylistIDs[strings.ToUpper(id)] {
+		return ""
+	}
+	return id
+}
+
+// PlaylistURL is the canonical public playlist page for list=.
+func PlaylistURL(raw string) string {
+	id := PlaylistID(raw)
+	if id == "" {
+		return ""
+	}
+	return "https://www.youtube.com/playlist?list=" + id
+}
+
+// IsPlaylistQuery is true for /playlist?list=… and for watch URLs whose list=
+// is a real playlist (PL/OL/UU/FL), not an auto-generated Mix.
+func IsPlaylistQuery(raw string) bool {
+	id := PlaylistID(raw)
+	if id == "" {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	path := strings.ToLower(strings.Trim(u.Path, "/"))
+	if path == "playlist" || strings.HasSuffix(path, "/playlist") {
+		return true
+	}
+	upper := strings.ToUpper(id)
+	for _, p := range []string{"PL", "OL", "UU", "FL"} {
+		if strings.HasPrefix(upper, p) {
+			return true
+		}
+	}
+	return false
+}
+
+type PlaylistListing struct {
+	ID        string
+	Title     string
+	Hits      []Hit
+	Total     int
+	Truncated bool
 }
 
 func ytThumb(id string) string {

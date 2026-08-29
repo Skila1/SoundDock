@@ -41,6 +41,50 @@ func TestSearchTargetLooksUpWatchURLs(t *testing.T) {
 	if lookup || spec != "ytsearch8:numb" {
 		t.Fatalf("search=%v spec=%q", lookup, spec)
 	}
+	lookup, spec = searchTarget("https://www.youtube.com/playlist?list=PLabcDEF123", 8)
+	if lookup || spec != "https://www.youtube.com/playlist?list=PLabcDEF123" {
+		t.Fatalf("playlist lookup=%v spec=%q", lookup, spec)
+	}
+}
+
+func TestPlaylistQuery(t *testing.T) {
+	if !IsPlaylistQuery("https://www.youtube.com/playlist?list=PLabcDEF123") {
+		t.Fatal("canonical playlist")
+	}
+	if !IsPlaylistQuery("https://music.youtube.com/playlist?list=OLAK5uy_abc") {
+		t.Fatal("music album playlist")
+	}
+	if !IsPlaylistQuery("https://www.youtube.com/watch?v=kXYiU_JCYtU&list=PLabcDEF123") {
+		t.Fatal("watch with user playlist")
+	}
+	if IsPlaylistQuery("https://www.youtube.com/watch?v=kXYiU_JCYtU&list=RDxyz") {
+		t.Fatal("mix on a watch URL is a single video")
+	}
+	if IsPlaylistQuery("https://www.youtube.com/watch?v=kXYiU_JCYtU") {
+		t.Fatal("plain watch")
+	}
+	if PlaylistID("https://www.youtube.com/playlist?list=WL") != "" {
+		t.Fatal("watch later")
+	}
+}
+
+func TestParsePlaylistDump(t *testing.T) {
+	raw := []byte(`{"id":"PLabc","title":"Gym","playlist_count":3,"entries":[
+		{"id":"kXYiU_JCYtU","title":"Numb","uploader":"LP","duration":187},
+		null,
+		{"id":"xxxxxxxxxxx","title":"[Deleted video]"},
+		{"id":"abcdefghijk","title":"In The End","channel":"LP","duration":216}
+	]}`)
+	got := parsePlaylistDump(raw)
+	if got.Title != "Gym" || got.ID != "PLabc" || len(got.Hits) != 2 {
+		t.Fatalf("%+v", got)
+	}
+	if got.Hits[0].ID != "kXYiU_JCYtU" || got.Hits[1].Title != "In The End" {
+		t.Fatalf("%+v", got.Hits)
+	}
+	if got.Total != 3 {
+		t.Fatalf("total %d", got.Total)
+	}
 }
 
 func TestParseInfoHit(t *testing.T) {
@@ -119,6 +163,43 @@ func TestSearchLooksUpVideoURLs(t *testing.T) {
 	}
 	if yt.limit != 1 || yt.q != "https://youtu.be/kXYiU_JCYtU" {
 		t.Fatalf("q=%q limit=%d", yt.q, yt.limit)
+	}
+}
+
+type listYT struct {
+	recYT
+	listing PlaylistListing
+}
+
+func (s *listYT) ListPlaylist(_ context.Context, _ string, limit int) (PlaylistListing, error) {
+	s.limit = limit
+	return s.listing, nil
+}
+
+func TestSearchPlaylistKeepsOrderAndLimit(t *testing.T) {
+	yt := &listYT{
+		listing: PlaylistListing{
+			ID:    "PLabc",
+			Title: "Gym",
+			Hits:  []Hit{{ID: "aaaaaaaaaaa", Title: "One"}, {ID: "bbbbbbbbbbb", Title: "Two"}},
+			Total: 2,
+		},
+	}
+	svc := NewService(yt, nil)
+	q := "https://www.youtube.com/playlist?list=PLabc"
+	listing, err := svc.ListPlaylist(context.Background(), q, 50)
+	if err != nil || listing.Title != "Gym" || len(listing.Hits) != 2 {
+		t.Fatalf("%v %+v", err, listing)
+	}
+	if listing.Hits[0].Title != "One" || listing.Hits[1].Title != "Two" {
+		t.Fatalf("order %+v", listing.Hits)
+	}
+	if yt.limit != 50 {
+		t.Fatalf("limit %d", yt.limit)
+	}
+	hits, err := svc.Search(context.Background(), q, 50)
+	if err != nil || len(hits) != 2 || hits[0].ArtworkURL == "" {
+		t.Fatalf("%v %+v", err, hits)
 	}
 }
 

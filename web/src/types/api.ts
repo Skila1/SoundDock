@@ -97,6 +97,20 @@ export type SearchHit = {
   artwork_url?: string;
 };
 
+export type YoutubePlaylistMeta = {
+  id?: string;
+  title?: string;
+  count: number;
+  total?: number;
+  truncated?: boolean;
+};
+
+export type YoutubeSearchResponse = {
+  query?: string;
+  results: SearchHit[];
+  playlist?: YoutubePlaylistMeta;
+};
+
 export type MediaState = "ready" | "restoring" | "retrying" | "failed" | "cancelled" | "missing_external";
 
 export type Playability = {

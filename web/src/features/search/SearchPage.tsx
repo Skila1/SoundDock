@@ -9,9 +9,10 @@ import { MediaCard } from "@/components/media/MediaCard";
 import { TrackList } from "@/components/media/TrackList";
 import { EmptyState } from "@/components/ui/empty";
 import { usePlayer, type PlayerQueueItem } from "@/stores/player";
-import type { SearchHit } from "@/types/api";
+import type { SearchHit, YoutubeSearchResponse } from "@/types/api";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { isYouTubePlaylistQuery } from "@/lib/youtube";
 
 const FILTERS: { id: string; label: string; token: string }[] = [
   { id: "never", label: "Never played", token: "played:never" },
@@ -74,10 +75,14 @@ export function SearchPage() {
     queryFn: () => api.get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(q)}&limit=40`)
   });
   const youtubeQ = stripPlayTokens(q);
+  const playlistQuery = isYouTubePlaylistQuery(youtubeQ);
   const youtube = useQuery({
     queryKey: ["search-youtube", q],
     enabled: youtubeQ.length > 1,
-    queryFn: () => api.get<{ results: SearchHit[] }>(`/api/v1/search/youtube?q=${encodeURIComponent(q)}&limit=12`)
+    queryFn: () =>
+      api.get<YoutubeSearchResponse>(
+        `/api/v1/search/youtube?q=${encodeURIComponent(q)}&limit=${playlistQuery ? 400 : 12}`
+      )
   });
   const grouped = useMemo(() => {
     const hits = results.data?.results || [];
@@ -176,8 +181,38 @@ export function SearchPage() {
       )}
       {grouped.youtube.length > 0 && (
         <section className="mb-8">
-          <h2 className="mb-3 font-semibold">YouTube</h2>
-          <p className="mb-3 text-sm text-muted">Not in your library. Play or queue to download into SoundDock.</p>
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-semibold">{playlistQuery ? "YouTube playlist" : "YouTube"}</h2>
+            {playlistQuery && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  const hits = grouped.youtube;
+                  add(
+                    hits.map((h) => h.id),
+                    false,
+                    hits.map((h) => ({ id: h.id, title: h.title, artist: h.artist, duration_ms: h.duration_ms }))
+                  ).then(() => {
+                    const n = hits.length;
+                    toast.success(
+                      youtube.data?.playlist?.truncated
+                        ? `Queued the first ${n} songs. The rest of the playlist was over the limit.`
+                        : `Downloading ${n} songs and adding to queue`
+                    );
+                  });
+                }}
+              >
+                Queue all {grouped.youtube.length} songs
+              </Button>
+            )}
+          </div>
+          <p className="mb-3 text-sm text-muted">
+            {playlistQuery
+              ? youtube.data?.playlist?.title
+                ? `Public playlist “${youtube.data.playlist.title}”. Queue all to download into SoundDock.`
+                : "Public playlist. Queue all to download into SoundDock."
+              : "Not in your library. Play or queue to download into SoundDock."}
+          </p>
           <TrackList
             tracks={grouped.youtube.map((h) => {
               const chip = mediaStateChip(queueMediaStateForHit(queueItems, h));

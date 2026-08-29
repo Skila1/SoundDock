@@ -105,6 +105,23 @@ func (c *Client) Search(ctx context.Context, q string, limit int) ([]Hit, error)
 	return out.Results, nil
 }
 
+func (c *Client) ListPlaylist(ctx context.Context, raw string, limit int) (PlaylistListing, error) {
+	if c == nil {
+		return PlaylistListing{}, fmt.Errorf("YouTube search is not available")
+	}
+	if c.svc != nil {
+		return c.svc.ListPlaylist(ctx, raw, limit)
+	}
+	if limit <= 0 {
+		limit = MaxPlaylistQueue
+	}
+	hits, err := c.Search(ctx, raw, limit)
+	if err != nil {
+		return PlaylistListing{}, err
+	}
+	return PlaylistListing{ID: PlaylistID(raw), Title: "", Hits: hits, Total: len(hits)}, nil
+}
+
 func (c *Client) Fetch(ctx context.Context, refs []string) ([]uuid.UUID, error) {
 	if c == nil {
 		return nil, fmt.Errorf("YouTube fetch is not available")

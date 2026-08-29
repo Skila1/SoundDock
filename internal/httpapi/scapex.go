@@ -20,6 +20,25 @@ func (s *Server) searchYouTube(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if scapex.IsPlaylistQuery(song) {
+		if limit <= 0 {
+			limit = scapex.MaxPlaylistQueue
+		}
+		if limit > scapex.MaxPlaylistQueue {
+			limit = scapex.MaxPlaylistQueue
+		}
+		listing, err := s.listYouTubePlaylist(r.Context(), song, limit)
+		if err != nil || len(listing.Hits) == 0 {
+			writeJSON(w, 200, map[string]any{"query": q, "results": []any{}})
+			return
+		}
+		writeJSON(w, 200, map[string]any{
+			"query":    q,
+			"results":  youtubeHitsJSON(listing.Hits),
+			"playlist": youtubePlaylistJSON(listing),
+		})
+		return
+	}
 	if limit <= 0 {
 		limit = 8
 	}
@@ -35,6 +54,10 @@ func (s *Server) searchYouTube(w http.ResponseWriter, r *http.Request) {
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
+	writeJSON(w, 200, map[string]any{"query": q, "results": youtubeHitsJSON(hits)})
+}
+
+func youtubeHitsJSON(hits []scapex.Hit) []map[string]any {
 	out := make([]map[string]any, 0, len(hits))
 	for _, h := range hits {
 		out = append(out, map[string]any{
@@ -49,7 +72,17 @@ func (s *Server) searchYouTube(w http.ResponseWriter, r *http.Request) {
 			"stream_url":  h.StreamURL,
 		})
 	}
-	writeJSON(w, 200, map[string]any{"query": q, "results": out})
+	return out
+}
+
+func youtubePlaylistJSON(listing scapex.PlaylistListing) map[string]any {
+	return map[string]any{
+		"id":        listing.ID,
+		"title":     listing.Title,
+		"count":     len(listing.Hits),
+		"total":     listing.Total,
+		"truncated": listing.Truncated,
+	}
 }
 
 func (s *Server) resolveQueueTracks(ctx context.Context, refs []string) ([]uuid.UUID, error) {

@@ -41,6 +41,13 @@ type ytdlpInfo struct {
 	WebpageURL string  `json:"webpage_url"`
 }
 
+type ytdlpPlaylist struct {
+	ID            string            `json:"id"`
+	Title         string            `json:"title"`
+	PlaylistCount int               `json:"playlist_count"`
+	Entries       []json.RawMessage `json:"entries"`
+}
+
 func (y *ytDLP) resolve() (string, error) {
 	if y.bin != "" {
 		p, err := exec.LookPath(y.bin)
@@ -94,6 +101,9 @@ func (y *ytDLP) run(ctx context.Context, args ...string) ([]byte, error) {
 }
 
 func searchTarget(query string, limit int) (lookup bool, spec string) {
+	if IsPlaylistQuery(query) {
+		return false, PlaylistURL(query)
+	}
 	if src := WatchURL(query); src != "" {
 		return true, src
 	}
@@ -104,6 +114,10 @@ func searchTarget(query string, limit int) (lookup bool, spec string) {
 }
 
 func (y *ytDLP) Search(ctx context.Context, query string, limit int) ([]Hit, error) {
+	if IsPlaylistQuery(query) {
+		listing, err := y.ListPlaylist(ctx, query, limit)
+		return listing.Hits, err
+	}
 	lookup, spec := searchTarget(query, limit)
 	args := []string{"--skip-download", "--no-warnings", "--no-progress", "-j"}
 	if lookup {
@@ -121,6 +135,94 @@ func (y *ytDLP) Search(ctx context.Context, query string, limit int) ([]Hit, err
 		}
 	}
 	return parseFlatHits(raw), nil
+}
+
+func (y *ytDLP) ListPlaylist(ctx context.Context, raw string, limit int) (PlaylistListing, error) {
+	spec := PlaylistURL(raw)
+	if spec == "" {
+		return PlaylistListing{}, fmt.Errorf("not a YouTube playlist URL")
+	}
+	if limit <= 0 {
+		limit = MaxPlaylistQueue
+	}
+	if limit > MaxPlaylistQueue {
+		limit = MaxPlaylistQueue
+	}
+	args := []string{
+		"--skip-download",
+		"--no-warnings",
+		"--no-progress",
+		"--flat-playlist",
+		"--yes-playlist",
+		"--playlist-end", strconv.Itoa(limit),
+		"-J", spec,
+	}
+	out, err := y.run(ctx, args...)
+	if err != nil {
+		return PlaylistListing{}, err
+	}
+	listing := parsePlaylistDump(out)
+	if listing.ID == "" {
+		listing.ID = PlaylistID(raw)
+	}
+	if listing.Total < len(listing.Hits) {
+		listing.Total = len(listing.Hits)
+	}
+	if len(listing.Hits) >= limit && listing.Total > limit {
+		listing.Truncated = true
+	}
+	return listing, nil
+}
+
+func parsePlaylistDump(raw []byte) PlaylistListing {
+	raw = bytes.TrimSpace(raw)
+	if i := bytes.IndexByte(raw, '{'); i > 0 {
+		raw = raw[i:]
+	}
+	var dump ytdlpPlaylist
+	if err := json.Unmarshal(raw, &dump); err != nil || len(dump.Entries) == 0 {
+		hits := parseFlatHits(raw)
+		return PlaylistListing{Hits: hits, Total: len(hits)}
+	}
+	hits := make([]Hit, 0, len(dump.Entries))
+	for _, ent := range dump.Entries {
+		ent = bytes.TrimSpace(ent)
+		if len(ent) == 0 || ent[0] != '{' {
+			continue
+		}
+		var row ytdlpFlat
+		if json.Unmarshal(ent, &row) != nil || !videoIDRe.MatchString(row.ID) {
+			continue
+		}
+		title := strings.TrimSpace(row.Title)
+		if title == "[Deleted video]" || title == "[Private video]" || title == "[Unavailable]" {
+			continue
+		}
+		artist := firstNonEmpty(row.Artist, row.Uploader, row.Channel)
+		watch := row.WebpageURL
+		if watch == "" {
+			watch = "https://www.youtube.com/watch?v=" + row.ID
+		}
+		hits = append(hits, Hit{
+			Type:       "youtube",
+			ID:         row.ID,
+			Title:      firstNonEmpty(title, row.ID),
+			Artist:     artist,
+			DurationMS: int(row.Duration * 1000),
+			StreamURL:  watch,
+			ArtworkURL: ytThumb(row.ID),
+		})
+	}
+	total := dump.PlaylistCount
+	if total < len(hits) {
+		total = len(hits)
+	}
+	return PlaylistListing{
+		ID:    dump.ID,
+		Title: strings.TrimSpace(dump.Title),
+		Hits:  hits,
+		Total: total,
+	}
 }
 
 func parseInfoHit(raw []byte) (Hit, bool) {

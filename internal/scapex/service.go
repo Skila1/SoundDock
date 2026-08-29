@@ -29,6 +29,10 @@ func (s *Service) Search(ctx context.Context, q string, limit int) ([]Hit, error
 	if q == "" {
 		return nil, fmt.Errorf("query required")
 	}
+	if IsPlaylistQuery(q) {
+		listing, err := s.ListPlaylist(ctx, q, limit)
+		return listing.Hits, err
+	}
 	if limit <= 0 {
 		limit = 8
 	}
@@ -42,6 +46,49 @@ func (s *Service) Search(ctx context.Context, q string, limit int) ([]Hit, error
 	if err != nil {
 		return nil, err
 	}
+	normalizeHits(hits)
+	return hits, nil
+}
+
+func (s *Service) ListPlaylist(ctx context.Context, raw string, limit int) (PlaylistListing, error) {
+	raw = strings.TrimSpace(raw)
+	if !IsPlaylistQuery(raw) {
+		return PlaylistListing{}, fmt.Errorf("not a YouTube playlist URL")
+	}
+	if limit <= 0 {
+		limit = MaxPlaylistQueue
+	}
+	if limit > MaxPlaylistQueue {
+		limit = MaxPlaylistQueue
+	}
+	var listing PlaylistListing
+	var err error
+	if lister, ok := s.yt.(interface {
+		ListPlaylist(context.Context, string, int) (PlaylistListing, error)
+	}); ok {
+		listing, err = lister.ListPlaylist(ctx, raw, limit)
+	} else {
+		var hits []Hit
+		hits, err = s.yt.Search(ctx, raw, limit)
+		listing = PlaylistListing{ID: PlaylistID(raw), Hits: hits, Total: len(hits)}
+	}
+	if err != nil {
+		return PlaylistListing{}, err
+	}
+	normalizeHits(listing.Hits)
+	if listing.ID == "" {
+		listing.ID = PlaylistID(raw)
+	}
+	if listing.Total < len(listing.Hits) {
+		listing.Total = len(listing.Hits)
+	}
+	if len(listing.Hits) >= limit && listing.Total > limit {
+		listing.Truncated = true
+	}
+	return listing, nil
+}
+
+func normalizeHits(hits []Hit) {
 	for i := range hits {
 		if hits[i].Type == "" {
 			hits[i].Type = "youtube"
@@ -53,7 +100,6 @@ func (s *Service) Search(ctx context.Context, q string, limit int) ([]Hit, error
 			hits[i].StreamURL = "https://www.youtube.com/watch?v=" + hits[i].ID
 		}
 	}
-	return hits, nil
 }
 
 func (s *Service) Fetch(ctx context.Context, raw string) ([]uuid.UUID, error) {

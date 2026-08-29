@@ -17,6 +17,22 @@ func (s *Server) YouTube() external.Filler {
 
 type isolatedYT struct{ s *Server }
 
+func (s *Server) listYouTubePlaylist(ctx context.Context, q string, limit int) (scapex.PlaylistListing, error) {
+	if s == nil || s.ScapeX == nil {
+		return scapex.PlaylistListing{}, errScapeXDown
+	}
+	if s.Jobs == nil || !s.Jobs.Started() {
+		return s.ScapeX.ListPlaylist(ctx, q, limit)
+	}
+	var listing scapex.PlaylistListing
+	err := s.Jobs.Do(ctx, jobs.PoolSearch, func(ctx context.Context) error {
+		var e error
+		listing, e = s.ScapeX.ListPlaylist(ctx, q, limit)
+		return e
+	})
+	return listing, err
+}
+
 func (y isolatedYT) Search(ctx context.Context, q string, limit int) ([]scapex.Hit, error) {
 	if y.s == nil || y.s.ScapeX == nil {
 		return nil, nil
