@@ -373,6 +373,101 @@ func TestAcquireBrowserLeaseConflictWhileDiscordHolds(t *testing.T) {
 	}
 }
 
+func TestUnlinkedDiscordListenerUsesVoiceDisplayName(t *testing.T) {
+	s, pool := wave1HTTPServer(t)
+	didHost := "w1b-hn-" + uuid.NewString()[:8]
+	didGuest := "w1b-gn-" + uuid.NewString()[:8]
+	host := seedQueueUser(t, pool, didHost)
+	guild := "w1b-ng-" + uuid.NewString()[:8]
+	ch := "w1b-nc-" + uuid.NewString()[:8]
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = pool.Exec(ctx, `DELETE FROM discord_user_voice WHERE guild_id=$1`, guild)
+		_, _ = pool.Exec(ctx, `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
+		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
+	})
+	putUserVoice(t, pool, didHost, guild, ch)
+	putUserVoice(t, pool, didGuest, guild, ch)
+	if _, err := pool.Exec(context.Background(), `UPDATE discord_user_voice SET display_name=$2 WHERE discord_user_id=$1`, didGuest, "Pixel"); err != nil {
+		t.Fatal(err)
+	}
+	jrec := httptest.NewRecorder()
+	s.discordJoin(jrec, authedJSON(host, http.MethodPost, "/api/v1/me/discord/join", map[string]any{}))
+	if jrec.Code != 200 {
+		t.Fatalf("join %d %s", jrec.Code, jrec.Body.String())
+	}
+	rec := httptest.NewRecorder()
+	s.getQueue(rec, authedJSON(host, http.MethodGet, "/api/v1/me/queue", nil))
+	if rec.Code != 200 {
+		t.Fatalf("queue %d %s", rec.Code, rec.Body.String())
+	}
+	got := decodeMap(t, rec)
+	raw, _ := got["listeners"].([]any)
+	var names []string
+	for _, item := range raw {
+		row, _ := item.(map[string]any)
+		if n, _ := row["display_name"].(string); n != "" {
+			names = append(names, n)
+		}
+	}
+	found := false
+	for _, n := range names {
+		if n == "Pixel" {
+			found = true
+		}
+		if n == didGuest {
+			t.Fatalf("unlinked listener used Discord id %q names=%v", didGuest, names)
+		}
+	}
+	if !found {
+		t.Fatalf("want Pixel in listeners, got %v", names)
+	}
+	for _, item := range raw {
+		row, _ := item.(map[string]any)
+		if row["display_name"] == "Pixel" && row["user_id"] != didGuest {
+			t.Fatalf("unlinked listener user_id %v want %s", row["user_id"], didGuest)
+		}
+	}
+}
+
+func TestDisconnectedRuntimeDoesNotAttach(t *testing.T) {
+	s, pool := wave1HTTPServer(t)
+	didHost := "w1b-dh-" + uuid.NewString()[:8]
+	didGuest := "w1b-dg-" + uuid.NewString()[:8]
+	host := seedQueueUser(t, pool, didHost)
+	guest := seedQueueUser(t, pool, didGuest)
+	guild := "w1b-dgx-" + uuid.NewString()[:8]
+	ch := "w1b-dgc-" + uuid.NewString()[:8]
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = pool.Exec(ctx, `DELETE FROM discord_user_voice WHERE guild_id=$1`, guild)
+		_, _ = pool.Exec(ctx, `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
+		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
+	})
+	putUserVoice(t, pool, didHost, guild, ch)
+	putUserVoice(t, pool, didGuest, guild, ch)
+	jrec := httptest.NewRecorder()
+	s.discordJoin(jrec, authedJSON(host, http.MethodPost, "/api/v1/me/discord/join", map[string]any{}))
+	if jrec.Code != 200 {
+		t.Fatalf("join %d %s", jrec.Code, jrec.Body.String())
+	}
+	hostSID, _ := decodeMap(t, jrec)["session_id"].(string)
+	_, _ = pool.Exec(context.Background(), `
+		UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='leave' WHERE guild_id=$1`, guild)
+	grec := httptest.NewRecorder()
+	s.getQueue(grec, authedJSON(guest, http.MethodGet, "/api/v1/me/queue", nil))
+	if grec.Code != 200 {
+		t.Fatalf("guest get %d %s", grec.Code, grec.Body.String())
+	}
+	gq := decodeMap(t, grec)
+	if queueID(gq) == hostSID {
+		t.Fatal("stale disconnected runtime still attached the guest")
+	}
+	if gq["kind"] != "web_device" {
+		t.Fatalf("kind %v", gq["kind"])
+	}
+}
+
 func TestQueueGetIncludesEngineFields(t *testing.T) {
 	s, pool := wave1HTTPServer(t)
 	u := seedQueueUser(t, pool, "")

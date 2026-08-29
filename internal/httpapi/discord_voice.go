@@ -120,18 +120,29 @@ func (s *Server) attachedBoundSession(r *http.Request) (uuid.UUID, bool) {
 	if guildID == "" || channelID == "" {
 		return uuid.Nil, false
 	}
+	if bot := discordx.Live(); bot != nil {
+		if live, ok := bot.BotChannel(guildID); !ok || live != channelID {
+			return uuid.Nil, false
+		}
+	}
 	var sid uuid.UUID
 	var runtimeCh *string
+	var connected bool
+	var reason string
 	err := s.Pool.QueryRow(r.Context(), `
-		SELECT session_id, voice_channel_id FROM discord_voice_runtime
-		WHERE guild_id=$1 AND session_id IS NOT NULL`, guildID).Scan(&sid, &runtimeCh)
+		SELECT session_id, voice_channel_id, connected, coalesce(last_disconnect_reason,'')
+		FROM discord_voice_runtime
+		WHERE guild_id=$1 AND session_id IS NOT NULL`, guildID).Scan(&sid, &runtimeCh, &connected, &reason)
 	if err != nil || sid == uuid.Nil {
 		return uuid.Nil, false
 	}
 	if runtimeCh == nil || *runtimeCh == "" || *runtimeCh != channelID {
 		return uuid.Nil, false
 	}
-	return sid, true
+	if connected || reason == "pending_join" || reason == "joining" {
+		return sid, true
+	}
+	return uuid.Nil, false
 }
 
 func (s *Server) guildPlaybackEnabled(ctx context.Context, guildID string) bool {

@@ -18,6 +18,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } 
 import { Tooltip } from "@/components/ui/tooltip";
 import { asListenTracks, type ListenTrack } from "@/features/stats/types";
 import type { PresenceParticipant, PresenceSource } from "@/stores/sseClient";
+import { SoftBoundary } from "@/app/ErrorBoundary";
 
 const MAX_VISIBLE_AVATARS = 4;
 
@@ -35,12 +36,18 @@ export function addedByLabel(
   return `Added by ${name}`;
 }
 
-export function orderPresence(listeners: PresenceParticipant[], meId?: string): PresenceParticipant[] {
-  return [...listeners].sort((a, b) => {
+export function presenceLabel(p: Pick<PresenceParticipant, "display_name"> | null | undefined): string {
+  const n = typeof p?.display_name === "string" ? p.display_name.trim() : "";
+  return n || "Listener";
+}
+
+export function orderPresence(listeners: PresenceParticipant[] | null | undefined, meId?: string): PresenceParticipant[] {
+  const rows = (listeners || []).filter((p) => p && (p.user_id || p.display_name));
+  return [...rows].sort((a, b) => {
     const aSelf = !!meId && a.user_id === meId;
     const bSelf = !!meId && b.user_id === meId;
     if (aSelf !== bSelf) return aSelf ? -1 : 1;
-    return a.display_name.localeCompare(b.display_name, undefined, { sensitivity: "base" });
+    return presenceLabel(a).localeCompare(presenceLabel(b), undefined, { sensitivity: "base" });
   });
 }
 
@@ -65,36 +72,39 @@ export function QueuePresence({ className }: { className?: string }) {
   const overflow = ordered.slice(MAX_VISIBLE_AVATARS);
 
   return (
-    <div className={cn("flex min-w-0 items-center", className)} aria-label="Who is here" role="group">
-      <div className="flex items-center -space-x-2">
-        {shown.map((p) => {
-          const self = p.user_id === me.data?.id;
-          const label = `${p.display_name}${self ? " (you)" : ""} · ${sourceLabel(p.source)}`;
-          return (
-            <Tooltip key={p.user_id} label={label}>
-              <span className="relative inline-flex h-7 w-7 shrink-0">
-                {p.avatar_url ? (
-                  <img src={p.avatar_url} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full object-cover ring-2 ring-surface-1" />
-                ) : (
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-3 text-[10px] font-semibold text-foreground ring-2 ring-surface-1">
-                    {p.display_name.slice(0, 1).toUpperCase()}
-                  </span>
-                )}
-                <span
-                  className={cn("absolute bottom-0 right-0 h-2 w-2 rounded-full ring-1 ring-surface-1", sourcePip(p.source))}
-                  aria-hidden
-                />
-              </span>
-            </Tooltip>
-          );
-        })}
+    <SoftBoundary>
+      <div className={cn("flex min-w-0 items-center", className)} aria-label="Who is here" role="group">
+        <div className="flex items-center -space-x-2">
+          {shown.map((p, i) => {
+            const self = p.user_id === me.data?.id;
+            const name = presenceLabel(p);
+            const label = `${name}${self ? " (you)" : ""} · ${sourceLabel(p.source)}`;
+            return (
+              <Tooltip key={p.user_id || name || String(i)} label={label}>
+                <span className="relative inline-flex h-7 w-7 shrink-0">
+                  {p.avatar_url ? (
+                    <img src={p.avatar_url} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full object-cover ring-2 ring-surface-1" />
+                  ) : (
+                    <span className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-3 text-[10px] font-semibold text-foreground ring-2 ring-surface-1">
+                      {name.slice(0, 1).toUpperCase()}
+                    </span>
+                  )}
+                  <span
+                    className={cn("absolute bottom-0 right-0 h-2 w-2 rounded-full ring-1 ring-surface-1", sourcePip(p.source))}
+                    aria-hidden
+                  />
+                </span>
+              </Tooltip>
+            );
+          })}
+        </div>
+        {overflow.length > 0 && (
+          <Tooltip label={overflow.map((p) => `${presenceLabel(p)} · ${sourceLabel(p.source)}`).join(", ")}>
+            <span className="ml-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted">+{overflow.length}</span>
+          </Tooltip>
+        )}
       </div>
-      {overflow.length > 0 && (
-        <Tooltip label={overflow.map((p) => `${p.display_name} · ${sourceLabel(p.source)}`).join(", ")}>
-          <span className="ml-1 rounded-full bg-surface-2 px-1.5 py-0.5 text-[10px] font-semibold text-muted">+{overflow.length}</span>
-        </Tooltip>
-      )}
-    </div>
+    </SoftBoundary>
   );
 }
 
@@ -114,7 +124,7 @@ export function QueuePanel({
   const [name, setName] = useState("Queue");
   const [view, setView] = useState<"queue" | "history">("queue");
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
-  const items = p.queue?.items || [];
+  const items = (p.queue?.items || []).filter((i): i is PlayerQueueItem => !!i && typeof i.track_id === "string");
   const ids = items.map((i) => i.track_id);
   const counts = ids.reduce((m, id) => m.set(id, (m.get(id) || 0) + 1), new Map<string, number>());
   const { data: tracks } = useQuery({

@@ -19,3 +19,15 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { err?: Er
     return this.props.children;
   }
 }
+
+/** Isolates a widget so a render throw cannot white-screen the app. */
+export class SoftBoundary extends Component<{ children: ReactNode }, { err?: Error }> {
+  state: { err?: Error } = {};
+  static getDerivedStateFromError(err: Error) {
+    return { err };
+  }
+  render() {
+    if (this.state.err) return null;
+    return this.props.children;
+  }
+}

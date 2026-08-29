@@ -50,7 +50,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && chown -R sounddock:sounddock /data /libraries
 COPY --from=build /out/sounddock /usr/local/bin/sounddock
 COPY --from=build /out/schema-head /etc/sounddock/schema-head
-ARG SCHEMA_HEAD=23
+ARG SCHEMA_HEAD=24
 LABEL org.sounddock.schema-head=${SCHEMA_HEAD}
 USER sounddock
 WORKDIR /data

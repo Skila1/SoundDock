@@ -230,7 +230,7 @@ func (e *Engine) UnbindDiscordRenderer(ctx context.Context, guildID string, expe
 	newRev := curRev + 1
 	if _, err := tx.Exec(ctx, `
 		UPDATE discord_voice_runtime
-		SET binding_revision=$2, session_id=NULL, connected=false, last_disconnect_reason='unbind'
+		SET binding_revision=$2, session_id=NULL, connected=false, voice_channel_id=NULL, last_disconnect_reason='unbind'
 		WHERE guild_id=$1`, guildID, newRev); err != nil {
 		return BindResult{}, err
 	}

@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { AppShell } from "@/app/layout/AppShell";
 import { BootScreen, ForbiddenPage, NotFoundPage } from "@/app/errors";
 import { DiscordCallbackCatch, isDiscordOAuthCallbackPath, LoginPage, SetupPage } from "@/features/auth/AuthPages";
+import { resetClientSession } from "@/features/auth/sessionReset";
 import { HomePage } from "@/features/home/HomePage";
 import { Skeleton } from "@/components/ui/misc";
 import type { User } from "@/types/api";
@@ -77,7 +78,8 @@ function Fallback() {
 export function AppRouter() {
   const setup = useQuery({
     queryKey: ["setup"],
-    queryFn: () => api.get<{ needed: boolean; discord_enabled?: boolean; discord_configured?: boolean }>("/api/v1/setup/status")
+    queryFn: () => api.get<{ needed: boolean; discord_enabled?: boolean; discord_configured?: boolean }>("/api/v1/setup/status"),
+    retry: false
   });
   const me = useQuery({
     queryKey: ["me"],
@@ -88,14 +90,21 @@ export function AppRouter() {
   if (isDiscordOAuthCallbackPath()) {
     return <DiscordCallbackCatch />;
   }
-  if (setup.isLoading || (me.isLoading && !me.isError)) return <BootScreen />;
-  if (setup.data?.needed) return <SetupPage discordConfigured={!!setup.data?.discord_configured} onDone={() => { setup.refetch(); me.refetch(); }} />;
-  if (me.isError || !me.data) {
-    return <LoginPage discordConfigured={!!setup.data?.discord_configured} onDone={() => me.refetch()} />;
+  if (setup.data?.needed) {
+    return (
+      <SetupPage
+        discordConfigured={!!setup.data?.discord_configured}
+        onDone={() => {
+          resetClientSession();
+          void setup.refetch();
+          void me.refetch();
+        }}
+      />
+    );
   }
-
-  const user = me.data;
-  return (
+  if (me.data) {
+    const user = me.data;
+    return (
     <Suspense fallback={<Fallback />}>
       <Routes>
         <Route element={<AppShell user={user} />}>
@@ -173,5 +182,18 @@ export function AppRouter() {
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Suspense>
-  );
+    );
+  }
+  if (me.isError || me.isFetched || setup.isError) {
+    return (
+      <LoginPage
+        discordConfigured={!!setup.data?.discord_configured}
+        onDone={() => {
+          resetClientSession();
+          void me.refetch();
+        }}
+      />
+    );
+  }
+  return <BootScreen />;
 }

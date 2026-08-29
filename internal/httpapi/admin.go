@@ -787,7 +787,7 @@ func (s *Server) discordDisconnect(w http.ResponseWriter, r *http.Request) {
 	if bot := discordx.Live(); bot != nil {
 		_ = bot.LeaveGuild(r.Context(), id)
 	}
-	_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='admin' WHERE guild_id=$1`, id)
+	discordx.MarkVoiceDisconnected(r.Context(), s.Pool, id, "admin")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 

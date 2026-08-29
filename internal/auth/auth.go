@@ -137,7 +137,7 @@ func (s *Service) Authenticate(ctx context.Context, identifier, password string)
 }
 
 func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (*User, error) {
-	u := &User{ID: id}
+	u := &User{ID: id, Permissions: []string{}}
 	err := s.pool.QueryRow(ctx, `
 		SELECT username, email, display_name, disabled, replaygain_mode, crossfade_seconds, target_lufs
 		FROM users WHERE id=$1`, id).

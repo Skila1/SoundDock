@@ -91,6 +91,12 @@ function str(v: unknown, fallback = ""): string {
   return typeof v === "string" ? v : fallback;
 }
 
+function idStr(v: unknown): string {
+  if (typeof v === "string" && v.trim()) return v.trim();
+  if (typeof v === "number" && Number.isFinite(v)) return String(v);
+  return "";
+}
+
 function presenceSource(v: unknown): PresenceSource {
   const s = str(v).toLowerCase();
   if (s === "discord") return "discord";
@@ -100,7 +106,7 @@ function presenceSource(v: unknown): PresenceSource {
 
 export function normalizeParticipant(raw: unknown): PresenceParticipant | null {
   if (!isRecord(raw)) return null;
-  const user_id = str(raw.user_id) || str(raw.id) || str(raw.userId);
+  const user_id = idStr(raw.user_id) || idStr(raw.id) || idStr(raw.userId);
   const display_name =
     str(raw.display_name) || str(raw.display) || str(raw.name) || str(raw.username) || "Listener";
   const avatar =
@@ -150,6 +156,9 @@ export function mergePresence(prev: PresenceParticipant[], event: SessionPresenc
   const snapshot = pickListeners(event);
   if (snapshot && !event.added && !event.removed && !event.left) return snapshot;
   if (!event.added && !event.removed && !event.left) {
+    if ("listeners" in event || "presence" in event || "participants" in event) {
+      return snapshot ?? prev;
+    }
     const one = normalizeParticipant(event);
     if (one) return [one];
   }

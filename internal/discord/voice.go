@@ -13,6 +13,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sounddock/sounddock/internal/mediabusy"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/scrobble"
@@ -119,6 +120,28 @@ func (b *Bot) BotChannel(guildID string) (string, bool) {
 	return st.ChannelID, true
 }
 
+// MarkVoiceDisconnected clears a leftover runtime row so web clients stop
+// attaching to a voice session the bot is not actually in.
+func MarkVoiceDisconnected(ctx context.Context, pool *pgxpool.Pool, guildID, reason string) {
+	if pool == nil || guildID == "" {
+		return
+	}
+	if reason == "" {
+		reason = "disconnected"
+	}
+	_, _ = pool.Exec(ctx, `
+		UPDATE discord_voice_runtime
+		SET connected=false, voice_channel_id=NULL, last_disconnect_reason=$2
+		WHERE guild_id=$1`, guildID, reason)
+}
+
+func (b *Bot) markVoiceDisconnected(ctx context.Context, guildID, reason string) {
+	if b == nil {
+		return
+	}
+	MarkVoiceDisconnected(ctx, b.pool, guildID, reason)
+}
+
 func (b *Bot) markVoiceConnected(ctx context.Context, guildID, channelID string, sid uuid.UUID) {
 	_ = sid
 	_, _ = b.pool.Exec(ctx, `
@@ -139,12 +162,12 @@ func (b *Bot) markJoining(ctx context.Context, guildID, channelID string, sid uu
 func (b *Bot) finishVoiceJoin(ctx context.Context, vc *discordgo.VoiceConnection, guildID, channelID string, sid uuid.UUID) error {
 	if !waitVoiceReady(vc, 15*time.Second) {
 		b.dropVoice(guildID)
-		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, "timeout waiting for voice")
+		b.markVoiceDisconnected(ctx, guildID, "timeout waiting for voice")
 		return fmt.Errorf("timeout waiting for voice")
 	}
 	if err := waitDAVEReady(vc, 15*time.Second); err != nil {
 		b.dropVoice(guildID)
-		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, "timeout waiting for DAVE")
+		b.markVoiceDisconnected(ctx, guildID, "timeout waiting for DAVE")
 		return fmt.Errorf("timeout waiting for DAVE: %w", err)
 	}
 	b.markVoiceConnected(ctx, guildID, channelID, sid)
@@ -191,7 +214,7 @@ func (b *Bot) JoinChannel(ctx context.Context, guildID, channelID string) error 
 	vc, err := sess.ChannelVoiceJoin(jctx, guildID, channelID, false, true)
 	if err != nil {
 		b.dropVoice(guildID)
-		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason=$2 WHERE guild_id=$1`, guildID, redacted(err.Error()))
+		b.markVoiceDisconnected(ctx, guildID, redacted(err.Error()))
 		return err
 	}
 	return b.finishVoiceJoin(ctx, vc, guildID, channelID, sid)
@@ -218,9 +241,7 @@ func (b *Bot) LeaveGuild(ctx context.Context, guildID string) error {
 			held = true
 		}
 	}
-	if held {
-		_, _ = b.pool.Exec(ctx, `UPDATE discord_voice_runtime SET connected=false, last_disconnect_reason='leave' WHERE guild_id=$1`, guildID)
-	}
+	b.markVoiceDisconnected(ctx, guildID, "leave")
 	b.stopStreamer(guildID)
 	b.dropVoice(guildID)
 	if held && rt.SessionID != uuid.Nil && b.play != nil {
@@ -730,6 +751,14 @@ func (b *Bot) reconcileVoice(ctx context.Context) {
 				b.log.Warn("pending join", "guild", gid, "err", err)
 			}
 			continue
+		}
+		if connected {
+			live, inVC := b.BotChannel(gid)
+			if !inVC || ch == nil || *ch == "" || live != *ch {
+				b.markVoiceDisconnected(ctx, gid, "stale_runtime")
+				b.stopStreamer(gid)
+				continue
+			}
 		}
 		if !connected {
 			if reason != nil && *reason == "joining" {

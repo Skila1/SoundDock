@@ -3,6 +3,9 @@ package auth
 import (
 	"context"
 	"testing"
+
+	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/testdb"
 )
 
 func TestDiscordProfileNames(t *testing.T) {
@@ -70,4 +73,54 @@ func TestNormalizeAdminDiscordIDs(t *testing.T) {
 	if _, err := NormalizeAdminDiscordIDs([]string{"abc"}); err == nil {
 		t.Fatal("expected invalid")
 	}
+}
+
+func TestUpsertDiscordUserDoesNotStealAdmin(t *testing.T) {
+	pool := testdb.Open(t)
+	svc := New(pool)
+	ctx := context.Background()
+	adminID := uuid.New()
+	uname := "adm-" + adminID.String()[:8]
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO users (id, username, password_hash, display_name) VALUES ($1,$2,'x',$2)`, adminID, uname); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name='Administrator'`, adminID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		c := context.Background()
+		_, _ = pool.Exec(c, `DELETE FROM user_identities WHERE user_id IN (SELECT id FROM users WHERE username=$1 OR username LIKE $2)`, uname, "friend-%")
+		_, _ = pool.Exec(c, `DELETE FROM user_roles WHERE user_id=$1`, adminID)
+		_, _ = pool.Exec(c, `DELETE FROM users WHERE id=$1 OR username LIKE $2`, adminID, "friend-%")
+	})
+	did := "9" + adminID.String()[:17]
+	friend, err := svc.UpsertDiscordUser(ctx, DiscordProfile{ID: did, Username: "friend-" + adminID.String()[:8], Global: "Friend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if friend.ID == adminID {
+		t.Fatal("second Discord login attached to the existing administrator")
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM user_identities WHERE user_id=$1 AND provider='discord'`, adminID).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatal("admin gained a Discord identity from someone else's login")
+	}
+	again, err := svc.UpsertDiscordUser(ctx, DiscordProfile{ID: did, Username: "friend-" + adminID.String()[:8], Global: "Friend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.ID != friend.ID {
+		t.Fatalf("same Discord user created a second local account %s %s", again.ID, friend.ID)
+	}
+	t.Cleanup(func() {
+		c := context.Background()
+		_, _ = pool.Exec(c, `DELETE FROM user_identities WHERE user_id=$1`, friend.ID)
+		_, _ = pool.Exec(c, `DELETE FROM user_roles WHERE user_id=$1`, friend.ID)
+		_, _ = pool.Exec(c, `DELETE FROM users WHERE id=$1`, friend.ID)
+	})
 }

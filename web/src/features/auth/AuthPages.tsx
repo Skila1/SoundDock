@@ -159,7 +159,7 @@ export function SetupPage({ onDone, discordConfigured }: { onDone: () => void; d
           <h1 className="text-xl font-semibold">First setup</h1>
           <p className="text-sm text-muted">
             {mode === "create"
-              ? "Create a local administrator. You can enable Discord later under Admin. The first Discord sign-in links to this administrator."
+              ? "Create a local administrator. You can enable Discord later under Admin. Link Discord from your profile after you sign in."
               : "Restore from an encrypted R2 archive. You need the recovery passphrase. This host still needs its own URL and NAS mounts."}
           </p>
         </div>

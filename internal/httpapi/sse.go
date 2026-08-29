@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/auth"
+	discordx "github.com/sounddock/sounddock/internal/discord"
 )
 
 const (
@@ -316,11 +317,11 @@ func (s *Server) presenceAvatar(r *http.Request, u *auth.User) string {
 	if did == "" {
 		return ""
 	}
-	if hash == nil {
-		got := s.refreshDiscordAvatarHash(r.Context(), did)
-		hash = &got
+	hashVal := ""
+	if hash != nil {
+		hashVal = *hash
 	}
-	return discordAvatarURL(did, *hash)
+	return discordAvatarURL(did, hashVal)
 }
 
 func (s *Server) refreshDiscordAvatarHash(ctx context.Context, discordUserID string) string {
@@ -337,7 +338,8 @@ func (s *Server) refreshDiscordAvatarHash(ctx context.Context, discordUserID str
 		return ""
 	}
 	req.Header.Set("Authorization", "Bot "+token)
-	resp, err := http.DefaultClient.Do(req)
+	cli := &http.Client{Timeout: 4 * time.Second}
+	resp, err := cli.Do(req)
 	if err != nil {
 		return ""
 	}
@@ -510,7 +512,9 @@ func (s *Server) mergeDiscordListeners(r *http.Request, sid uuid.UUID, web []Que
 		return append([]QueueListener{}, web...)
 	}
 	rows, err := s.Pool.Query(r.Context(), `
-		SELECT v.discord_user_id, i.user_id, COALESCE(NULLIF(u.display_name, ''), NULLIF(i.provider_username, ''), v.discord_user_id), i.avatar_hash
+		SELECT v.discord_user_id, v.guild_id, i.user_id,
+			COALESCE(NULLIF(u.display_name, ''), NULLIF(i.provider_username, ''), NULLIF(v.display_name, ''), v.discord_user_id),
+			i.avatar_hash
 		FROM discord_voice_runtime r
 		JOIN discord_user_voice v ON v.guild_id = r.guild_id AND v.channel_id = r.voice_channel_id
 		LEFT JOIN user_identities i ON i.provider = 'discord' AND i.provider_user_id = v.discord_user_id
@@ -521,6 +525,20 @@ func (s *Server) mergeDiscordListeners(r *http.Request, sid uuid.UUID, web []Que
 	}
 	defer rows.Close()
 
+	type voiceRow struct {
+		did, guildID, display string
+		uid                   *uuid.UUID
+		hash                  *string
+	}
+	var scanned []voiceRow
+	for rows.Next() {
+		var row voiceRow
+		if err := rows.Scan(&row.did, &row.guildID, &row.uid, &row.display, &row.hash); err != nil {
+			continue
+		}
+		scanned = append(scanned, row)
+	}
+
 	byUser := map[string]QueueListener{}
 	var unlinked []QueueListener
 	for _, l := range web {
@@ -528,18 +546,15 @@ func (s *Server) mergeDiscordListeners(r *http.Request, sid uuid.UUID, web []Que
 			byUser[*l.UserID] = l
 		}
 	}
-	for rows.Next() {
-		var did string
-		var uid *uuid.UUID
-		var display string
-		var hash *string
-		if err := rows.Scan(&did, &uid, &display, &hash); err != nil {
-			continue
+	for _, vrow := range scanned {
+		did, guildID, display, uid, hash := vrow.did, vrow.guildID, vrow.display, vrow.uid, vrow.hash
+		if display == "" || display == did {
+			if n := discordx.Live().MemberDisplayName(guildID, did); n != "" {
+				display = n
+			}
 		}
 		hashVal := ""
-		if hash == nil && did != "" {
-			hashVal = s.refreshDiscordAvatarHash(r.Context(), did)
-		} else if hash != nil {
+		if hash != nil {
 			hashVal = *hash
 		}
 		av := discordAvatarURL(did, hashVal)
@@ -563,7 +578,8 @@ func (s *Server) mergeDiscordListeners(r *http.Request, sid uuid.UUID, web []Que
 			byUser[id] = row
 			continue
 		}
-		row := QueueListener{DisplayName: display, Source: "discord"}
+		unlinkedID := did
+		row := QueueListener{UserID: &unlinkedID, DisplayName: display, Source: "discord"}
 		if av != "" {
 			row.AvatarURL = &av
 		}
