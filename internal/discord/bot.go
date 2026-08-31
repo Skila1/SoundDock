@@ -18,6 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
 	"github.com/sounddock/sounddock/internal/mediabusy"
+	"github.com/sounddock/sounddock/internal/minilib"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/scrobble"
 	"github.com/sounddock/sounddock/internal/search"
@@ -330,10 +331,12 @@ func (b *Bot) PlayQuery(ctx context.Context, guildID, discordUser string, q stri
 	if err != nil {
 		return err
 	}
+	uid := minilib.LinkedUserID(ctx, b.pool, discordUser)
+	ctx = playback.WithRequester(ctx, uid, strings.TrimSpace(discordUser))
+	ctx = playback.WithOrigin(ctx, playback.OriginUser)
 	if err := b.play.Replace(ctx, sid, ids, 0); err != nil {
 		return err
 	}
-	_ = discordUser
 	return nil
 }
 

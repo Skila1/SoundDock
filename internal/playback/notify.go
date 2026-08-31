@@ -69,5 +69,23 @@ func (e *Engine) commitSession(ctx context.Context, tx interface {
 		return err
 	}
 	e.notifySession(ctx, sid, t)
+	e.notifyPersonalLibrary(ctx)
 	return nil
+}
+
+func (e *Engine) notifyPersonalLibrary(ctx context.Context) {
+	if e == nil || e.pool == nil || originFrom(ctx) != OriginUser {
+		return
+	}
+	userID, _ := requesterFrom(ctx)
+	uid, ok := userID.(uuid.UUID)
+	if !ok || uid == uuid.Nil {
+		return
+	}
+	_ = Notify(ctx, e.pool, Signal{
+		T:     "resource.invalidate",
+		Scope: "user",
+		Actor: uid.String(),
+		Keys:  []string{"personal-library", "home"},
+	})
 }

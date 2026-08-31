@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/auth"
 	"github.com/sounddock/sounddock/internal/ingest"
+	"github.com/sounddock/sounddock/internal/minilib"
 	"github.com/sounddock/sounddock/internal/opensubsonic"
 	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/search"
@@ -48,10 +49,11 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 func (s *Server) patchMe(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	var body struct {
-		DisplayName      *string  `json:"display_name"`
-		ReplayGainMode   *string  `json:"replaygain_mode"`
-		CrossfadeSeconds *int     `json:"crossfade_seconds"`
-		TargetLUFS       *float64 `json:"target_lufs"`
+		DisplayName               *string  `json:"display_name"`
+		ReplayGainMode            *string  `json:"replaygain_mode"`
+		CrossfadeSeconds          *int     `json:"crossfade_seconds"`
+		TargetLUFS                *float64 `json:"target_lufs"`
+		PersonalLibraryVisibility *string  `json:"personal_library_visibility"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeErr(w, 400, "invalid", err.Error())
@@ -68,6 +70,12 @@ func (s *Server) patchMe(w http.ResponseWriter, r *http.Request) {
 		lufs = *body.TargetLUFS
 	}
 	_ = s.Auth.UpdatePrefs(r.Context(), u.ID, rg, xf, lufs)
+	if body.PersonalLibraryVisibility != nil {
+		if err := minilib.SetVisibility(r.Context(), s.Pool, u.ID, *body.PersonalLibraryVisibility); err != nil {
+			writeErr(w, 500, "db", err.Error())
+			return
+		}
+	}
 	if body.DisplayName != nil {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE users SET display_name=$1 WHERE id=$2`, *body.DisplayName, u.ID)
 	}

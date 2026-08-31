@@ -73,3 +73,25 @@ func TestPlaylistInvalidateSignalIsCompact(t *testing.T) {
 		t.Fatal("queue body leaked")
 	}
 }
+
+func TestPersonalLibraryInvalidateSignalIsCompact(t *testing.T) {
+	b, err := EncodeSignal(Signal{
+		T:     "resource.invalidate",
+		Scope: "user",
+		Actor: "00000000-0000-4000-8000-000000000001",
+		Keys:  []string{"personal-library", "home"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(b) > notifySoftLimit {
+		t.Fatalf("payload %d", len(b))
+	}
+	var got Signal
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Scope != "user" || len(got.Keys) != 2 {
+		t.Fatalf("%+v", got)
+	}
+}

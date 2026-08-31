@@ -122,6 +122,13 @@ export function PlaylistPage() {
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             <Button onClick={() => play(ids)} disabled={!ids.length}><Play className="fill-current" /> Play</Button>
+            <Button
+              variant="secondary"
+              disabled={!ids.length}
+              onClick={() => add(ids).then(() => toast.success("Queued playlist"))}
+            >
+              Queue
+            </Button>
             <Button variant="secondary" onClick={() => play([...ids].sort(() => Math.random() - 0.5))}><Shuffle /> Shuffle</Button>
             <Button variant="secondary" onClick={startRadio} disabled={!ids.length}><RadioIcon /> Radio</Button>
             {isOwner && <Button variant="ghost" onClick={() => setEdit(true)}><Pencil /> Edit</Button>}

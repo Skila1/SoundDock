@@ -23,6 +23,8 @@ export type PlaylistListItem = {
   public?: boolean;
   folder?: string;
   created_at?: string;
+  user_id?: string;
+  owner_name?: string;
   provider?: string | null;
   sync_mode?: string | null;
   last_sync_status?: string | null;

@@ -15,6 +15,7 @@ import (
 	discordx "github.com/sounddock/sounddock/internal/discord"
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/jobs"
+	"github.com/sounddock/sounddock/internal/minilib"
 	"github.com/sounddock/sounddock/internal/oplog"
 	"github.com/sounddock/sounddock/internal/scan"
 	"github.com/sounddock/sounddock/internal/storage"
@@ -294,6 +295,7 @@ func (s *Server) adminUnlinkDiscord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	auth.RemoveAdminDiscordID(r.Context(), s.Pool, did)
+	_ = minilib.DetachDiscord(r.Context(), s.Pool, id)
 	s.Audit.Event(r.Context(), &currentUser(r).ID, "user.unlink_discord", id.String(), r.RemoteAddr, nil)
 	s.adminGetUser(w, r)
 }

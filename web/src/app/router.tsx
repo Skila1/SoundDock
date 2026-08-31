@@ -37,6 +37,8 @@ const ConnectedServicesPage = lazy(() => import("@/features/settings/ConnectedSe
 const FavouritesPage = lazy(() => import("@/features/favourites/FavouritesPage").then((m) => ({ default: m.FavouritesPage })));
 const LibrariesPage = lazy(() => import("@/features/library/LibrariesPage").then((m) => ({ default: m.LibrariesPage })));
 const LibraryLayout = lazy(() => import("@/features/library/LibraryPage").then((m) => ({ default: m.LibraryLayout })));
+const PersonalLibraryPage = lazy(() => import("@/features/library/PersonalLibraryPage").then((m) => ({ default: m.PersonalLibraryPage })));
+const PublicProfilePage = lazy(() => import("@/features/library/PublicProfilePage").then((m) => ({ default: m.PublicProfilePage })));
 const UploadPage = lazy(() => import("@/features/upload/UploadPage").then((m) => ({ default: m.UploadPage })));
 const ImportPage = lazy(() => import("@/features/imports/ImportPage").then((m) => ({ default: m.ImportPage })));
 const ProfilePage = lazy(() => import("@/features/profile/ProfilePage").then((m) => ({ default: m.ProfilePage })));
@@ -119,6 +121,9 @@ export function AppRouter() {
           <Route path="/favourites" element={<Navigate to="/library/favourites" replace />} />
           <Route path="/upload" element={<Navigate to="/library/add" replace />} />
           <Route path="/import" element={<Navigate to="/library/import" replace />} />
+          <Route path="/me/library" element={<PersonalLibraryPage mine />} />
+          <Route path="/users/:id/library" element={<PersonalLibraryPage />} />
+          <Route path="/users/:id" element={<PublicProfilePage />} />
           <Route path="/library" element={<LibraryLayout />}>
             <Route index element={<TracksPage />} />
             <Route path="albums" element={<AlbumsPage />} />
@@ -153,6 +158,8 @@ export function AppRouter() {
             <Route path="demo" element={<Navigate to="/admin" replace />} />
             <Route path="grants" element={<AdminGrants />} />
             <Route path="users" element={<AdminUsers />} />
+            <Route path="users/:id/library" element={<PersonalLibraryPage admin />} />
+            <Route path="discord-users/:discordID/library" element={<PersonalLibraryPage adminDiscord />} />
             <Route path="roles" element={<AdminRoles />} />
             <Route path="storage" element={<AdminStorage />} />
             <Route path="libraries" element={<AdminLibraries />} />

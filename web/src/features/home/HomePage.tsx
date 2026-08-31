@@ -35,6 +35,7 @@ export function HomePage() {
   const layout = useUi((s) => s.libraryLayout);
   const home = useQuery({ queryKey: ["home"], queryFn: () => api.get<any>("/api/v1/home") });
 
+  const mine = useMemo(() => asTracks(home.data?.my_library).slice(0, 15), [home.data]);
   const recent = useMemo(() => asTracks(home.data?.continue).slice(0, 15), [home.data]);
   const added = useMemo(() => asTracks(home.data?.recently_added).slice(0, 15), [home.data]);
   const played = useMemo(() => asTracks(home.data?.most_played).slice(0, 15), [home.data]);
@@ -51,17 +52,17 @@ export function HomePage() {
     return <QueryError message={home.error instanceof Error ? home.error.message : undefined} onRetry={() => home.refetch()} />;
   }
 
-  if (!recent.length && !added.length && !played.length) {
+  if (!mine.length && !recent.length && !added.length && !played.length) {
     return (
       <>
         <EmptyState
           icon={Disc3}
           title="Nothing here yet."
-          description="Home lists tracks you played, tracks added to libraries you can see, and your most played. Start from Search or Library."
+          description="Home lists songs you requested, tracks you played, and the shared catalogue. Start from Search or My Library."
           action={{ label: "Search", onClick: () => nav("/search") }}
         />
         <div className="mt-4 flex justify-center gap-2">
-          <Button variant="secondary" onClick={() => nav("/library")}>Browse library</Button>
+          <Button variant="secondary" onClick={() => nav("/me/library")}>My Library</Button>
         </div>
       </>
     );
@@ -77,6 +78,15 @@ export function HomePage() {
         </Button>
         <LayoutToggle />
       </div>
+      {!!mine.length && (
+        <section>
+          <div className="mb-6 flex min-w-0 items-baseline gap-3">
+            <h1 className="text-3xl font-semibold">Your library</h1>
+            <Link to="/me/library" className="text-sm text-muted hover:underline">See all</Link>
+          </div>
+          <TrackSection tracks={mine} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
+        </section>
+      )}
       {!!recent.length && (
         <section>
           <div className="mb-6 flex min-w-0 items-baseline gap-3">

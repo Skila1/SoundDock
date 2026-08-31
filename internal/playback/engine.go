@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sounddock/sounddock/internal/minilib"
 )
 
 type requesterCtxKey struct{}
@@ -73,7 +74,18 @@ func insertQueueTrack(ctx context.Context, tx db, sid uuid.UUID, position int, t
 	_, err := tx.Exec(ctx, `
 		INSERT INTO playback_queue_items (session_id, position, track_id, origin, requested_by_user_id, requested_by_discord_user_id)
 		VALUES ($1,$2,$3,$4,$5,$6)`, sid, position, trackID, origin, userID, discordID)
-	return err
+	if err != nil {
+		return err
+	}
+	var uid uuid.UUID
+	if id, ok := userID.(uuid.UUID); ok {
+		uid = id
+	}
+	did := ""
+	if s, ok := discordID.(string); ok {
+		did = s
+	}
+	return minilib.Record(ctx, tx, origin, uid, did, []uuid.UUID{trackID})
 }
 
 type db interface {

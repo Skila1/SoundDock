@@ -51,8 +51,8 @@ export function LibraryLayout() {
         </div>
       ) : (
         <PageHeader
-          title="Library"
-          description="Your catalogue. Add files or import from a direct URL."
+          title="Catalogue"
+          description="Shared SoundDock media. Your requested songs live in My Library."
           actions={<AddActions />}
         />
       )}

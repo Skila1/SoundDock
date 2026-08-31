@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListMusic, Radio as RadioIcon } from "lucide-react";
 import { api } from "@/lib/api";
@@ -101,7 +102,8 @@ export function PlaylistsPage() {
   return (
     <div>
       <PageHeader
-        title="Playlists"
+        title="My Playlists"
+        description="Private collections you curate. Sharing stays off unless you mark a playlist public."
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={() => { location.href = "/radio"; }}><RadioIcon /> Radio</Button>
@@ -215,7 +217,12 @@ export function PlaylistsPage() {
           <div className="grid grid-cols-2 gap-5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
             {items.map((p) => (
               <div key={p.id} className="relative">
-                <MediaCard className="max-w-none min-w-0" to={`/playlists/${p.id}`} id={p.id} title={p.name} kind="playlist" />
+                <MediaCard className="max-w-none min-w-0" to={`/playlists/${p.id}`} id={p.id} title={p.name} subtitle={p.owner_name} kind="playlist" />
+                {p.user_id && p.user_id !== me.data?.id && (
+                  <Link to={`/users/${p.user_id}`} className="mt-1 block truncate text-[11px] text-subtle hover:underline">
+                    Open {p.owner_name || "owner"}&apos;s profile
+                  </Link>
+                )}
                 {p.provider && <Badge className="absolute left-2 top-2" tone="accent">{p.provider.replace("_", " ")}</Badge>}
                 {p.is_smart && <Badge className="absolute right-2 top-2" tone="neutral">Smart</Badge>}
               </div>

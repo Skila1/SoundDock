@@ -38,6 +38,7 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
   const [rg, setRg] = useState(user.replaygain_mode || "off");
   const [xf, setXf] = useState(String(user.crossfade_seconds || 0));
   const [lufs, setLufs] = useState(String(user.target_lufs ?? -18));
+  const [libVis, setLibVis] = useState(user.personal_library_visibility === "public" ? "public" : "private");
   const keysOn = usePrefs((s) => s.keyboardShortcuts);
   const setKeys = usePrefs((s) => s.setKeyboardShortcuts);
 
@@ -74,7 +75,8 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
               display_name: display,
               replaygain_mode: rg,
               crossfade_seconds: Number(xf),
-              target_lufs: Number(lufs)
+              target_lufs: Number(lufs),
+              personal_library_visibility: libVis
             });
             toast.success("Settings saved");
             onRefresh();
@@ -90,6 +92,16 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
         <Field label="Crossfade (seconds)"><Input type="number" min={0} max={12} value={xf} onChange={(e) => setXf(e.target.value)} /></Field>
         <Field label="Target loudness (LUFS)" hint="Quality preference on your account. Typical album target is −18.">
           <Input type="number" min={-30} max={-6} step={0.5} value={lufs} onChange={(e) => setLufs(e.target.value)} />
+        </Field>
+        <Field label="Personal library visibility" hint="Private keeps your requested songs to you. Public lets other signed-in listeners open your library.">
+          <Select
+            value={libVis}
+            onValueChange={setLibVis}
+            options={[
+              { value: "private", label: "Private" },
+              { value: "public", label: "Public" }
+            ]}
+          />
         </Field>
         <Button type="submit">Save</Button>
       </form>

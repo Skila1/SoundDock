@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { Download, GripVertical, History, ListMusic, ListPlus, PanelRightClose, Pin, PinOff, Play, Trash2, Undo2, X } from "lucide-react";
 import { fillableTrackIds, saveTracksOffline } from "@/lib/offlineFill";
 import { Button } from "@/components/ui/button";
@@ -189,7 +190,13 @@ export function QueuePanel({
           <div className="truncate text-xs text-muted">
             {item.artist || t?.artists?.map((a) => a.name).join(", ") || t?.artist || (opts.nowPlaying ? "Now playing" : "Up next")}
           </div>
-          {addedBy && <div className="truncate text-[11px] text-subtle">{addedBy}</div>}
+          {addedBy && item.requested_by?.user_id && item.requested_by.user_id !== me.data?.id ? (
+            <Link to={`/users/${item.requested_by.user_id}`} className="truncate text-[11px] text-subtle hover:underline">
+              {addedBy}
+            </Link>
+          ) : addedBy ? (
+            <div className="truncate text-[11px] text-subtle">{addedBy}</div>
+          ) : null}
         </div>
         {!opts.nowPlaying && (
           <>

@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
 	discordx "github.com/sounddock/sounddock/internal/discord"
+	"github.com/sounddock/sounddock/internal/minilib"
 	"github.com/sounddock/sounddock/internal/playback"
 )
 
@@ -233,7 +234,7 @@ func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, 502, "scapex", err.Error())
 			return
 		}
-		if err := s.Play.Replace(r.Context(), sid, ids, body.Start); err != nil {
+		if err := s.Play.Replace(s.withQueueRequester(r), sid, ids, body.Start); err != nil {
 			writeErr(w, 400, "queue", err.Error())
 			return
 		}
@@ -288,6 +289,7 @@ func (s *Server) discordCompleteLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE identity_link_challenges SET consumed_at=now(), user_id=$2 WHERE token_hash=$1`, hash, u.ID)
+	_ = minilib.Reconcile(r.Context(), s.Pool, u.ID, did)
 	if s.Audit != nil {
 		s.Audit.Event(r.Context(), &u.ID, "identity.link", "discord", r.RemoteAddr, nil)
 	}

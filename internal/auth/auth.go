@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
+	"github.com/sounddock/sounddock/internal/minilib"
 	"golang.org/x/crypto/argon2"
 )
 
@@ -24,16 +25,17 @@ var (
 )
 
 type User struct {
-	ID               uuid.UUID `json:"id"`
-	Username         string    `json:"username"`
-	Email            *string   `json:"email,omitempty"`
-	DisplayName      string    `json:"display_name"`
-	Disabled         bool      `json:"disabled"`
-	ReplayGainMode   string    `json:"replaygain_mode"`
-	CrossfadeSeconds int       `json:"crossfade_seconds"`
-	TargetLUFS       float64   `json:"target_lufs"`
-	Permissions      []string  `json:"permissions"`
-	IsAdmin          bool      `json:"is_admin"`
+	ID                        uuid.UUID `json:"id"`
+	Username                  string    `json:"username"`
+	Email                     *string   `json:"email,omitempty"`
+	DisplayName               string    `json:"display_name"`
+	Disabled                  bool      `json:"disabled"`
+	ReplayGainMode            string    `json:"replaygain_mode"`
+	CrossfadeSeconds          int       `json:"crossfade_seconds"`
+	TargetLUFS                float64   `json:"target_lufs"`
+	PersonalLibraryVisibility string    `json:"personal_library_visibility"`
+	Permissions               []string  `json:"permissions"`
+	IsAdmin                   bool      `json:"is_admin"`
 }
 
 type Session struct {
@@ -109,6 +111,7 @@ func (s *Service) CreateAdmin(ctx context.Context, username, password, email str
 	if err != nil {
 		return nil, err
 	}
+	_, _ = minilib.EnsureOwner(ctx, s.pool, id, "")
 	_, _ = s.pool.Exec(ctx, `UPDATE server_settings SET value='true'::jsonb WHERE key='setup_complete'`)
 	return s.GetUser(ctx, id)
 }
@@ -139,9 +142,10 @@ func (s *Service) Authenticate(ctx context.Context, identifier, password string)
 func (s *Service) GetUser(ctx context.Context, id uuid.UUID) (*User, error) {
 	u := &User{ID: id, Permissions: []string{}}
 	err := s.pool.QueryRow(ctx, `
-		SELECT username, email, display_name, disabled, replaygain_mode, crossfade_seconds, target_lufs
+		SELECT username, email, display_name, disabled, replaygain_mode, crossfade_seconds, target_lufs,
+			coalesce(personal_library_visibility, 'private')
 		FROM users WHERE id=$1`, id).
-		Scan(&u.Username, &u.Email, &u.DisplayName, &u.Disabled, &u.ReplayGainMode, &u.CrossfadeSeconds, &u.TargetLUFS)
+		Scan(&u.Username, &u.Email, &u.DisplayName, &u.Disabled, &u.ReplayGainMode, &u.CrossfadeSeconds, &u.TargetLUFS, &u.PersonalLibraryVisibility)
 	if err != nil {
 		return nil, err
 	}

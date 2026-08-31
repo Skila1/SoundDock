@@ -142,6 +142,9 @@ func remapLoser(ctx context.Context, q querier, winner, loser uuid.UUID) error {
 	if err := remapPlaylistEntries(ctx, q, winner, loser); err != nil {
 		return err
 	}
+	if err := remapPersonalLibraryEntries(ctx, q, winner, loser); err != nil {
+		return err
+	}
 	if err := remapFavourites(ctx, q, winner, loser); err != nil {
 		return err
 	}
@@ -244,6 +247,19 @@ func remapPlaylistEntries(ctx context.Context, q querier, winner, loser uuid.UUI
 		return err
 	}
 	return execRequired(ctx, q, `UPDATE playlist_entries SET track_id=$1 WHERE track_id=$2`, winner, loser)
+}
+
+func remapPersonalLibraryEntries(ctx context.Context, q querier, winner, loser uuid.UUID) error {
+	if err := execOptional(ctx, q, `
+		DELETE FROM personal_library_entries pe
+		WHERE pe.track_id=$2
+		  AND EXISTS (
+			SELECT 1 FROM personal_library_entries x
+			WHERE x.owner_id = pe.owner_id AND x.track_id=$1
+		  )`, winner, loser); err != nil {
+		return err
+	}
+	return execOptional(ctx, q, `UPDATE personal_library_entries SET track_id=$1 WHERE track_id=$2`, winner, loser)
 }
 
 func remapFavourites(ctx context.Context, q querier, winner, loser uuid.UUID) error {

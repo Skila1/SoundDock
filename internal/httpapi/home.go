@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/auth"
+	"github.com/sounddock/sounddock/internal/minilib"
 )
 
 func (s *Server) setFavourite(w http.ResponseWriter, r *http.Request) {
@@ -50,6 +51,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		"continue":       s.homeContinue(r, u),
 		"recently_added": s.homeRecentlyAdded(r, u),
 		"most_played":    s.homeMostPlayed(r, u),
+		"my_library":     s.homeMyLibrary(r, u),
 	})
 }
 
@@ -72,6 +74,31 @@ func homeMostPlayedSQL() string {
 		  AND ` + trackPlayablePred + `
 		ORDER BY pc.count DESC, pc.last_played_at DESC NULLS LAST
 		LIMIT 15`
+}
+
+func (s *Server) homeMyLibrary(r *http.Request, u *auth.User) []map[string]any {
+	o, err := minilib.OwnerByUser(r.Context(), s.Pool, u.ID)
+	if err != nil {
+		return []map[string]any{}
+	}
+	rows, err := s.Pool.Query(r.Context(), `
+		SELECT t.id, t.title, t.duration_ms, t.album_id, coalesce(al.title,'') AS album, `+listenArtistSQL+` AS artist
+		FROM personal_library_entries e
+		JOIN tracks t ON t.id = e.track_id
+		LEFT JOIN albums al ON al.id = t.album_id
+		WHERE e.owner_id=$1
+		  AND `+trackPlayablePred+`
+		ORDER BY e.last_requested_at DESC
+		LIMIT 15`, o.ID)
+	if err != nil {
+		return []map[string]any{}
+	}
+	defer rows.Close()
+	out := scanMaps(rows, "id", "title", "duration_ms", "album_id", "album", "artist")
+	if out == nil {
+		out = []map[string]any{}
+	}
+	return out
 }
 
 func (s *Server) homeContinue(r *http.Request, u *auth.User) []map[string]any {
@@ -160,7 +187,22 @@ func (s *Server) exportMe(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	writeJSON(w, 200, map[string]any{"user": u.Username, "exported_at": time.Now(), "favourites": favs, "history": hist, "playlists": pls})
+	lib := []map[string]any{}
+	if o, err := minilib.OwnerByUser(r.Context(), s.Pool, u.ID); err == nil && o.ID != uuid.Nil {
+		if rows, err := s.Pool.Query(r.Context(), `
+			SELECT track_id, first_requested_at, last_requested_at, request_count
+			FROM personal_library_entries WHERE owner_id=$1 ORDER BY last_requested_at DESC`, o.ID); err == nil {
+			defer rows.Close()
+			lib = scanMaps(rows, "track_id", "first_requested_at", "last_requested_at", "request_count")
+			if lib == nil {
+				lib = []map[string]any{}
+			}
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"user": u.Username, "exported_at": time.Now(), "favourites": favs, "history": hist, "playlists": pls,
+		"personal_library": map[string]any{"visibility": u.PersonalLibraryVisibility, "entries": lib},
+	})
 }
 
 func (s *Server) adminCreateUser(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +223,7 @@ func (s *Server) adminCreateUser(w http.ResponseWriter, r *http.Request) {
 		role = "User"
 	}
 	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name=$2`, id, role)
+	_, _ = minilib.EnsureOwner(r.Context(), s.Pool, id, "")
 	s.Audit.Event(r.Context(), &currentUser(r).ID, "user.create", body.Username, r.RemoteAddr, nil)
 	writeJSON(w, 201, map[string]any{"id": id})
 }

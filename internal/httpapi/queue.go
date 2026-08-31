@@ -773,11 +773,7 @@ func (s *Server) withQueueRequester(r *http.Request) context.Context {
 	if u == nil {
 		return playback.WithOrigin(ctx, playback.OriginUser)
 	}
-	discordID := ""
-	if _, ok := s.attachedBoundSession(r); ok {
-		discordID = s.discordUserID(r)
-	}
-	ctx = playback.WithRequester(ctx, u.ID, discordID)
+	ctx = playback.WithRequester(ctx, u.ID, s.discordUserID(r))
 	return playback.WithOrigin(ctx, playback.OriginUser)
 }
 

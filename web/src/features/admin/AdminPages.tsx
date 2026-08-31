@@ -34,12 +34,26 @@ export function AdminUsers() {
   const [filter, setFilter] = useState("");
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<AdminUserRow | null>(null);
+  const [discordInspect, setDiscordInspect] = useState("");
   const [form, setForm] = useState({ username: "", password: "", role: "User" });
   const rows = (q.data || []).filter((u) => `${u.username} ${u.display_name || ""} ${u.email || ""} ${u.discord_id || ""} ${u.discord_username || ""} ${u.role || ""}`.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div>
-      <PageHeader title="Users" description="Click a user to change access, unlink Discord, or delete them." actions={<Button onClick={() => setOpen(true)}>Create user</Button>} />
+      <PageHeader title="Users" description="Click a user to change access, unlink Discord, or inspect their personal library." actions={<Button onClick={() => setOpen(true)}>Create user</Button>} />
       <Input className="mb-4 max-w-sm" placeholder="Search users" value={filter} onChange={(e) => setFilter(e.target.value)} />
+      <form
+        className="mb-4 flex max-w-xl flex-wrap items-end gap-2"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const id = discordInspect.trim();
+          if (id) location.href = `/admin/discord-users/${encodeURIComponent(id)}/library`;
+        }}
+      >
+        <Field label="Inspect Discord-only library" hint="Snowflake ID. Use this for requesters who have not logged into the web app.">
+          <Input value={discordInspect} onChange={(e) => setDiscordInspect(e.target.value)} placeholder="Discord user ID" />
+        </Field>
+        <Button type="submit" variant="secondary" disabled={!discordInspect.trim()}>Open</Button>
+      </form>
       <div className="overflow-x-auto rounded-xl border border-border">
         <table className="w-full text-left text-sm">
           <thead className="bg-surface-2 text-muted"><tr><th className="p-3">User</th><th className="p-3">Discord</th><th className="p-3">Access</th><th className="p-3">Status</th><th className="p-3">Created</th></tr></thead>
@@ -187,6 +201,9 @@ function ManageUserDialog({
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" disabled={busy} onClick={saveAccess}>Save access</Button>
+              <Button type="button" variant="secondary" onClick={() => { location.href = `/admin/users/${user.id}/library`; }}>
+                Open personal library
+              </Button>
               {user.discord_id && (
                 <Button type="button" variant="secondary" disabled={busy} onClick={unlinkDiscord}>Unlink Discord</Button>
               )}

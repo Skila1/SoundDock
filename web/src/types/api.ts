@@ -8,8 +8,37 @@ export type User = {
   replaygain_mode: string;
   crossfade_seconds: number;
   target_lufs?: number;
+  personal_library_visibility?: "private" | "public";
   accent?: string;
   density?: "comfortable" | "compact";
+};
+
+export type PersonalLibraryOwner = {
+  user_id?: string;
+  display_name?: string;
+  discord_user_id?: string;
+  visibility: "private" | "public" | string;
+};
+
+export type PersonalLibraryTrack = Track & {
+  first_requested_at?: string;
+  last_requested_at?: string;
+  request_count?: number;
+};
+
+export type PersonalLibraryResponse = {
+  owner: PersonalLibraryOwner;
+  items: PersonalLibraryTrack[];
+  inspecting?: boolean;
+};
+
+export type PublicUserProfile = {
+  id: string;
+  display_name: string;
+  username: string;
+  personal_library_visibility: string;
+  personal_library_visible: boolean;
+  personal_library_track_count: number;
 };
 
 export type ArtistRef = { id: string; name: string; role?: string; position?: number };

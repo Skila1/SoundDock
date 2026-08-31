@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { Home, Library, Link2, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Search, Shield } from "lucide-react";
+import { Disc3, Home, Library, Link2, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Search, Shield } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -11,8 +11,9 @@ import type { User } from "@/types/api";
 const primary = [
   { to: "/", label: "Home", icon: Home, end: true },
   { to: "/search", label: "Search", icon: Search },
-  { to: "/library", label: "Library", icon: Library },
-  { to: "/playlists", label: "Playlists", icon: ListMusic },
+  { to: "/me/library", label: "My Library", icon: Library },
+  { to: "/playlists", label: "My Playlists", icon: ListMusic },
+  { to: "/library", label: "Catalogue", icon: Disc3 },
   { to: "/radio", label: "Radio", icon: Radio },
   { to: "/settings/connected", label: "Connected Services", icon: Link2 }
 ];

@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
+	"github.com/sounddock/sounddock/internal/minilib"
 )
 
 type DiscordProfile struct {
@@ -233,6 +234,7 @@ func (s *Service) createDiscordLocalUser(ctx context.Context, p DiscordProfile) 
 	if err := s.attachDiscordIdentity(ctx, uid, p); err != nil {
 		return uuid.Nil, err
 	}
+	_ = minilib.Reconcile(ctx, s.pool, uid, p.ID)
 	return uid, nil
 }
 
@@ -250,6 +252,7 @@ func (s *Service) UpsertDiscordUser(ctx context.Context, p DiscordProfile) (*Use
 	switch {
 	case err == nil:
 		_, _ = s.pool.Exec(ctx, `UPDATE user_identities SET provider_username=$2, avatar_hash=$3 WHERE provider='discord' AND provider_user_id=$1`, p.ID, strings.TrimSpace(p.Username), strings.TrimSpace(p.Avatar))
+		_ = minilib.Reconcile(ctx, s.pool, uid, p.ID)
 		if isDiscordStubUsername(existingName, p.ID) {
 			newName := DiscordAccountUsername(p)
 			if _, uerr := s.pool.Exec(ctx, `UPDATE users SET username=$2, display_name=$3, updated_at=now() WHERE id=$1`, uid, newName, display); uniqueViolation(uerr) {

@@ -83,10 +83,12 @@ func (s *Server) listPlaylists(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	folder := r.URL.Query().Get("folder")
 	q := `
-		SELECT p.id, p.name, p.description, p.collaborative, p.public, p.folder, p.created_at,
+		SELECT p.id, p.name, p.description, p.collaborative, p.public, p.folder, p.created_at, p.user_id,
+			coalesce(nullif(u.display_name,''), u.username),
 			ep.provider, ep.sync_mode, ep.last_sync_status, ep.external_playlist_id,
 			EXISTS(SELECT 1 FROM smart_playlist_rules s WHERE s.playlist_id=p.id)
 		FROM playlists p
+		JOIN users u ON u.id = p.user_id
 		LEFT JOIN external_playlists ep ON ep.sounddock_playlist_id = p.id
 		WHERE (p.user_id=$1 OR p.public=true OR p.id IN (SELECT playlist_id FROM playlist_collaborators WHERE user_id=$1))`
 	args := []any{u.ID}
@@ -101,7 +103,7 @@ func (s *Server) listPlaylists(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "name", "description", "collaborative", "public", "folder", "created_at", "provider", "sync_mode", "last_sync_status", "external_id", "is_smart"))
+	writeJSON(w, 200, scanMaps(rows, "id", "name", "description", "collaborative", "public", "folder", "created_at", "user_id", "owner_name", "provider", "sync_mode", "last_sync_status", "external_id", "is_smart"))
 }
 
 func (s *Server) listPlaylistFolders(w http.ResponseWriter, r *http.Request) {
