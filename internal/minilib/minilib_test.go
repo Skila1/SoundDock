@@ -8,7 +8,7 @@ import (
 	"github.com/sounddock/sounddock/internal/testdb"
 )
 
-// Dummy hash — users.password_hash is not verified in these tests.
+// Dummy hash: users.password_hash is not verified in these tests.
 const testPasswordHash = "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
 
 func TestCanSeePrivacy(t *testing.T) {
