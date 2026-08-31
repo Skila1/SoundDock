@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/artwork"
 	"github.com/sounddock/sounddock/internal/auth"
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/minilib"
@@ -401,6 +403,15 @@ func (s *Server) deleteTracks(w http.ResponseWriter, r *http.Request, ids []uuid
 }
 
 func (s *Server) serveArtwork(w http.ResponseWriter, r *http.Request, ownerType string, ownerID uuid.UUID) {
+	if !s.writeArtwork(w, r, ownerType, ownerID) {
+		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) writeArtwork(w http.ResponseWriter, r *http.Request, ownerType string, ownerID uuid.UUID) bool {
+	if s.Art == nil || ownerID == uuid.Nil {
+		return false
+	}
 	size := r.URL.Query().Get("size")
 	if size == "" {
 		size = "card"
@@ -412,15 +423,14 @@ func (s *Server) serveArtwork(w http.ResponseWriter, r *http.Request, ownerType 
 		WHERE a.owner_type=$1 AND a.owner_id=$2
 		ORDER BY a.created_at DESC LIMIT 1`, ownerType, ownerID, size).Scan(&key)
 	if err != nil {
-		http.NotFound(w, r)
-		return
+		return false
 	}
 	p, err := s.Art.File(key)
 	if err != nil {
-		http.NotFound(w, r)
-		return
+		return false
 	}
 	http.ServeFile(w, r, p)
+	return true
 }
 
 func (s *Server) trackArtwork(w http.ResponseWriter, r *http.Request) {
@@ -431,12 +441,48 @@ func (s *Server) trackArtwork(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	var albumID uuid.UUID
-	if err := s.Pool.QueryRow(r.Context(), `SELECT album_id FROM tracks WHERE id=$1`, id).Scan(&albumID); err != nil {
+	var albumID *uuid.UUID
+	var acq, acqRef string
+	if err := s.Pool.QueryRow(r.Context(), `
+		SELECT album_id, coalesce(acquisition,''), coalesce(acquisition_ref,'')
+		FROM tracks WHERE id=$1`, id).Scan(&albumID, &acq, &acqRef); err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	s.serveArtwork(w, r, "album", albumID)
+	if s.writeArtwork(w, r, "track", id) {
+		return
+	}
+	if albumID != nil && s.writeArtwork(w, r, "album", *albumID) {
+		return
+	}
+	if s.ensureYouTubeArtwork(r.Context(), id, albumID, acq, acqRef) {
+		if s.writeArtwork(w, r, "track", id) {
+			return
+		}
+		if albumID != nil && s.writeArtwork(w, r, "album", *albumID) {
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
+func (s *Server) ensureYouTubeArtwork(ctx context.Context, trackID uuid.UUID, albumID *uuid.UUID, acq, acqRef string) bool {
+	if s == nil || s.Art == nil {
+		return false
+	}
+	if acq != "youtube" && acq != "scapex" {
+		return false
+	}
+	img, err := artwork.FetchYouTubeThumb(ctx, acqRef)
+	if err != nil || len(img) == 0 {
+		return false
+	}
+	ownerType, ownerID := "track", trackID
+	if albumID != nil && *albumID != uuid.Nil {
+		ownerType, ownerID = "album", *albumID
+	}
+	_, err = s.Art.Save(ctx, ownerType, ownerID, "youtube", bytes.NewReader(img))
+	return err == nil
 }
 
 func (s *Server) albumArtwork(w http.ResponseWriter, r *http.Request) {

@@ -426,8 +426,18 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 			artSrc = "coverartarchive"
 		}
 	}
+	if len(probe.Picture) == 0 && acqRef != "" {
+		if img, ferr := artwork.FetchYouTubeThumb(ctx, acqRef); ferr == nil && len(img) > 0 {
+			probe.Picture = img
+			artSrc = "youtube"
+		}
+	}
 	if len(probe.Picture) > 0 && s.art != nil {
-		_, _ = s.art.Save(ctx, "album", albumID, artSrc, bytes.NewReader(probe.Picture))
+		ownerType, ownerID := "album", albumID
+		if albumID == uuid.Nil {
+			ownerType, ownerID = "track", trackID
+		}
+		_, _ = s.art.Save(ctx, ownerType, ownerID, artSrc, bytes.NewReader(probe.Picture))
 	}
 	if s.hook != nil {
 		s.hook.Emit(ctx, "track.added", map[string]any{"track_id": trackID, "library_id": libID})
