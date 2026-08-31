@@ -14,7 +14,6 @@ import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
-import { Badge } from "@/components/ui/misc";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { asListenTracks, type ListenTrack } from "@/features/stats/types";
@@ -127,7 +126,6 @@ export function QueuePanel({
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const items = (p.queue?.items || []).filter((i): i is PlayerQueueItem => !!i && typeof i.track_id === "string");
   const ids = items.map((i) => i.track_id);
-  const counts = ids.reduce((m, id) => m.set(id, (m.get(id) || 0) + 1), new Map<string, number>());
   const { data: tracks } = useQuery({
     queryKey: ["queue-tracks", ids],
     enabled: ids.length > 0 && view === "queue",
@@ -162,7 +160,6 @@ export function QueuePanel({
 
   const row = (item: PlayerQueueItem, i: number, opts: { nowPlaying?: boolean }) => {
     const t = map.get(item.track_id);
-    const dup = (counts.get(item.track_id) || 0) > 1;
     const addedBy = !opts.nowPlaying ? addedByLabel(item.requested_by, me.data?.id, p.listeners) : null;
     const body = (
       <div
@@ -183,10 +180,7 @@ export function QueuePanel({
           <Artwork src={artworkUrl("track", item.track_id, "thumb")} id={item.track_id} name={t?.title} kind="track" size="sm" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <div className="truncate text-sm">{item.title || t?.title || "Track"}</div>
-            {dup && <Badge tone="warning">Duplicate</Badge>}
-          </div>
+          <div className="truncate text-sm">{item.title || t?.title || "Track"}</div>
           <div className="truncate text-xs text-muted">
             {item.artist || t?.artists?.map((a) => a.name).join(", ") || t?.artist || (opts.nowPlaying ? "Now playing" : "Up next")}
           </div>
