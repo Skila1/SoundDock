@@ -13,7 +13,7 @@ import { activeLyricIndex, activeWordIndex, hasPlainBody, karaokeLines, lyricsQu
 
 function useSmoothPosition(storePos: number, playing: boolean, rate: number) {
   const [pos, setPos] = useState(storePos);
-  const base = useRef({ storePos, at: performance.now(), playing, rate });
+  const base = useRef({ storePos, at: 0, playing, rate });
 
   useEffect(() => {
     base.current = { storePos, at: performance.now(), playing, rate };
