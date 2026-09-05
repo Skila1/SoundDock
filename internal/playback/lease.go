@@ -9,7 +9,7 @@ import (
 )
 
 // AcquireBrowserRenderer CAS-grants a browser renderer lease.
-// expectedGeneration==0 is a user-gesture steal of none/browser (not discord).
+// expectedGeneration==0 is a user-gesture steal of none/browser/discord.
 // expectedGeneration!=0 requires a matching generation or an empty (none) holder.
 func (e *Engine) AcquireBrowserRenderer(ctx context.Context, sessionID uuid.UUID, clientRendererID string, expectedGeneration int64) (int64, error) {
 	unlock := e.lockSessions(sessionID)
@@ -118,7 +118,7 @@ func casAcquireBrowser(ctx context.Context, q db, sessionID uuid.UUID, clientRen
 			SET renderer_kind=$2, renderer_id=$3,
 				renderer_generation=COALESCE(renderer_generation,0)+1,
 				renderer_heartbeat_at=now(), updated_at=now()
-			WHERE id=$1 AND renderer_kind IN ('none','browser')
+			WHERE id=$1 AND renderer_kind IN ('none','browser','discord')
 			RETURNING renderer_generation`, sessionID, RendererBrowser, clientRendererID).Scan(&gen)
 	} else {
 		err = q.QueryRow(ctx, `

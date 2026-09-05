@@ -457,11 +457,12 @@ function tabId() {
 }
 
 function usingDiscord() {
-  const q = usePlayer.getState().queue;
-  if (q?.output_pref === "discord" || q?.renderer_kind === "discord" || q?.kind === "discord_guild") {
-    return true;
-  }
-  return false;
+  const s = usePlayer.getState();
+  if (loadDevicePrefs().outputManual === "browser") return false;
+  if (s.output === "browser") return false;
+  if (s.queue?.output_pref === "browser") return false;
+  if (s.queue?.output_pref === "discord") return true;
+  return s.queue?.renderer_kind === "discord" && s.output === "discord";
 }
 
 function interpolatedNow(): number {
@@ -479,7 +480,13 @@ function interpolatedNow(): number {
 
 function patchFromSession(view: SessionView, extra: Record<string, unknown> = {}) {
   const q = view.queue as PlayerQueue;
-  const output = q.output_pref === "discord" || q.output_pref === "browser" ? q.output_pref : usePlayer.getState().output;
+  const locked = loadDevicePrefs().outputManual;
+  const output =
+    locked === "browser"
+      ? "browser"
+      : q.output_pref === "discord" || q.output_pref === "browser"
+        ? q.output_pref
+        : usePlayer.getState().output;
   return {
     queue: q,
     playing: q.status === "playing",
@@ -645,7 +652,6 @@ function ensureSessionPoll() {
 }
 
 async function acquireBrowserLease(): Promise<boolean> {
-  if (usingDiscord()) return false;
   const id = tabId();
   if (tabOwnsBrowserLease(session.queue, id) && session.queue.output_pref !== "discord") return true;
   askRendererTabsToStop();
@@ -697,12 +703,8 @@ async function startLocal(id: string, positionMsValue: number, shouldPlay: boole
     }
     return false;
   }
-  if (usingDiscord() || shouldStopHtmlAudio(session.queue, tabId())) {
-    pauseAll();
-    return false;
-  }
   const owns = await acquireBrowserLease();
-  if (!owns || !tabOwnsBrowserLease(session.queue, tabId())) {
+  if (!owns || usingDiscord() || shouldStopHtmlAudio(session.queue, tabId())) {
     pauseAll();
     return false;
   }
@@ -728,7 +730,7 @@ function hintPayload(ids: string[], hints?: QueueTrackHint[]) {
 }
 
 function canPlayOnDiscord() {
-  return loadDevicePrefs().outputManual !== "browser" && discordReady(usePlayer.getState().voice);
+  return loadDevicePrefs().outputManual === "discord" && discordReady(usePlayer.getState().voice);
 }
 
 function dropToBrowser() {
@@ -770,13 +772,13 @@ async function appendToQueue(ids: string[], next?: boolean, hints?: QueueTrackHi
     toast.message("Getting it from YouTube…");
   }
   await usePlayer.getState().pollVoice();
-  if (discordReady(usePlayer.getState().voice) && loadDevicePrefs().outputManual !== "browser") {
+  if (canPlayOnDiscord()) {
     try {
       await joinDiscord();
     } catch {
       usePlayer.setState({ output: "browser" });
     }
-  } else if (loadDevicePrefs().outputManual !== "browser") {
+  } else if (loadDevicePrefs().outputManual !== "discord") {
     usePlayer.setState({ output: "browser" });
   }
   const prev = usePlayer.getState();
@@ -1391,9 +1393,11 @@ export const usePlayer = create<PlayerStore>()(
         const output =
           manual === "browser" || voice?.discord_enabled === false
             ? "browser"
-            : discordReady(voice)
+            : manual === "discord" && discordReady(voice)
               ? "discord"
-              : cur || "discord";
+              : cur === "discord" && discordReady(voice)
+                ? "discord"
+                : "browser";
         set({ voice, output });
         ensureSessionPoll();
       },

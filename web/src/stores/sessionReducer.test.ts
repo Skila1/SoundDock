@@ -121,8 +121,8 @@ describe("output switch helpers", () => {
     expect(applied.stopAudio).toBe(true);
   });
 
-  it("stops HTMLAudio when output_pref is discord", () => {
-    expect(shouldStopHtmlAudio(snap({ output_pref: "discord", renderer_kind: "discord" }), "tab-a")).toBe(true);
+  it("does not treat a Discord renderer as another browser tab", () => {
+    expect(shouldStopHtmlAudio(snap({ output_pref: "discord", renderer_kind: "discord" }), "tab-a")).toBe(false);
   });
 
   it("unlinked user GET does not keep a guild queue", () => {
