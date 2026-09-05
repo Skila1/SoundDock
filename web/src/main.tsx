@@ -7,11 +7,6 @@ import { App } from "./App";
 import { ErrorBoundary } from "./app/ErrorBoundary";
 import "./index.css";
 
-type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
-};
-
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <ErrorBoundary>
@@ -35,22 +30,9 @@ const updateSW = registerSW({
   }
 });
 
-window.addEventListener("beforeinstallprompt", (event) => {
-  event.preventDefault();
+window.addEventListener("beforeinstallprompt", () => {
+  // Do not preventDefault — Chrome logs a warning unless we also call prompt().
   if (sessionStorage.getItem("sd-install-toast") === "1") return;
-  const install = event as BeforeInstallPromptEvent;
-  const seen = () => sessionStorage.setItem("sd-install-toast", "1");
-  window.setTimeout(() => {
-    toast("Install SoundDock", {
-      description: "Add the app for offline playback of tracks you save.",
-      action: {
-        label: "Install",
-        onClick: () => void install.prompt()
-      },
-      closeButton: true,
-      duration: 4000,
-      onDismiss: seen,
-      onAutoClose: seen
-    });
-  }, 400);
+  sessionStorage.setItem("sd-install-toast", "1");
+  toast("Install SoundDock from the browser menu for offline playback.");
 });

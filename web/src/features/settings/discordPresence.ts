@@ -2,14 +2,16 @@ import { api } from "@/lib/api";
 import { usePlayer } from "@/stores/player";
 
 const STORAGE_KEY = "sd-discord-presence";
-const FAIL_BACKOFF_MS = 45_000;
 const ACTIVITY_DEBOUNCE_MS = 400;
+
+/** Discord desktop RPC. Only 6463 — walking 6463–6472 floods the console when Discord is closed. */
+const RPC_PORT = 6463;
 
 let subscribed = false;
 let ws: WebSocket | null = null;
 let clientId = "";
 let opening: Promise<WebSocket | null> | null = null;
-let lastFailAt = 0;
+let rpcUnavailable = false;
 let lastActivityKey = "";
 let activityTimer: number | undefined;
 let unsub: (() => void) | null = null;
@@ -21,10 +23,6 @@ type Activity = {
   playing: boolean;
   startedAt?: number;
 };
-
-function ports() {
-  return Array.from({ length: 10 }, (_, i) => 6463 + i);
-}
 
 function rpcFrame(cmd: string, args: Record<string, unknown>) {
   return JSON.stringify({ cmd, args, nonce: crypto.randomUUID() });
@@ -58,10 +56,10 @@ function abandon(socket: WebSocket) {
   }
 }
 
-function connect(port: number, id: string): Promise<WebSocket> {
+function connect(id: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const socket = new WebSocket(`ws://127.0.0.1:${port}/?v=1&client_id=${encodeURIComponent(id)}&encoding=json`);
+    const socket = new WebSocket(`ws://127.0.0.1:${RPC_PORT}/?v=1&client_id=${encodeURIComponent(id)}&encoding=json`);
     const finish = (ok: boolean, err?: Error) => {
       if (settled) return;
       settled = true;
@@ -72,7 +70,7 @@ function connect(port: number, id: string): Promise<WebSocket> {
         reject(err || new Error("ws error"));
       }
     };
-    const t = window.setTimeout(() => finish(false, new Error("timeout")), 1200);
+    const t = window.setTimeout(() => finish(false, new Error("timeout")), 800);
     socket.onopen = () => finish(true);
     socket.onerror = () => finish(false, new Error("ws error"));
   });
@@ -102,35 +100,32 @@ function waitReady(socket: WebSocket, ms = 2000): Promise<void> {
 }
 
 async function openRPC(id: string) {
+  if (rpcUnavailable) return null;
   if (ws && ws.readyState === WebSocket.OPEN) return ws;
   if (opening) return opening;
-  if (Date.now() - lastFailAt < FAIL_BACKOFF_MS) return null;
   opening = (async () => {
-    for (const p of ports()) {
+    try {
+      const socket = await connect(id);
       try {
-        const socket = await connect(p, id);
-        try {
-          await waitReady(socket);
-        } catch {
-          /* some Discord builds accept SET_ACTIVITY without READY */
-        }
-        ws = socket;
-        socket.onclose = () => {
-          if (ws === socket) ws = null;
-        };
-        socket.onerror = () => {
-          if (ws === socket) {
-            ws = null;
-            lastFailAt = Date.now();
-          }
-        };
-        return socket;
+        await waitReady(socket);
       } catch {
-        /* try next Discord RPC port */
+        /* some Discord builds accept SET_ACTIVITY without READY */
       }
+      ws = socket;
+      socket.onclose = () => {
+        if (ws === socket) ws = null;
+      };
+      socket.onerror = () => {
+        if (ws === socket) {
+          ws = null;
+          rpcUnavailable = true;
+        }
+      };
+      return socket;
+    } catch {
+      rpcUnavailable = true;
+      return null;
     }
-    lastFailAt = Date.now();
-    return null;
   })().finally(() => {
     opening = null;
   });
@@ -139,6 +134,7 @@ async function openRPC(id: string) {
 
 async function setActivity(act: Activity | null) {
   if (!clientId || !enabled()) return;
+  if (rpcUnavailable && ws?.readyState !== WebSocket.OPEN) return;
   const key = activityKey(act);
   if (key === lastActivityKey && ws?.readyState === WebSocket.OPEN) return;
   const socket = await openRPC(clientId);
@@ -184,7 +180,7 @@ function activityFromPlayer(): Activity | null {
 }
 
 function queueActivitySync() {
-  if (!enabled()) return;
+  if (!enabled() || rpcUnavailable) return;
   if (activityTimer) window.clearTimeout(activityTimer);
   activityTimer = window.setTimeout(() => {
     setActivity(activityFromPlayer()).catch(() => undefined);
@@ -195,7 +191,7 @@ function attachPlayer() {
   if (subscribed) return;
   subscribed = true;
   unsub = usePlayer.subscribe((s, prev) => {
-    if (!enabled()) return;
+    if (!enabled() || rpcUnavailable) return;
     if (s.current?.id === prev.current?.id && s.playing === prev.playing && s.current?.title === prev.current?.title) {
       return;
     }
@@ -210,13 +206,16 @@ export function setDiscordPresenceEnabled(on: boolean) {
     /* ignore */
   }
   lastActivityKey = "";
-  lastFailAt = 0;
   if (on) {
+    rpcUnavailable = false;
     void ensureDiscordPresence().then(() => syncDiscordPresence());
   } else {
-    setActivity(null).catch(() => undefined);
+    if (ws?.readyState === WebSocket.OPEN) {
+      setActivity(null).catch(() => undefined);
+    }
     if (ws) abandon(ws);
     ws = null;
+    rpcUnavailable = true;
   }
 }
 
@@ -242,11 +241,12 @@ export async function ensureDiscordPresence() {
     /* unauthenticated or bot not configured */
   }
   attachPlayer();
-  if (enabled()) await syncDiscordPresence();
+  // Do not open localhost RPC on boot. Discord desktop is ws://127.0.0.1:6463 on this
+  // machine; failed probes show up as console errors even when the app is behind cloudflared.
 }
 
 export async function syncDiscordPresence() {
-  if (!enabled()) return;
+  if (!enabled() || rpcUnavailable) return;
   lastActivityKey = "";
   await setActivity(activityFromPlayer());
 }
@@ -261,6 +261,6 @@ export function resetDiscordPresenceForTests() {
   ws = null;
   opening = null;
   clientId = "";
-  lastFailAt = 0;
+  rpcUnavailable = false;
   lastActivityKey = "";
 }

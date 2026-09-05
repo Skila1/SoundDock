@@ -66,6 +66,7 @@ func (e *Engine) BindGuildSession(ctx context.Context, guildID string, sessionID
 		if err := tx.Commit(ctx); err != nil {
 			return BindResult{}, err
 		}
+		e.ReapOrphanPlaying(ctx, sessionID)
 		return BindResult{BindingRevision: curRev, SessionID: sessionID, StateRevision: sessionStateRevision(ctx, e.pool, sessionID)}, nil
 	}
 
@@ -103,6 +104,7 @@ func (e *Engine) BindGuildSession(ctx context.Context, guildID string, sessionID
 	if err := tx.Commit(ctx); err != nil {
 		return BindResult{}, err
 	}
+	e.ReapOrphanPlaying(ctx, sessionID)
 	return BindResult{BindingRevision: newRev, SessionID: sessionID, StateRevision: stateRev}, nil
 }
 
@@ -182,6 +184,7 @@ func (e *Engine) BindDiscordRenderer(ctx context.Context, guildID string, sessio
 	if err := tx.Commit(ctx); err != nil {
 		return BindResult{}, err
 	}
+	e.ReapOrphanPlaying(ctx, sessionID)
 	return BindResult{BindingRevision: newRev, SessionID: sessionID, StateRevision: stateRev}, nil
 }
 

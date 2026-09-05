@@ -392,10 +392,12 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.UUID, st map[string]any) {
 	sess := b.session()
 	if sess == nil {
+		b.recordPlaybackError(ctx, guildID, trackID, "voice", "discord session missing")
 		return
 	}
 	vc, ok := sess.VoiceConnections[guildID]
 	if !ok || vc == nil {
+		b.recordPlaybackError(ctx, guildID, trackID, "voice", "not connected to voice")
 		return
 	}
 	if !waitVoiceReady(vc, 15*time.Second) {
@@ -483,6 +485,9 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 			break
 		}
 		if !sendOpus(ctx, vc, pkt) {
+			if ctx.Err() == nil {
+				b.recordPlaybackError(ctx, guildID, trackID, "voice", "opus send failed")
+			}
 			return
 		}
 		elapsed := startMS + int(time.Since(started).Milliseconds())
@@ -497,6 +502,7 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 				}
 			}
 			if instanceID == uuid.Nil {
+				b.recordPlaybackError(ctx, guildID, trackID, "playhead", "playback instance missing")
 				return
 			}
 			if err := b.play.CheckpointPlayhead(ctx, sid, instanceID, elapsed); err != nil {

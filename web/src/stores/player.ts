@@ -457,9 +457,11 @@ function tabId() {
 }
 
 function usingDiscord() {
-  const s = usePlayer.getState();
-  if (loadDevicePrefs().outputManual === "browser") return false;
-  return s.queue?.output_pref === "discord" || s.queue?.renderer_kind === "discord" || s.queue?.kind === "discord_guild";
+  const q = usePlayer.getState().queue;
+  if (q?.output_pref === "discord" || q?.renderer_kind === "discord" || q?.kind === "discord_guild") {
+    return true;
+  }
+  return false;
 }
 
 function interpolatedNow(): number {

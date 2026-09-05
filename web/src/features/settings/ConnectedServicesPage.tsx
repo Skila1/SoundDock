@@ -291,7 +291,7 @@ export function ConnectedServicesPage() {
                 {presence ? <Badge tone="success">On</Badge> : <Badge>Off</Badge>}
               </div>
               <p className="mt-1 text-xs text-subtle">
-                Shows the web player as Listening on the Discord desktop client (localhost RPC). Does not replace guild voice playback.
+                Optional. Talks to the Discord desktop app on this computer only (not the Cloudflare tunnel). Leave off if Discord is not running locally.
               </p>
             </div>
             <Switch

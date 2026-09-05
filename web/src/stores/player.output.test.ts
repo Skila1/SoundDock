@@ -330,6 +330,44 @@ describe("output switch", () => {
     expect(play).not.toHaveBeenCalled();
   });
 
+  it("treats a live Discord session as Discord even if the device pref is browser", async () => {
+    localStorage.setItem(
+      "sd-device",
+      JSON.stringify({ deviceId: "dev-1", outputManual: "browser", sinkId: "", autoplay: false, visualizer: false, playbackRate: 1 })
+    );
+    const q = queue({
+      output_pref: "discord",
+      renderer_kind: "discord",
+      renderer_id: "bot-1",
+      binding_revision: 4
+    });
+    resetPlayerSessionForTests({
+      ...initialSession(),
+      lastAppliedRevision: 4,
+      lastPlayheadSequence: 4,
+      lastInstanceId: "inst-1",
+      lastBindingRevision: 4,
+      lastBindingByGuild: { g1: 4 },
+      queue: q
+    });
+    usePlayer.setState({
+      queue: q,
+      playing: true,
+      output: "browser",
+      voice,
+      current: { id: "t1", title: "Song" },
+      position: 8_000,
+      duration: 180_000
+    });
+    const play = vi.spyOn(engine, "playActive").mockResolvedValue(undefined);
+    vi.mocked(api.get).mockResolvedValue(q);
+
+    await usePlayer.getState().syncDiscordQueue();
+
+    expect(play).not.toHaveBeenCalled();
+    expect(engine.htmlAudioPaused()).toBe(true);
+  });
+
   it("stops HTMLAudio immediately when GET renderer_id is not this tab", async () => {
     seedBrowserPlaying();
     const pause = vi.spyOn(engine, "pauseAll");

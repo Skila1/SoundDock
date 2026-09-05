@@ -204,6 +204,48 @@ func TestExpirePayloadJSON(t *testing.T) {
 	}
 }
 
+func TestReapOrphanPlayingStopsStaleWebNone(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	e := New(pool)
+	userID := uuid.New()
+	username := "reap-" + userID.String()[:8]
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, username, password_hash, display_name) VALUES ($1,$2,'x',$2)`, userID, username); err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM playback_sessions WHERE user_id=$1 OR owner_key LIKE $2`, userID, userID.String()+":%")
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+
+	var keep, zombie, fresh uuid.UUID
+	if err := pool.QueryRow(ctx, `INSERT INTO playback_sessions (kind, owner_key, user_id, status, renderer_kind) VALUES ('discord_guild',$1,$2,'playing','discord') RETURNING id`, userID.String()+":guild", userID).Scan(&keep); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO playback_sessions (kind, owner_key, user_id, status, renderer_kind, updated_at) VALUES ('web_device',$1,$2,'playing','none', now() - interval '3 minutes') RETURNING id`, userID.String()+":web", userID).Scan(&zombie); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `INSERT INTO playback_sessions (kind, owner_key, user_id, status, renderer_kind) VALUES ('web_device',$1,$2,'playing','none') RETURNING id`, userID.String()+":fresh", userID).Scan(&fresh); err != nil {
+		t.Fatal(err)
+	}
+
+	e.ReapOrphanPlaying(ctx, keep)
+
+	var zStatus, fStatus string
+	if err := pool.QueryRow(ctx, `SELECT status FROM playback_sessions WHERE id=$1`, zombie).Scan(&zStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT status FROM playback_sessions WHERE id=$1`, fresh).Scan(&fStatus); err != nil {
+		t.Fatal(err)
+	}
+	if zStatus != "stopped" {
+		t.Fatalf("zombie status %s", zStatus)
+	}
+	if fStatus != "playing" {
+		t.Fatalf("fresh status %s", fStatus)
+	}
+}
+
 func mustTime(s string) time.Time {
 	tm, err := time.Parse(time.RFC3339, s)
 	if err != nil {

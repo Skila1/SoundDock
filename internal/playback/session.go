@@ -76,3 +76,21 @@ func (e *Engine) WebSession(ctx context.Context, userID uuid.UUID, deviceID stri
 		VALUES ('web_device',$1,$2,$3,$3) RETURNING id`, key, uid, deviceID).Scan(&id)
 	return id, err
 }
+
+// ReapOrphanPlaying stops stale web sessions that stayed "playing" with no renderer.
+// Those rows steal attach/seek from the live Discord session.
+func (e *Engine) ReapOrphanPlaying(ctx context.Context, keep uuid.UUID) {
+	if e == nil || e.pool == nil {
+		return
+	}
+	_, _ = e.pool.Exec(ctx, `
+		UPDATE playback_sessions
+		SET status='stopped', updated_at=now()
+		WHERE id <> $1
+		  AND status='playing'
+		  AND kind='web_device'
+		  AND (
+		    (coalesce(renderer_kind,'none')='none' AND updated_at < now() - interval '90 seconds')
+		    OR updated_at < now() - interval '24 hours'
+		  )`, keep)
+}

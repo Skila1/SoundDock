@@ -100,7 +100,7 @@ func DefaultConfigs() Configs {
 		},
 		PoolMaintenance: {
 			Enabled: true, MinWorkers: 0, MaxWorkers: 2,
-			QueueLimit: 64, TimeoutSeconds: 1800, Priority: 20, MaxRSSMB: 256,
+			QueueLimit: 64, TimeoutSeconds: 3600, Priority: 20, MaxRSSMB: 256,
 		},
 	}
 }
