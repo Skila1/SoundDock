@@ -117,16 +117,12 @@ func (b *Bot) voiceChannelForGuild(guildID string) string {
 const staleBrowserLease = 45 * time.Second
 
 // shouldClaimDiscordLease is true when this worker may CAS-claim Discord.
-// Never steal a Browser holder. Guild-native sessions may claim despite the
-// schema default output_pref=browser so slash /play can emit PCM.
+// A live Browser tab still wins. An empty holder (closed or refreshed tab)
+// must be claimable even if leftover output_pref is browser.
 func shouldClaimDiscordLease(kind, outputPref, rendererKind string) bool {
-	if rendererKind == playback.RendererBrowser {
-		return false
-	}
-	if outputPref == playback.OutputDiscord {
-		return true
-	}
-	return kind == "discord_guild"
+	_ = kind
+	_ = outputPref
+	return rendererKind != playback.RendererBrowser
 }
 
 // shouldEmitDiscordPCM is true only when this worker holds the Discord lease

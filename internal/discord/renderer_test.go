@@ -71,8 +71,8 @@ func TestShouldClaimDiscordLeaseNeverStealsBrowser(t *testing.T) {
 	if shouldClaimDiscordLease("web_device", playback.OutputDiscord, playback.RendererBrowser) {
 		t.Fatal("must never steal browser")
 	}
-	if shouldClaimDiscordLease("web_device", playback.OutputBrowser, playback.RendererNone) {
-		t.Fatal("HTTP-bound web session with browser pref must not claim")
+	if !shouldClaimDiscordLease("web_device", playback.OutputBrowser, playback.RendererNone) {
+		t.Fatal("empty holder must claim so Discord works with the web tab closed")
 	}
 	if !shouldClaimDiscordLease("web_device", playback.OutputDiscord, playback.RendererNone) {
 		t.Fatal("explicit discord output on an empty holder may claim")
