@@ -8,6 +8,7 @@ import { PlayerBar } from "@/components/player/PlayerBar";
 import { QueuePanel } from "@/components/player/QueuePanel";
 import { QueueSheet } from "@/components/player/QueueSheet";
 import { NowPlaying } from "@/components/player/NowPlaying";
+import { LyricsPrefetch, LyricsView } from "@/components/player/LyricsView";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { PrefsSync } from "@/stores/prefs";
@@ -68,6 +69,8 @@ export function AppShell({ user }: { user: User }) {
       <MobileNav />
       <QueueSheet />
       <NowPlaying />
+      <LyricsView />
+      <LyricsPrefetch />
       <Sheet open={ui.mobileNav} onOpenChange={(v) => ui.set({ mobileNav: v })}>
         <SheetContent side="left" title="Menu">
           <div className="mt-8" onClick={() => ui.set({ mobileNav: false })}>

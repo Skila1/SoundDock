@@ -46,10 +46,17 @@ type Result struct {
 	Source string
 }
 
-// Line is one synced lyric cue.
-type Line struct {
+// Word is one timed token inside a Line (enhanced LRC, A2, or interpolated).
+type Word struct {
 	Tms  int    `json:"t_ms"`
 	Text string `json:"text"`
+}
+
+// Line is one synced lyric cue.
+type Line struct {
+	Tms   int    `json:"t_ms"`
+	Text  string `json:"text"`
+	Words []Word `json:"words,omitempty"`
 }
 
 // Config is the admin lyrics setting. Local (embedded + on-disk) is the default.

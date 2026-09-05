@@ -242,6 +242,83 @@ func TestParseLines(t *testing.T) {
 	if lines[1].Tms != 62500 || lines[1].Text != "world" {
 		t.Fatalf("second %+v", lines[1])
 	}
+	if len(lines[0].Words) != 1 || lines[0].Words[0].Text != "hello" || lines[0].Words[0].Tms != 12000 {
+		t.Fatalf("interpolated first words %+v", lines[0].Words)
+	}
+}
+
+func TestParseLinesEnhancedWords(t *testing.T) {
+	lines := ParseLines("[00:12.00] <00:12.05> Hello <00:12.50> world\n[00:15.00] next")
+	if len(lines) != 2 {
+		t.Fatalf("len %d", len(lines))
+	}
+	if lines[0].Text != "Hello world" {
+		t.Fatalf("text %q", lines[0].Text)
+	}
+	if len(lines[0].Words) != 2 {
+		t.Fatalf("words %+v", lines[0].Words)
+	}
+	if lines[0].Words[0].Tms != 12050 || lines[0].Words[0].Text != "Hello" {
+		t.Fatalf("w0 %+v", lines[0].Words[0])
+	}
+	if lines[0].Words[1].Tms != 12500 || lines[0].Words[1].Text != "world" {
+		t.Fatalf("w1 %+v", lines[0].Words[1])
+	}
+}
+
+func TestParseLinesA2Words(t *testing.T) {
+	lines := ParseLines("[00:12.00]Hel[00:12.30]lo [00:12.80]world")
+	if len(lines) != 1 {
+		t.Fatalf("len %d", len(lines))
+	}
+	if lines[0].Tms != 12000 || lines[0].Text != "Hello world" {
+		t.Fatalf("line %+v", lines[0])
+	}
+	if len(lines[0].Words) != 3 {
+		t.Fatalf("words %+v", lines[0].Words)
+	}
+	if lines[0].Words[0].Text != "Hel" || lines[0].Words[0].Tms != 12000 {
+		t.Fatalf("w0 %+v", lines[0].Words[0])
+	}
+	if lines[0].Words[1].Text != "lo" || lines[0].Words[1].Tms != 12300 {
+		t.Fatalf("w1 %+v", lines[0].Words[1])
+	}
+	if lines[0].Words[2].Text != "world" || lines[0].Words[2].Tms != 12800 {
+		t.Fatalf("w2 %+v", lines[0].Words[2])
+	}
+}
+
+func TestParseLinesInterpolatesWordsAcrossLine(t *testing.T) {
+	lines := ParseLines("[00:00.00] Hello beautiful world\n[00:04.00] next")
+	if len(lines) != 2 {
+		t.Fatalf("len %d", len(lines))
+	}
+	got := lines[0].Words
+	if len(got) != 3 {
+		t.Fatalf("words %+v", got)
+	}
+	if got[0].Tms != 0 || got[0].Text != "Hello" {
+		t.Fatalf("w0 %+v", got[0])
+	}
+	if got[1].Text != "beautiful" || got[1].Tms <= got[0].Tms {
+		t.Fatalf("w1 %+v", got[1])
+	}
+	if got[2].Text != "world" || got[2].Tms <= got[1].Tms || got[2].Tms >= 4000 {
+		t.Fatalf("w2 %+v", got[2])
+	}
+}
+
+func TestParseLinesDuplicateLeadingStamps(t *testing.T) {
+	lines := ParseLines("[00:12.00][00:15.00] hello")
+	if len(lines) != 2 {
+		t.Fatalf("len %d", len(lines))
+	}
+	if lines[0].Tms != 12000 || lines[1].Tms != 15000 {
+		t.Fatalf("times %d %d", lines[0].Tms, lines[1].Tms)
+	}
+	if lines[0].Text != "hello" || lines[1].Text != "hello" {
+		t.Fatalf("text %+v", lines)
+	}
 }
 
 func TestFetchLRCLIBRefusesUnknownHost(t *testing.T) {

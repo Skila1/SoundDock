@@ -168,6 +168,11 @@ func TestGetTrackLyricsEmbeddedDB(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("lines %v", out["lines"])
 	}
+	row, _ := lines[0].(map[string]any)
+	words, _ := row["words"].([]any)
+	if len(words) != 1 {
+		t.Fatalf("words %v", row["words"])
+	}
 }
 
 func TestAdminLyricsPutDB(t *testing.T) {

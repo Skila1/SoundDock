@@ -406,15 +406,21 @@ export type DuplicateReviewMergeRequest = {
   loser_ids: string[];
 };
 
+export type LyricsWord = {
+  t_ms: number;
+  text: string;
+};
+
 export type LyricsLine = {
   t_ms: number;
   text: string;
+  words?: LyricsWord[];
 };
 
 export type TrackLyrics = {
   body: string;
   timed: boolean;
-  source: string;
+  source?: string;
   lines?: LyricsLine[];
 };
 

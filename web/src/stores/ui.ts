@@ -9,6 +9,7 @@ type UiState = {
   sidebarOpen: boolean;
   queueOpen: boolean;
   nowPlayingOpen: boolean;
+  lyricsOpen: boolean;
   commandOpen: boolean;
   mobileNav: boolean;
   navCollapsed: boolean;
@@ -27,6 +28,7 @@ export const useUi = create<UiState>()(
       sidebarOpen: true,
       queueOpen: false,
       nowPlayingOpen: false,
+      lyricsOpen: false,
       commandOpen: false,
       mobileNav: false,
       navCollapsed: false,
