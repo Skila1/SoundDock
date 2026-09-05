@@ -55,6 +55,7 @@ const AdminDiscord = lazy(() => import("@/features/admin/AdminPages").then((m) =
 const AdminIntegrations = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminIntegrations })));
 const AdminExternal = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminExternalProviders })));
 const AdminWebhooks = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminWebhooks })));
+const AdminCatalog = lazy(() => import("@/features/admin/AdminCatalog").then((m) => ({ default: m.AdminCatalog })));
 const AdminMetadata = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminMetadata })));
 const AdminTranscode = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminTranscode })));
 const AdminRetention = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminRetention })));
@@ -172,6 +173,7 @@ export function AppRouter() {
             <Route path="integrations" element={<AdminIntegrations />} />
             <Route path="providers" element={<AdminExternal />} />
             <Route path="webhooks" element={<AdminWebhooks />} />
+            <Route path="catalog" element={<AdminCatalog />} />
             <Route path="metadata" element={<AdminMetadata />} />
             <Route path="lyrics" element={<AdminLyrics />} />
             <Route path="transcoding" element={<AdminTranscode />} />

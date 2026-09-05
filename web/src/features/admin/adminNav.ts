@@ -48,6 +48,7 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
     links: [
       ["libraries", "Libraries"],
       ["storage", "Storage"],
+      ["catalog", "Catalog"],
       ["metadata", "Metadata"],
       ["lyrics", "Lyrics"],
       ["transcoding", "Transcoding"],

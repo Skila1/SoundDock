@@ -51,6 +51,7 @@ type trackMetaBody struct {
 	Lyrics      *string `json:"lyrics"`
 	Artist      *string `json:"artist"`
 	KeepForever *bool   `json:"keep_forever"`
+	AlbumID     *string `json:"album_id"`
 	WriteBack   bool    `json:"write_back"`
 }
 
@@ -66,19 +67,19 @@ func (s *Server) getTrackMetadata(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	u := currentUser(r)
 	var (
-		title, genre, album, source, acq string
-		isrc, mbid                       *string
-		codec, container                             *string
-		dur, tn, dn                                  int
-		year                                         *int
-		expl                                         *bool
-		locked, keepForever                          bool
-		albumID                                      *uuid.UUID
-		libID                                        uuid.UUID
-		gain, conf                                   *float64
-		bitDepth, sampleRate, bitrate, channels      *int
-		size                                         *int64
-		unavailable                                  *time.Time
+		title, genre, album, source, acq        string
+		isrc, mbid                              *string
+		codec, container                        *string
+		dur, tn, dn                             int
+		year                                    *int
+		expl                                    *bool
+		locked, keepForever                     bool
+		albumID                                 *uuid.UUID
+		libID                                   uuid.UUID
+		gain, conf                              *float64
+		bitDepth, sampleRate, bitrate, channels *int
+		size                                    *int64
+		unavailable                             *time.Time
 	)
 	err = s.Pool.QueryRow(ctx, `
 		SELECT t.title, t.duration_ms, t.track_number, t.disc_number, t.year, t.explicit, t.album_id, t.library_id,
@@ -195,6 +196,7 @@ func (s *Server) applyTrackMeta(ctx context.Context, id uuid.UUID, body trackMet
 	}
 	if body.Genre != nil {
 		set("genre", `UPDATE tracks SET genre_text=$2, updated_at=now() WHERE id=$1`, *body.Genre)
+		s.syncTrackGenres(ctx, id, *body.Genre)
 	}
 	if body.Year != nil {
 		set("year", `UPDATE tracks SET year=$2, updated_at=now() WHERE id=$1`, *body.Year)
@@ -233,6 +235,18 @@ func (s *Server) applyTrackMeta(ctx context.Context, id uuid.UUID, body trackMet
 		_, _ = s.Pool.Exec(ctx, `UPDATE tracks SET keep_forever=$2, updated_at=now() WHERE id=$1`, id, *body.KeepForever)
 		updated = append(updated, "keep_forever")
 	}
+	if body.AlbumID != nil && !s.fieldLocked(ctx, "track", id, "album") {
+		raw := strings.TrimSpace(*body.AlbumID)
+		if raw == "" {
+			if _, err := s.Pool.Exec(ctx, `UPDATE tracks SET album_id=NULL, updated_at=now() WHERE id=$1`, id); err == nil {
+				updated = append(updated, "album")
+			}
+		} else if albumID, err := uuid.Parse(raw); err == nil {
+			if _, err := s.Pool.Exec(ctx, `UPDATE tracks SET album_id=$2, updated_at=now() WHERE id=$1`, id, albumID); err == nil {
+				updated = append(updated, "album")
+			}
+		}
+	}
 	_ = userID
 	return updated
 }
@@ -268,6 +282,9 @@ func (s *Server) bulkTrackMetadata(w http.ResponseWriter, r *http.Request) {
 		Explicit    *bool       `json:"explicit"`
 		DiscNumber  *int        `json:"disc_number"`
 		TrackNumber *int        `json:"track_number"`
+		Artist      *string     `json:"artist"`
+		Title       *string     `json:"title"`
+		AlbumID     *string     `json:"album_id"`
 		WriteBack   bool        `json:"write_back"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -279,7 +296,11 @@ func (s *Server) bulkTrackMetadata(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	meta := trackMetaBody{Genre: body.Genre, Year: body.Year, Explicit: body.Explicit, DiscNumber: body.DiscNumber, TrackNumber: body.TrackNumber, WriteBack: body.WriteBack}
+	meta := trackMetaBody{
+		Genre: body.Genre, Year: body.Year, Explicit: body.Explicit,
+		DiscNumber: body.DiscNumber, TrackNumber: body.TrackNumber,
+		Artist: body.Artist, Title: body.Title, AlbumID: body.AlbumID, WriteBack: body.WriteBack,
+	}
 	n := 0
 	for _, id := range body.IDs {
 		if s.trackGloballyLocked(r.Context(), id) {
@@ -347,6 +368,7 @@ func (s *Server) patchAlbumMetadata(w http.ResponseWriter, r *http.Request) {
 		Edition     *string `json:"edition_title"`
 		Compilation *bool   `json:"is_compilation"`
 		Label       *string `json:"label"`
+		Artist      *string `json:"artist"`
 		WriteBack   bool    `json:"write_back"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -368,6 +390,9 @@ func (s *Server) patchAlbumMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Label != nil {
 		_, _ = s.Pool.Exec(ctx, `UPDATE albums SET label=$2 WHERE id=$1`, id, *body.Label)
+	}
+	if body.Artist != nil {
+		s.replaceAlbumArtists(ctx, id, *body.Artist)
 	}
 	out := map[string]any{"ok": true, "write_back": body.WriteBack}
 	if body.WriteBack {

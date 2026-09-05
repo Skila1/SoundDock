@@ -44,8 +44,8 @@ type Request struct {
 }
 
 type Result struct {
-	Kind       string      `json:"kind"`
-	SeedID     uuid.UUID   `json:"seed_id"`
+	Kind       string       `json:"kind"`
+	SeedID     uuid.UUID    `json:"seed_id"`
 	TrackIDs   []uuid.UUID  `json:"track_ids"`
 	YoutubeIDs []string     `json:"youtube_ids,omitempty"`
 	Hits       []scapex.Hit `json:"hits,omitempty"`
@@ -305,40 +305,28 @@ func (s *Service) similarFromSeed(ctx context.Context, trackID uuid.UUID, libs [
 	if err != nil {
 		return nil, err
 	}
+	tokens := GenreTokens(meta.Genre, meta.Tags)
+	if len(tokens) == 0 {
+		return nil, nil
+	}
 	blocked := idsOrDummy(uniqueAppend([]uuid.UUID{trackID}, skip, len(skip)+1))
 	ids, err := s.queryIDs(ctx, `
 		SELECT t.id FROM tracks t
-		JOIN track_artists ta ON ta.track_id=t.id
+		JOIN track_genres tg ON tg.track_id=t.id
 		WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
-		  AND ta.artist_id IN (SELECT artist_id FROM track_artists WHERE track_id=$3 AND role='primary')
+		  AND tg.genre_id IN (SELECT genre_id FROM track_genres WHERE track_id=$3)
 		ORDER BY random() LIMIT $4`, libs, blocked, trackID, limit)
 	if err != nil {
 		return nil, err
 	}
-	if len(ids) < limit && meta.AlbumID != nil {
-		more, err := s.queryIDs(ctx, `
-			SELECT t.id FROM tracks t
-			WHERE t.album_id=$1 AND t.library_id = ANY($2) AND t.id <> ALL($3)
-			ORDER BY random() LIMIT $4`, *meta.AlbumID, libs, idsOrDummy(append(blocked, ids...)), limit-len(ids))
-		if err != nil {
-			return ids, err
-		}
-		ids = uniqueAppend(ids, more, limit)
+	if len(ids) >= limit {
+		return ids, nil
 	}
-	if len(ids) < limit {
-		more, err := s.queryIDs(ctx, `
-			SELECT t.id FROM tracks t
-			JOIN track_genres tg ON tg.track_id=t.id
-			WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
-			  AND tg.genre_id IN (SELECT genre_id FROM track_genres WHERE track_id=$3)
-			ORDER BY random() LIMIT $4`, libs, idsOrDummy(append(blocked, ids...)), trackID, limit-len(ids))
-		if err != nil {
-			return ids, err
+	for _, tok := range tokens {
+		if len(ids) >= limit {
+			break
 		}
-		ids = uniqueAppend(ids, more, limit)
-	}
-	genre := FirstGenre(meta.Genre)
-	if len(ids) < limit && genre != "" {
+		pat := "%" + tok + "%"
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
 			WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
@@ -346,7 +334,7 @@ func (s *Service) similarFromSeed(ctx context.Context, trackID uuid.UUID, libs [
 				SELECT 1 FROM track_genres tg JOIN genres g ON g.id=tg.genre_id
 				WHERE tg.track_id=t.id AND g.name ILIKE $3
 			  ))
-			ORDER BY random() LIMIT $4`, libs, idsOrDummy(append(blocked, ids...)), genre, limit-len(ids))
+			ORDER BY random() LIMIT $4`, libs, idsOrDummy(append(blocked, ids...)), pat, limit-len(ids))
 		if err != nil {
 			return ids, err
 		}
@@ -423,6 +411,7 @@ type TrackMeta struct {
 	Title   string
 	Artist  string
 	Genre   string
+	Tags    []string
 	Year    *int
 	AlbumID *uuid.UUID
 }
@@ -438,40 +427,88 @@ func (s *Service) TrackMeta(ctx context.Context, id uuid.UUID) (TrackMeta, error
 	if err != nil {
 		return m, err
 	}
-	if strings.TrimSpace(m.Genre) == "" {
-		_ = s.pool.QueryRow(ctx, `
-			SELECT coalesce(g.name,'') FROM track_genres tg
-			JOIN genres g ON g.id=tg.genre_id
-			WHERE tg.track_id=$1 LIMIT 1`, id).Scan(&m.Genre)
+	rows, qerr := s.pool.Query(ctx, `
+		SELECT g.name FROM track_genres tg
+		JOIN genres g ON g.id=tg.genre_id
+		WHERE tg.track_id=$1`, id)
+	if qerr == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				continue
+			}
+			m.Tags = append(m.Tags, name)
+		}
+	}
+	if strings.TrimSpace(m.Genre) == "" && len(m.Tags) > 0 {
+		m.Genre = m.Tags[0]
 	}
 	return m, nil
 }
 
-func FirstGenre(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
+func SplitGenreTags(s string) (genre string, tags []string) {
+	parts := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ';' || r == '/' || r == '|'
+	})
+	seen := map[string]struct{}{}
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		key := strings.ToLower(p)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if genre == "" {
+			genre = p
+			continue
+		}
+		tags = append(tags, p)
 	}
-	if i := strings.IndexAny(s, ",;/|"); i >= 0 {
-		s = strings.TrimSpace(s[:i])
-	}
-	return s
+	return genre, tags
 }
 
-func SimilarQuery(title, artist, genre string) string {
-	title = strings.TrimSpace(title)
-	artist = strings.TrimSpace(artist)
-	genre = FirstGenre(genre)
-	switch {
-	case artist != "" && genre != "":
-		return artist + " " + genre + " songs"
-	case artist != "":
-		return artist + " songs"
-	case genre != "":
-		return genre + " mix"
-	default:
-		return title
+func GenreTokens(genre string, tags []string) []string {
+	g, extra := SplitGenreTags(genre)
+	out := make([]string, 0, 1+len(extra)+len(tags))
+	seen := map[string]struct{}{}
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		key := strings.ToLower(s)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, s)
 	}
+	add(g)
+	for _, t := range extra {
+		add(t)
+	}
+	for _, t := range tags {
+		add(t)
+	}
+	return out
+}
+
+func FirstGenre(s string) string {
+	g, _ := SplitGenreTags(s)
+	return g
+}
+
+// SimilarQuery is the YouTube autoplay search. Title and artist are never used.
+func SimilarQuery(genre string, tags []string) string {
+	toks := GenreTokens(genre, tags)
+	if len(toks) == 0 {
+		return ""
+	}
+	return strings.Join(toks, " ") + " mix"
 }
 
 func SameSong(a, b string) bool {

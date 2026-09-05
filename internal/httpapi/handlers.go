@@ -514,21 +514,40 @@ func (s *Server) playlistArtwork(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) listAlbums(w http.ResponseWriter, r *http.Request) {
 	libs := s.libraryIDs(r.Context(), currentUser(r))
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	like := "%" + q + "%"
+	limit := 200
+	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 {
+		limit = n
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	singles := strings.EqualFold(r.URL.Query().Get("singles"), "1") || strings.EqualFold(r.URL.Query().Get("singles"), "true")
 	rows, err := s.Pool.Query(r.Context(), `
 		SELECT a.id, a.title, a.year, a.edition_title, a.disc_count, a.is_compilation,
-		       coalesce(string_agg(DISTINCT ar.name, ', ') FILTER (WHERE ar.name IS NOT NULL), '')
+		       coalesce(string_agg(DISTINCT ar.name, ', ') FILTER (WHERE ar.name IS NOT NULL), ''),
+		       count(DISTINCT t.id), a.library_id
 		FROM albums a
 		LEFT JOIN album_artists aa ON aa.album_id=a.id
 		LEFT JOIN artists ar ON ar.id=aa.artist_id
+		LEFT JOIN tracks t ON t.album_id=a.id
 		WHERE a.library_id = ANY($1)
+		  AND ($2 = '' OR a.title ILIKE $3 OR EXISTS (
+			SELECT 1 FROM album_artists aa2
+			JOIN artists ar2 ON ar2.id=aa2.artist_id
+			WHERE aa2.album_id=a.id AND ar2.name ILIKE $3
+		  ))
 		GROUP BY a.id
-		ORDER BY a.title LIMIT 200`, libs)
+		HAVING (NOT $4 OR count(DISTINCT t.id) <= 1)
+		ORDER BY a.title
+		LIMIT $5`, libs, q, like, singles, limit)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return
 	}
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "title", "year", "edition_title", "disc_count", "is_compilation", "artist"))
+	writeJSON(w, 200, scanMaps(rows, "id", "title", "year", "edition_title", "disc_count", "is_compilation", "artist", "track_count", "library_id"))
 }
 
 func (s *Server) getAlbum(w http.ResponseWriter, r *http.Request) {
@@ -597,7 +616,10 @@ func (s *Server) patchAlbum(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) mergeAlbums(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Into, From uuid.UUID }
+	var body struct {
+		Into uuid.UUID `json:"into"`
+		From uuid.UUID `json:"from"`
+	}
 	_ = decodeJSON(r, &body)
 	u := currentUser(r)
 	if u == nil || !u.IsAdmin {

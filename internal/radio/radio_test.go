@@ -39,17 +39,24 @@ func TestClampFill(t *testing.T) {
 }
 
 func TestSimilarQuery(t *testing.T) {
-	if SimilarQuery("Numb", "Linkin Park", "Rock, Metal") != "Linkin Park Rock songs" {
-		t.Fatal(SimilarQuery("Numb", "Linkin Park", "Rock, Metal"))
+	if SimilarQuery("Rock, Metal", nil) != "Rock Metal mix" {
+		t.Fatal(SimilarQuery("Rock, Metal", nil))
 	}
-	if SimilarQuery("Numb", "Linkin Park", "") != "Linkin Park songs" {
-		t.Fatal("artist only")
+	if SimilarQuery("Pop", []string{"synth"}) != "Pop synth mix" {
+		t.Fatal(SimilarQuery("Pop", []string{"synth"}))
 	}
-	if SimilarQuery("Numb", "", "Pop") != "Pop mix" {
-		t.Fatal("genre only")
+	if SimilarQuery("", nil) != "" {
+		t.Fatal("empty must not fall back to a title")
 	}
-	if SimilarQuery("Numb", "", "") != "Numb" {
-		t.Fatal("title only")
+	if SimilarQuery("  ", []string{"", " "}) != "" {
+		t.Fatal("whitespace only")
+	}
+}
+
+func TestGenreTokensDedupe(t *testing.T) {
+	got := GenreTokens("Rock, rock", []string{"Metal", "ROCK"})
+	if len(got) != 2 || strings.ToLower(got[0]) != "rock" || strings.ToLower(got[1]) != "metal" {
+		t.Fatalf("%v", got)
 	}
 }
 

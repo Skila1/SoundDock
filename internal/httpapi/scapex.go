@@ -322,7 +322,7 @@ func (s *Server) similarYouTubeHits(ctx context.Context, seed uuid.UUID, need in
 	if err != nil {
 		return nil
 	}
-	q := radio.SimilarQuery(meta.Title, meta.Artist, meta.Genre)
+	q := radio.SimilarQuery(meta.Genre, meta.Tags)
 	if q == "" {
 		return nil
 	}

@@ -105,6 +105,8 @@ func TestWave1RoutesRegistered(t *testing.T) {
 		"POST /api/v1/admin/duplicate-review/{id}/ignore",
 		"DELETE /api/v1/admin/libraries/{id}",
 		"DELETE /api/v1/tracks/bulk",
+		"POST /api/v1/albums",
+		"DELETE /api/v1/albums/{id}",
 		"GET /api/v1/admin/libraries/{id}/grants",
 		"POST /api/v1/admin/libraries/{id}/grants",
 		"PATCH /api/v1/admin/libraries/{id}/grants/{grantID}",

@@ -384,10 +384,10 @@ export function QueuePanel({
         )}
       </div>
       <div className="space-y-2 border-t border-border px-4 py-3">
-        <label className="flex items-center justify-between gap-3 text-sm" title="Queues similar library tracks from recent listening, skipping the current queue and recently played songs. YouTube is only used if the library pool is thin.">
+        <label className="flex items-center justify-between gap-3 text-sm" title="Queues library tracks that share genre or tags with the current song. YouTube is only used when those fields exist and the library pool is thin. Title and artist are never searched.">
           <span>
             Autoplay
-            <span className="mt-0.5 block text-xs font-normal text-muted">Similar library tracks, then YouTube if needed</span>
+            <span className="mt-0.5 block text-xs font-normal text-muted">Same genre and tags, then YouTube if needed</span>
           </span>
           <Switch checked={p.autoplay} onCheckedChange={p.setAutoplay} />
         </label>
