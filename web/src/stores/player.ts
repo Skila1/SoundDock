@@ -645,6 +645,7 @@ function ensureSessionPoll() {
 }
 
 async function acquireBrowserLease(): Promise<boolean> {
+  if (usingDiscord()) return false;
   const id = tabId();
   if (tabOwnsBrowserLease(session.queue, id) && session.queue.output_pref !== "discord") return true;
   askRendererTabsToStop();

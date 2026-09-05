@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/auth"
 	discordx "github.com/sounddock/sounddock/internal/discord"
+	"github.com/sounddock/sounddock/internal/playback"
 )
 
 const (
@@ -649,6 +650,12 @@ func (s *Server) queueHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if joined {
 		s.sessionHub().publishPresence(sid)
 	}
+	if cid := requestClientID(r, extra); cid != "" && s.Play != nil {
+		q, _ := s.Play.Get(r.Context(), sid)
+		if rendererKindOfMap(q) == playback.RendererBrowser && rendererIDOfMap(q) == cid {
+			_ = s.Play.HeartbeatRenderer(r.Context(), sid, playback.RendererBrowser, cid, rendererGenOfMap(q))
+		}
+	}
 	writeJSON(w, 200, map[string]any{"ok": true, "server_time": serverTimeNow()})
 }
 
@@ -701,5 +708,37 @@ func (s *Server) queueSSE(w http.ResponseWriter, r *http.Request) {
 			}
 			writeSSEEvent(w, ev.name, ev.data)
 		}
+	}
+}
+
+func rendererKindOfMap(st map[string]any) string {
+	if st == nil {
+		return ""
+	}
+	s, _ := st["renderer_kind"].(string)
+	return s
+}
+
+func rendererIDOfMap(st map[string]any) string {
+	if st == nil {
+		return ""
+	}
+	s, _ := st["renderer_id"].(string)
+	return s
+}
+
+func rendererGenOfMap(st map[string]any) int64 {
+	if st == nil {
+		return 0
+	}
+	switch v := st["renderer_generation"].(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	default:
+		return 0
 	}
 }

@@ -114,26 +114,21 @@ func (b *Bot) voiceChannelForGuild(guildID string) string {
 	return ""
 }
 
+const staleBrowserLease = 45 * time.Second
+
 // shouldClaimDiscordLease is true when this worker may CAS-claim Discord.
-// Never steal a Browser holder. Guild-native sessions may claim despite the
-// schema default output_pref=browser so slash /play can emit PCM.
+// A live Browser tab still wins. output_pref is a web hint, not a mute:
+// Discord commands and a closed tab must not depend on it.
 func shouldClaimDiscordLease(kind, outputPref, rendererKind string) bool {
-	if rendererKind == playback.RendererBrowser {
-		return false
-	}
-	if outputPref == playback.OutputDiscord {
-		return true
-	}
-	return kind == "discord_guild"
+	_ = kind
+	_ = outputPref
+	return rendererKind != playback.RendererBrowser
 }
 
-// shouldEmitDiscordPCM is true only when this worker holds the Discord lease
-// and the session wants Discord output. Browser output stays in VC silently.
+// shouldEmitDiscordPCM is true when this worker holds the Discord lease.
+// The lease is the authority. A closed web tab must not keep the bot silent.
 func shouldEmitDiscordPCM(st map[string]any, rendererID string, generation int64) bool {
-	if !holdsRendererLease(st, rendererID, generation) {
-		return false
-	}
-	return outputPrefOf(st) == playback.OutputDiscord
+	return holdsRendererLease(st, rendererID, generation)
 }
 
 func outputPrefOf(st map[string]any) string {
@@ -172,6 +167,14 @@ func (b *Bot) ensureBoundSession(ctx context.Context, guildID, channelID string)
 		st, err := b.play.Get(ctx, sid)
 		if err == nil {
 			prev = st
+			if rendererKindOf(st) == playback.RendererBrowser {
+				if released, _ := b.play.ReleaseStaleBrowserRenderer(ctx, sid, staleBrowserLease); released {
+					if fresh, ferr := b.play.Get(ctx, sid); ferr == nil {
+						st = fresh
+						prev = fresh
+					}
+				}
+			}
 			sameCh := ch == "" || rt.VoiceChannelID == ch
 			if sameCh && holdsRendererLease(st, rid, gen) {
 				b.lastBindRev.Store(guildID, rt.BindingRevision)
@@ -289,6 +292,14 @@ func (b *Bot) heartbeatHeldLeases(ctx context.Context) {
 			b.log.Debug("discord renderer heartbeat", "err", err)
 		}
 	}
+}
+
+func (b *Bot) claimDiscordForCommand(ctx context.Context, sid uuid.UUID) error {
+	if b == nil || b.play == nil || sid == uuid.Nil {
+		return nil
+	}
+	rid, gen := b.rendererIdentity()
+	return b.play.ClaimDiscordRenderer(ctx, sid, rid, gen, true)
 }
 
 func extraWithCommandID(extra map[string]any, commandID string) map[string]any {

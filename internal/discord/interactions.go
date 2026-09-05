@@ -2,12 +2,14 @@ package discordx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
+	"github.com/sounddock/sounddock/internal/playback"
 )
 
 func (b *Bot) onInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -342,6 +344,10 @@ func (b *Bot) sessionControl(ctx context.Context, s *discordgo.Session, i *disco
 	b.deferReplyEphemeral(s, i)
 	sid, err := b.ensureBoundSession(ctx, i.GuildID, b.voiceChannelForGuild(i.GuildID))
 	if err != nil {
+		b.followupEphemeral(s, i, err.Error())
+		return
+	}
+	if err := b.claimDiscordForCommand(ctx, sid); err != nil && !errors.Is(err, playback.ErrLeaseConflict) {
 		b.followupEphemeral(s, i, err.Error())
 		return
 	}

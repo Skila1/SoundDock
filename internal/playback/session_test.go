@@ -204,6 +204,42 @@ func TestExpirePayloadJSON(t *testing.T) {
 	}
 }
 
+func TestReleaseStaleBrowserRenderer(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	e := New(pool)
+	userID := uuid.New()
+	username := "stale-" + userID.String()[:8]
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, username, password_hash, display_name) VALUES ($1,$2,'x',$2)`, userID, username); err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM playback_sessions WHERE user_id=$1 OR owner_key LIKE $2`, userID, userID.String()+":%")
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	sid, err := e.WebSession(ctx, userID, "tab")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.AcquireBrowserRenderer(ctx, sid, "tab-1", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE playback_sessions SET renderer_heartbeat_at=now() - interval '2 minutes' WHERE id=$1`, sid); err != nil {
+		t.Fatal(err)
+	}
+	ok, err := e.ReleaseStaleBrowserRenderer(ctx, sid, 45*time.Second)
+	if err != nil || !ok {
+		t.Fatalf("release %v %v", ok, err)
+	}
+	st, err := e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st["renderer_kind"] != RendererNone && st["renderer_kind"] != "none" {
+		t.Fatalf("kind %v", st["renderer_kind"])
+	}
+}
+
 func TestWebSessionStopsEmptyPlaying(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()

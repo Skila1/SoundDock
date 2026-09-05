@@ -69,10 +69,10 @@ func TestShouldPauseAfterReclaimOnlyStaleDiscordPlaying(t *testing.T) {
 
 func TestShouldClaimDiscordLeaseNeverStealsBrowser(t *testing.T) {
 	if shouldClaimDiscordLease("web_device", playback.OutputDiscord, playback.RendererBrowser) {
-		t.Fatal("must never steal browser")
+		t.Fatal("must never steal a live browser tab")
 	}
-	if shouldClaimDiscordLease("web_device", playback.OutputBrowser, playback.RendererNone) {
-		t.Fatal("HTTP-bound web session with browser pref must not claim")
+	if !shouldClaimDiscordLease("web_device", playback.OutputBrowser, playback.RendererNone) {
+		t.Fatal("empty holder must claim so Discord works with the web tab closed")
 	}
 	if !shouldClaimDiscordLease("web_device", playback.OutputDiscord, playback.RendererNone) {
 		t.Fatal("explicit discord output on an empty holder may claim")
@@ -80,11 +80,11 @@ func TestShouldClaimDiscordLeaseNeverStealsBrowser(t *testing.T) {
 	if !shouldClaimDiscordLease("discord_guild", playback.OutputBrowser, playback.RendererNone) {
 		t.Fatal("guild-native session may claim despite schema default pref")
 	}
-	if shouldEmitDiscordPCM(map[string]any{
+	if !shouldEmitDiscordPCM(map[string]any{
 		"renderer_kind": playback.RendererDiscord, "renderer_id": "bot", "renderer_generation": int64(1),
 		"output_pref": playback.OutputBrowser,
 	}, "bot", 1) {
-		t.Fatal("browser output must not emit Discord PCM")
+		t.Fatal("held Discord lease must emit even if leftover web pref is browser")
 	}
 	if !shouldEmitDiscordPCM(map[string]any{
 		"renderer_kind": playback.RendererDiscord, "renderer_id": "bot", "renderer_generation": int64(1),

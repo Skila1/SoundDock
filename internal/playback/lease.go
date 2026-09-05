@@ -2,6 +2,7 @@ package playback
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,29 @@ func (e *Engine) AcquireBrowserRenderer(ctx context.Context, sessionID uuid.UUID
 		return 0, err
 	}
 	return gen, tx.Commit(ctx)
+}
+
+// ReleaseStaleBrowserRenderer drops a browser lease whose tab stopped heartbeating.
+// Discord playback must survive a closed or refreshed page.
+func (e *Engine) ReleaseStaleBrowserRenderer(ctx context.Context, sessionID uuid.UUID, maxAge time.Duration) (bool, error) {
+	if e == nil || e.pool == nil || sessionID == uuid.Nil {
+		return false, nil
+	}
+	if maxAge < time.Second {
+		maxAge = time.Second
+	}
+	tag, err := e.pool.Exec(ctx, `
+		UPDATE playback_sessions
+		SET renderer_kind='none', renderer_id=NULL,
+			renderer_generation=renderer_generation+1,
+			renderer_heartbeat_at=NULL, updated_at=now()
+		WHERE id=$1 AND renderer_kind='browser'
+		  AND (renderer_heartbeat_at IS NULL OR renderer_heartbeat_at < now() - make_interval(secs => $2))`,
+		sessionID, int(maxAge.Seconds()))
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 // HeartbeatRenderer updates renderer_heartbeat_at only if the CAS identity matches.

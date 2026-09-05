@@ -3,6 +3,7 @@ package discordx
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -329,6 +330,9 @@ func (b *Bot) PlayQuery(ctx context.Context, guildID, discordUser string, q stri
 	}
 	sid, err := b.ensureBoundSession(ctx, guildID, b.voiceChannelForGuild(guildID))
 	if err != nil {
+		return err
+	}
+	if err := b.claimDiscordForCommand(ctx, sid); err != nil && !errors.Is(err, playback.ErrLeaseConflict) {
 		return err
 	}
 	uid := minilib.LinkedUserID(ctx, b.pool, discordUser)
