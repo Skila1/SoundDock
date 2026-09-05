@@ -106,22 +106,201 @@ func jsonInt(v any) int {
 }
 
 func recordingArtist(rec map[string]any) string {
-	credits, _ := rec["artist-credit"].([]any)
-	for _, c := range credits {
+	credits := parseArtistCredits(rec)
+	if len(credits) == 0 {
+		return ""
+	}
+	return credits[0].Name
+}
+
+func isFeaturedJoin(join string) bool {
+	j := strings.ToLower(join)
+	return strings.Contains(j, "feat") || strings.Contains(j, "ft.") || strings.Contains(j, "featuring")
+}
+
+func parseArtistCredits(rec map[string]any) []ArtistCredit {
+	if rec == nil {
+		return nil
+	}
+	raw, _ := rec["artist-credit"].([]any)
+	type row struct{ name, sort, mbid, join string }
+	var rows []row
+	for _, c := range raw {
 		m, _ := c.(map[string]any)
 		if m == nil {
 			continue
 		}
-		if name, _ := m["name"].(string); name != "" {
-			return name
-		}
+		name, _ := m["name"].(string)
+		join, _ := m["joinphrase"].(string)
+		sort, mbid := "", ""
 		if art, _ := m["artist"].(map[string]any); art != nil {
-			if name, _ := art["name"].(string); name != "" {
-				return name
+			if strings.TrimSpace(name) == "" {
+				name, _ = art["name"].(string)
+			}
+			sort, _ = art["sort-name"].(string)
+			mbid, _ = art["id"].(string)
+		}
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		rows = append(rows, row{name: name, sort: sort, mbid: mbid, join: join})
+	}
+	var out []ArtistCredit
+	prevJoin := ""
+	for i, r := range rows {
+		role := "primary"
+		if i > 0 && isFeaturedJoin(prevJoin) {
+			role = "featured"
+		}
+		out = append(out, ArtistCredit{Name: r.name, SortName: r.sort, MBID: r.mbid, Role: role})
+		prevJoin = r.join
+	}
+	return out
+}
+
+var junkGenre = map[string]bool{
+	"seen live": true, "favorite": true, "favourite": true, "albums i own": true,
+	"my music": true, "awesome": true, "beautiful": true, "check out": true,
+	"love": true, "sexy": true,
+}
+
+func titleGenre(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	lower := strings.ToLower(s)
+	if lower == "r&b" || lower == "rnb" {
+		return "R&B"
+	}
+	parts := strings.Fields(lower)
+	for i, p := range parts {
+		segs := strings.Split(p, "-")
+		for j, seg := range segs {
+			if seg == "" {
+				continue
+			}
+			segs[j] = strings.ToUpper(seg[:1]) + seg[1:]
+		}
+		parts[i] = strings.Join(segs, "-")
+	}
+	return strings.Join(parts, " ")
+}
+
+func namedCounts(raw []any) []string {
+	type hit struct {
+		name  string
+		count int
+	}
+	var hits []hit
+	for _, item := range raw {
+		m, _ := item.(map[string]any)
+		if m == nil {
+			continue
+		}
+		name, _ := m["name"].(string)
+		name = strings.TrimSpace(name)
+		if name == "" || junkGenre[strings.ToLower(name)] {
+			continue
+		}
+		hits = append(hits, hit{name: titleGenre(name), count: jsonInt(m["count"])})
+	}
+	for i := 0; i < len(hits); i++ {
+		for j := i + 1; j < len(hits); j++ {
+			if hits[j].count > hits[i].count {
+				hits[i], hits[j] = hits[j], hits[i]
 			}
 		}
 	}
-	return ""
+	var out []string
+	seen := map[string]bool{}
+	for _, h := range hits {
+		key := strings.ToLower(h.name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, h.name)
+	}
+	return out
+}
+
+func pickGenres(raw map[string]any, max int) []string {
+	if raw == nil || max <= 0 {
+		return nil
+	}
+	if official := namedCounts(asAnySlice(raw["genres"])); len(official) > 0 {
+		if len(official) > max {
+			official = official[:max]
+		}
+		return official
+	}
+	tags := namedCounts(asAnySlice(raw["tags"]))
+	var kept []string
+	for _, t := range tags {
+		if len(kept) >= max {
+			break
+		}
+		kept = append(kept, t)
+	}
+	return kept
+}
+
+func asAnySlice(v any) []any {
+	s, _ := v.([]any)
+	return s
+}
+
+// GenreList is the canonical genre set for a probe (MusicBrainz list, else genre_text).
+func GenreList(p Probe) []string {
+	if len(p.Genres) > 0 {
+		return p.Genres
+	}
+	g := strings.TrimSpace(p.Genre)
+	if g == "" {
+		return nil
+	}
+	return []string{g}
+}
+
+func applyArtistCredits(p *Probe, rec map[string]any) {
+	credits := parseArtistCredits(rec)
+	if len(credits) == 0 {
+		return
+	}
+	if p.ArtistMBID == "" {
+		p.ArtistMBID = credits[0].MBID
+	}
+	if p.ArtistSortName == "" {
+		p.ArtistSortName = credits[0].SortName
+	}
+	if p.Artist == "" {
+		p.Artist = credits[0].Name
+	}
+	if len(p.Credits) == 0 {
+		p.Credits = credits
+	}
+}
+
+func applyGenres(p *Probe, src map[string]any) {
+	if p.Genre != "" && len(p.Genres) > 0 {
+		return
+	}
+	genres := pickGenres(src, 5)
+	if len(genres) == 0 {
+		if rel := firstRelease(src); rel != nil {
+			genres = pickGenres(rel, 5)
+		}
+	}
+	if len(genres) == 0 {
+		return
+	}
+	if len(p.Genres) == 0 {
+		p.Genres = genres
+	}
+	if p.Genre == "" {
+		p.Genre = genres[0]
+	}
 }
 
 func firstRelease(rec map[string]any) map[string]any {
@@ -175,6 +354,27 @@ func applyReleaseFields(p *Probe, rel map[string]any, conf float64) {
 	p.Source = "musicbrainz"
 }
 
+func applyRecordingMatch(p *Probe, rec map[string]any, conf float64) {
+	if id, _ := rec["id"].(string); id != "" && p.RecordingMBID == "" {
+		p.RecordingMBID = id
+	}
+	if p.Title == "" {
+		if title, _ := rec["title"].(string); title != "" {
+			p.Title = title
+		}
+	}
+	applyArtistCredits(p, rec)
+	applyGenres(p, rec)
+	rel := firstRelease(rec)
+	if rel != nil {
+		applyReleaseFields(p, rel, conf)
+		applyGenres(p, rel)
+		return
+	}
+	p.Confidence = conf
+	p.Source = "musicbrainz"
+}
+
 // applyMusicBrainz fills missing tags from a MusicBrainz payload when confidence is high.
 // Low-confidence hits are ignored so existing tags are not overwritten.
 func applyMusicBrainz(p *Probe, raw map[string]any) {
@@ -186,12 +386,25 @@ func applyMusicBrainz(p *Probe, raw map[string]any) {
 		if rec == nil || conf < MinEnrichConfidence {
 			return
 		}
-		rel := firstRelease(rec)
-		if rel == nil {
+		applyRecordingMatch(p, rec, conf)
+		return
+	}
+	if _, ok := raw["artist-credit"]; ok {
+		if id, _ := raw["id"].(string); id != "" || raw["title"] != nil {
+			title, _ := raw["title"].(string)
+			conf := MatchConfidence(p.Title, p.Artist, p.DurationMS, title, recordingArtist(raw), jsonInt(raw["length"]))
+			if conf < MinEnrichConfidence && p.RecordingMBID != "" && p.RecordingMBID == id {
+				conf = p.Confidence
+			}
+			if conf < MinEnrichConfidence && p.Confidence >= MinEnrichConfidence {
+				conf = p.Confidence
+			}
+			if conf < MinEnrichConfidence {
+				return
+			}
+			applyRecordingMatch(p, raw, conf)
 			return
 		}
-		applyReleaseFields(p, rel, conf)
-		return
 	}
 	releases, _ := raw["releases"].([]any)
 	if len(releases) == 0 {
@@ -209,12 +422,25 @@ func applyMusicBrainz(p *Probe, raw map[string]any) {
 	if conf < MinEnrichConfidence {
 		return
 	}
+	applyArtistCredits(p, rel)
+	applyGenres(p, rel)
 	applyReleaseFields(p, rel, conf)
 }
 
-// EnrichMusicBrainz fills MBID / missing tags only when metadata_external_enabled is true.
-func EnrichMusicBrainz(ctx context.Context, pool *pgxpool.Pool, p *Probe) {
-	if p == nil || pool == nil || !ExternalEnabled(ctx, pool) {
+func enrichRecordingGenres(ctx context.Context, p *Probe) {
+	if p == nil || p.RecordingMBID == "" || (p.Genre != "" && len(p.Genres) > 0) {
+		return
+	}
+	raw, err := (MusicBrainz{}).LookupRecording(ctx, p.RecordingMBID)
+	if err != nil || raw == nil {
+		return
+	}
+	applyArtistCredits(p, raw)
+	applyGenres(p, raw)
+}
+
+func enrichMusicBrainz(ctx context.Context, p *Probe) {
+	if p == nil {
 		return
 	}
 	if p.Artist == "" && p.Album == "" && p.Title == "" {
@@ -225,14 +451,24 @@ func EnrichMusicBrainz(ctx context.Context, pool *pgxpool.Pool, p *Probe) {
 		return
 	}
 	applyMusicBrainz(p, raw)
+	enrichRecordingGenres(ctx, p)
 }
 
-// EnrichCoverArt fetches Cover Art Archive front art when the probe has an MBID and no picture.
-func EnrichCoverArt(ctx context.Context, pool *pgxpool.Pool, p *Probe) {
+// EnrichMusicBrainz fills MBID / missing tags only when metadata_external_enabled is true.
+func EnrichMusicBrainz(ctx context.Context, pool *pgxpool.Pool, p *Probe) {
 	if p == nil || pool == nil || !ExternalEnabled(ctx, pool) {
 		return
 	}
-	if len(p.Picture) > 0 || strings.TrimSpace(p.MBID) == "" {
+	enrichMusicBrainz(ctx, p)
+}
+
+// EnrichMusicBrainzForced looks up MusicBrainz even when the admin toggle is off.
+func EnrichMusicBrainzForced(ctx context.Context, p *Probe) {
+	enrichMusicBrainz(ctx, p)
+}
+
+func enrichCoverArt(ctx context.Context, p *Probe) {
+	if p == nil || len(p.Picture) > 0 || strings.TrimSpace(p.MBID) == "" {
 		return
 	}
 	img, err := (CoverArt{}).FetchFront(ctx, p.MBID)
@@ -240,4 +476,17 @@ func EnrichCoverArt(ctx context.Context, pool *pgxpool.Pool, p *Probe) {
 		return
 	}
 	p.Picture = img
+}
+
+// EnrichCoverArt fetches Cover Art Archive front art when the probe has an MBID and no picture.
+func EnrichCoverArt(ctx context.Context, pool *pgxpool.Pool, p *Probe) {
+	if p == nil || pool == nil || !ExternalEnabled(ctx, pool) {
+		return
+	}
+	enrichCoverArt(ctx, p)
+}
+
+// EnrichCoverArtForced fetches Cover Art Archive art even when the admin toggle is off.
+func EnrichCoverArtForced(ctx context.Context, p *Probe) {
+	enrichCoverArt(ctx, p)
 }

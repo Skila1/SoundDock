@@ -202,8 +202,14 @@ export function TrackList({
     setPlOpen(true);
   };
 
-  const stopRow = (e: { stopPropagation: () => void }) => {
+  const stopRow = (e: { stopPropagation: () => void; preventDefault?: () => void }) => {
     e.stopPropagation();
+  };
+
+  const playWithoutScroll = (e: { preventDefault: () => void; stopPropagation: () => void }, i: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onPlay(i);
   };
 
   const applyBulk = async () => {
@@ -256,16 +262,17 @@ export function TrackList({
           }}
         >
           <div className="relative text-center text-xs text-subtle">
-            <span className="group-hover:hidden">{t.track_number || i + 1}</span>
+            <span className="pointer-events-none group-hover:invisible">{t.track_number || i + 1}</span>
             <button
               type="button"
-              className="hidden w-full justify-center group-hover:flex"
-              onPointerDown={stopRow}
-              onDoubleClick={stopRow}
-              onClick={(e) => {
-                e.stopPropagation();
-                onPlay(i);
+              className="absolute inset-0 hidden w-full items-center justify-center group-hover:flex"
+              onPointerDown={(e) => {
+                e.preventDefault();
+                stopRow(e);
               }}
+              onMouseDown={(e) => e.preventDefault()}
+              onDoubleClick={stopRow}
+              onClick={(e) => playWithoutScroll(e, i)}
               aria-label="Play"
             >
               <Play className="h-3.5 w-3.5 fill-current" />
@@ -280,7 +287,18 @@ export function TrackList({
                 {t.source === "youtube" ? (
                   <span className="truncate text-sm font-medium">{t.title}</span>
                 ) : (
-                  <Link to={`/tracks/${t.id}`} className="truncate text-sm font-medium hover:underline" onClick={stopRow} onDoubleClick={stopRow}>
+                  <Link
+                    to={`/tracks/${t.id}`}
+                    className="truncate text-sm font-medium hover:underline"
+                    onClick={(e) => {
+                      if (e.metaKey || e.ctrlKey || e.shiftKey || e.button === 1) {
+                        stopRow(e);
+                        return;
+                      }
+                      playWithoutScroll(e, i);
+                    }}
+                    onDoubleClick={stopRow}
+                  >
                     {t.title}
                   </Link>
                 )}
@@ -292,16 +310,19 @@ export function TrackList({
               <div className="truncate text-xs text-muted">{t.artists?.map((a) => a.name).join(", ") || t.artist || ""}</div>
             </div>
           </div>
-          {showAlbum && (
-            <Link
-              to={t.album_id ? `/albums/${t.album_id}` : "#"}
-              className="hidden truncate text-sm text-muted hover:underline md:block"
-              onClick={stopRow}
-              onDoubleClick={stopRow}
-            >
-              {t.album}
-            </Link>
-          )}
+          {showAlbum &&
+            (t.album_id ? (
+              <Link
+                to={`/albums/${t.album_id}`}
+                className="hidden truncate text-sm text-muted hover:underline md:block"
+                onClick={stopRow}
+                onDoubleClick={stopRow}
+              >
+                {t.album}
+              </Link>
+            ) : (
+              <span className="hidden truncate text-sm text-muted md:block">{t.album}</span>
+            ))}
           <div className="w-12 text-right text-xs text-subtle">{formatDuration(t.duration_ms)}</div>
           <div
             className="relative z-10 flex shrink-0 justify-end gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
@@ -313,6 +334,7 @@ export function TrackList({
               size="icon"
               variant="ghost"
               className="h-8 w-8"
+              onMouseDown={(e) => e.preventDefault()}
               onClick={(e) => {
                 e.stopPropagation();
                 doFav(t);

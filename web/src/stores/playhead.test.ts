@@ -3,6 +3,7 @@ import {
   clockOffset,
   interpolatePosition,
   MAX_REFINE_JUMP_MS,
+  parseTimeMs,
   sampleClock,
   shouldAcceptRefine
 } from "@/stores/playhead";
@@ -62,6 +63,20 @@ describe("playhead interpolation", () => {
         offsetMs: 200
       })
     ).toBe(1_200);
+  });
+});
+
+describe("parseTimeMs", () => {
+  it("rejects zero and Go zero-time checkpoints so the playhead does not clamp to the end", () => {
+    expect(parseTimeMs(0)).toBeNull();
+    expect(parseTimeMs("0001-01-01T00:00:00Z")).toBeNull();
+    expect(parseTimeMs("")).toBeNull();
+    expect(parseTimeMs("1970-01-01T00:00:01.000Z")).toBe(1000);
+  });
+
+  it("parses RFC3339 and unix seconds as wall-clock milliseconds", () => {
+    expect(parseTimeMs("2026-09-05T10:00:00.000Z")).toBe(Date.parse("2026-09-05T10:00:00.000Z"));
+    expect(parseTimeMs(1_778_000_000)).toBe(1_778_000_000_000);
   });
 });
 

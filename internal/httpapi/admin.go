@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -565,10 +566,76 @@ func (s *Server) adminRevokeIntegration(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
+const metadataRefreshJobType = scan.JobRefresh
+
+type metadataRefreshJobView struct {
+	ID         uuid.UUID      `json:"id"`
+	Status     string         `json:"status"`
+	Progress   int            `json:"progress"`
+	LastError  *string        `json:"last_error"`
+	CreatedAt  time.Time      `json:"created_at"`
+	StartedAt  *time.Time     `json:"started_at"`
+	FinishedAt *time.Time     `json:"finished_at"`
+	Result     map[string]any `json:"result,omitempty"`
+}
+
+func metadataRefreshBusy(status string) bool {
+	return status == "queued" || status == "running" || status == "retry"
+}
+
+func (s *Server) latestMetadataRefreshJob(ctx context.Context) *metadataRefreshJobView {
+	if s.Pool == nil {
+		return nil
+	}
+	var j metadataRefreshJobView
+	var raw []byte
+	err := s.Pool.QueryRow(ctx, `
+		SELECT id, status, progress, last_error, created_at, started_at, finished_at, result
+		FROM jobs WHERE type=$1
+		ORDER BY created_at DESC LIMIT 1`, metadataRefreshJobType).
+		Scan(&j.ID, &j.Status, &j.Progress, &j.LastError, &j.CreatedAt, &j.StartedAt, &j.FinishedAt, &raw)
+	if err != nil {
+		return nil
+	}
+	if len(raw) > 0 && string(raw) != "{}" && string(raw) != "null" {
+		_ = json.Unmarshal(raw, &j.Result)
+	}
+	return &j
+}
+
+func (s *Server) activeMetadataRefreshJobID(ctx context.Context) (uuid.UUID, bool) {
+	if s.Pool == nil {
+		return uuid.Nil, false
+	}
+	var id uuid.UUID
+	err := s.Pool.QueryRow(ctx, `
+		SELECT id FROM jobs
+		WHERE type=$1 AND status IN ('queued','running','retry')
+		ORDER BY created_at LIMIT 1`, metadataRefreshJobType).Scan(&id)
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
 func (s *Server) adminMetadata(w http.ResponseWriter, r *http.Request) {
 	var enabled bool
-	_ = s.Pool.QueryRow(r.Context(), `SELECT (value)::boolean FROM server_settings WHERE key='metadata_external_enabled'`).Scan(&enabled)
-	writeJSON(w, 200, map[string]any{"external_enabled": enabled, "providers": []string{"musicbrainz", "coverartarchive"}})
+	if s.Pool != nil {
+		_ = s.Pool.QueryRow(r.Context(), `SELECT (value)::boolean FROM server_settings WHERE key='metadata_external_enabled'`).Scan(&enabled)
+	}
+	var tracks int
+	if s.Pool != nil {
+		_ = s.Pool.QueryRow(r.Context(), `SELECT count(*) FROM tracks`).Scan(&tracks)
+	}
+	job := s.latestMetadataRefreshJob(r.Context())
+	busy := job != nil && metadataRefreshBusy(job.Status)
+	writeJSON(w, 200, map[string]any{
+		"external_enabled": enabled,
+		"providers":        []string{"musicbrainz", "coverartarchive"},
+		"track_count":      tracks,
+		"busy":             busy,
+		"job":              job,
+	})
 }
 
 func (s *Server) adminPutMetadata(w http.ResponseWriter, r *http.Request) {
@@ -576,8 +643,46 @@ func (s *Server) adminPutMetadata(w http.ResponseWriter, r *http.Request) {
 		External bool `json:"external_enabled"`
 	}
 	_ = decodeJSON(r, &body)
-	_, _ = s.Pool.Exec(r.Context(), `INSERT INTO server_settings (key, value) VALUES ('metadata_external_enabled', to_jsonb($1::bool)) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`, body.External)
+	if s.Pool != nil {
+		_, _ = s.Pool.Exec(r.Context(), `INSERT INTO server_settings (key, value) VALUES ('metadata_external_enabled', to_jsonb($1::bool)) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`, body.External)
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (s *Server) enableMetadataExternal(ctx context.Context) {
+	if s.Pool == nil {
+		return
+	}
+	_, _ = s.Pool.Exec(ctx, `INSERT INTO server_settings (key, value) VALUES ('metadata_external_enabled', 'true'::jsonb) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`)
+}
+
+func (s *Server) adminRefreshMetadata(w http.ResponseWriter, r *http.Request) {
+	if s.Jobs == nil {
+		writeErr(w, 503, "jobs", "worker runner is not available")
+		return
+	}
+	if id, ok := s.activeMetadataRefreshJobID(r.Context()); ok {
+		writeJSON(w, 409, map[string]any{
+			"code":    "refresh_in_progress",
+			"message": "a library metadata refresh is already queued or running",
+			"job_id":  id,
+		})
+		return
+	}
+	s.enableMetadataExternal(r.Context())
+	payload := map[string]any{}
+	if u := currentUser(r); u != nil {
+		payload["actor_id"] = u.ID
+	}
+	jid, err := s.Jobs.Enqueue(r.Context(), metadataRefreshJobType, payload)
+	if err != nil {
+		s.writeJobErr(w, err)
+		return
+	}
+	if u := currentUser(r); u != nil && s.Audit != nil {
+		s.Audit.Event(r.Context(), &u.ID, "metadata.refresh", jid.String(), r.RemoteAddr, nil)
+	}
+	writeJSON(w, 202, map[string]any{"job_id": jid})
 }
 
 func (s *Server) adminLogs(w http.ResponseWriter, r *http.Request) {

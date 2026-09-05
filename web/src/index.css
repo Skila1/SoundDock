@@ -70,6 +70,16 @@ html, body, #root {
   height: 100%;
   overflow: hidden;
 }
+
+* {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+*::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
 body {
   margin: 0;
   background: var(--sd-bg);
@@ -90,8 +100,4 @@ button, input, select, textarea { font: inherit; }
   outline-offset: 2px;
 }
 
-.scrollbar-thin::-webkit-scrollbar { height: 8px; width: 8px; }
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  background: var(--sd-surface-3);
-  border-radius: 99px;
-}
+.scrollbar-thin::-webkit-scrollbar { display: none; height: 0; width: 0; }

@@ -295,13 +295,17 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		albumTitle = "Unknown Album"
 	}
 
-	artistID, err := s.upsertArtist(ctx, artistName)
+	artistSort, artistMBID := "", ""
+	if probe.AlbumArtist == "" || strings.EqualFold(probe.AlbumArtist, probe.Artist) {
+		artistSort, artistMBID = probe.ArtistSortName, probe.ArtistMBID
+	}
+	artistID, err := s.upsertArtistMeta(ctx, artistName, artistSort, artistMBID)
 	if err != nil {
 		return err
 	}
 	trackArtistID := artistID
 	if probe.Artist != "" && !strings.EqualFold(probe.Artist, artistName) {
-		trackArtistID, _ = s.upsertArtist(ctx, probe.Artist)
+		trackArtistID, _ = s.upsertArtistMeta(ctx, probe.Artist, probe.ArtistSortName, probe.ArtistMBID)
 	}
 
 	title := nullTitle(probe.Title, originalName)
@@ -356,13 +360,12 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 			  updated_at=now()
 			WHERE id=$1`, trackID, acq, acqRef)
 	}
-	if !s.trackOrFieldLocked(ctx, trackID, "artist") {
-		_, _ = s.pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'primary',0) ON CONFLICT DO NOTHING`, trackID, trackArtistID)
-	}
+	s.attachArtistCredits(ctx, trackID, trackArtistID, probe)
 	if probe.Composer != "" && !s.trackOrFieldLocked(ctx, trackID, "composer") {
 		cid, _ := s.upsertArtist(ctx, probe.Composer)
 		_, _ = s.pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'composer',0) ON CONFLICT DO NOTHING`, trackID, cid)
 	}
+	s.attachGenres(ctx, trackID, probe)
 
 	var fileID uuid.UUID
 	err = s.pool.QueryRow(ctx, `
@@ -478,15 +481,34 @@ func (s *Scanner) knownArtistFn(ctx context.Context) func(string) bool {
 }
 
 func (s *Scanner) upsertArtist(ctx context.Context, name string) (uuid.UUID, error) {
+	return s.upsertArtistMeta(ctx, name, "", "")
+}
+
+func (s *Scanner) upsertArtistMeta(ctx context.Context, name, sortName, mbid string) (uuid.UUID, error) {
+	name = strings.TrimSpace(name)
+	sortName = strings.TrimSpace(sortName)
+	mbid = strings.TrimSpace(mbid)
+	if name == "" {
+		name = "Unknown Artist"
+	}
 	var id uuid.UUID
 	err := s.pool.QueryRow(ctx, `SELECT id FROM artists WHERE lower(name)=lower($1) LIMIT 1`, name).Scan(&id)
 	if err == nil {
+		if mbid != "" {
+			_, _ = s.pool.Exec(ctx, `UPDATE artists SET mbid=COALESCE(NULLIF(mbid,''), $2) WHERE id=$1`, id, mbid)
+		}
+		if sortName != "" {
+			_, _ = s.pool.Exec(ctx, `UPDATE artists SET sort_name=$2 WHERE id=$1 AND (sort_name='' OR sort_name=name)`, id, sortName)
+		}
 		return id, nil
 	}
 	if err != pgx.ErrNoRows {
 		return uuid.Nil, err
 	}
-	err = s.pool.QueryRow(ctx, `INSERT INTO artists (name, sort_name) VALUES ($1,$1) RETURNING id`, name).Scan(&id)
+	if sortName == "" {
+		sortName = name
+	}
+	err = s.pool.QueryRow(ctx, `INSERT INTO artists (name, sort_name, mbid) VALUES ($1,$2,NULLIF($3,'')) RETURNING id`, name, sortName, mbid).Scan(&id)
 	return id, err
 }
 
@@ -499,6 +521,9 @@ func (s *Scanner) upsertAlbum(ctx context.Context, libID uuid.UUID, title string
 		  AND coalesce(a.edition_title,'')='' AND aa.artist_id=$4
 		LIMIT 1`, libID, title, probe.Year, artistID).Scan(&id)
 	if err == nil {
+		if probe.MBID != "" {
+			_, _ = s.pool.Exec(ctx, `UPDATE albums SET mbid=COALESCE(NULLIF(mbid,''), $2) WHERE id=$1`, id, probe.MBID)
+		}
 		return id, nil
 	}
 	discTotal := probe.DiscTotal
@@ -512,6 +537,9 @@ func (s *Scanner) upsertAlbum(ctx context.Context, libID uuid.UUID, title string
 		return uuid.Nil, err
 	}
 	_, _ = s.pool.Exec(ctx, `INSERT INTO album_artists (album_id, artist_id, role, position) VALUES ($1,$2,'album_artist',0)`, id, artistID)
+	if probe.MBID != "" {
+		_, _ = s.pool.Exec(ctx, `UPDATE albums SET mbid=COALESCE(NULLIF(mbid,''), $2) WHERE id=$1`, id, probe.MBID)
+	}
 	return id, nil
 }
 

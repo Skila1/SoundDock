@@ -140,6 +140,7 @@ func main() {
 	_ = scrobble.EnsureSchema(ctx, pool)
 
 	runner.Register("library.scan", sc.Handler(srv.ProviderFor))
+	runner.Register("metadata.refresh", sc.RefreshHandler(runner))
 	runner.Register("ingest.url", ing.URLHandler(srv.ProviderFor))
 	runner.Register("ingest.zip", ing.ZipHandler(srv.ProviderFor))
 	runner.Register("library.migrate", ing.MigrateHandler(srv.ProviderFor))

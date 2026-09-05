@@ -41,6 +41,58 @@ func (s *Scanner) trackOrFieldLocked(ctx context.Context, trackID uuid.UUID, fie
 	return err == nil && locked
 }
 
+func (s *Scanner) attachArtistCredits(ctx context.Context, trackID, fallbackArtist uuid.UUID, probe metadata.Probe) {
+	if s == nil || s.pool == nil || trackID == uuid.Nil || s.trackOrFieldLocked(ctx, trackID, "artist") {
+		return
+	}
+	credits := probe.Credits
+	if len(credits) == 0 && fallbackArtist != uuid.Nil {
+		_, _ = s.pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'primary',0) ON CONFLICT DO NOTHING`, trackID, fallbackArtist)
+		return
+	}
+	_, _ = s.pool.Exec(ctx, `DELETE FROM track_artists WHERE track_id=$1 AND role IN ('primary','featured')`, trackID)
+	for i, c := range credits {
+		name := strings.TrimSpace(c.Name)
+		if name == "" {
+			continue
+		}
+		id, err := s.upsertArtistMeta(ctx, name, c.SortName, c.MBID)
+		if err != nil || id == uuid.Nil {
+			continue
+		}
+		role := c.Role
+		if role == "" {
+			if i == 0 {
+				role = "primary"
+			} else {
+				role = "featured"
+			}
+		}
+		_, _ = s.pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`, trackID, id, role, i)
+	}
+}
+
+func (s *Scanner) attachGenres(ctx context.Context, trackID uuid.UUID, probe metadata.Probe) {
+	if s == nil || s.pool == nil || trackID == uuid.Nil || s.trackOrFieldLocked(ctx, trackID, "genre") {
+		return
+	}
+	for _, name := range metadata.GenreList(probe) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		var gid uuid.UUID
+		err := s.pool.QueryRow(ctx, `
+			INSERT INTO genres (name) VALUES ($1)
+			ON CONFLICT (name) DO UPDATE SET name=EXCLUDED.name
+			RETURNING id`, name).Scan(&gid)
+		if err != nil {
+			continue
+		}
+		_, _ = s.pool.Exec(ctx, `INSERT INTO track_genres (track_id, genre_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, trackID, gid)
+	}
+}
+
 func (s *Scanner) updateExistingTrack(ctx context.Context, trackID, albumID uuid.UUID, title string, probe metadata.Probe) {
 	if s.pool == nil || trackID == uuid.Nil {
 		return

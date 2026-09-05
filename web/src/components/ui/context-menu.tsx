@@ -5,10 +5,17 @@ import { cn } from "@/lib/utils";
 export const ContextMenu = Ctx.Root;
 export const ContextMenuTrigger = Ctx.Trigger;
 
-export function ContextMenuContent({ className, ...props }: ComponentProps<typeof Ctx.Content>) {
+export function ContextMenuContent({ className, onCloseAutoFocus, ...props }: ComponentProps<typeof Ctx.Content>) {
   return (
     <Ctx.Portal>
-      <Ctx.Content className={cn("z-50 min-w-48 rounded-lg border border-border bg-surface-1 p-1 shadow-card", className)} {...props} />
+      <Ctx.Content
+        className={cn("z-50 min-w-48 rounded-lg border border-border bg-surface-1 p-1 shadow-card", className)}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          onCloseAutoFocus?.(e);
+        }}
+        {...props}
+      />
     </Ctx.Portal>
   );
 }

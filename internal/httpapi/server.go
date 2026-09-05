@@ -365,6 +365,7 @@ func (s *Server) Router() http.Handler {
 					r.Put("/integrations/external-providers/{provider}", s.adminPutExternalProvider)
 					r.Get("/metadata", s.adminMetadata)
 					r.Put("/metadata", s.adminPutMetadata)
+					r.Post("/metadata/refresh", s.adminRefreshMetadata)
 					r.Get("/logs", s.adminLogs)
 					r.Get("/integrations/discord", s.discordGet)
 					r.Put("/integrations/discord", s.discordPut)

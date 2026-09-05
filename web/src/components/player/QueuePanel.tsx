@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Download, GripVertical, History, ListMusic, ListPlus, PanelRightClose, Pin, PinOff, Play, Trash2, Undo2, X } from "lucide-react";
 import { fillableTrackIds, saveTracksOffline } from "@/lib/offlineFill";
@@ -19,6 +19,36 @@ import { Tooltip } from "@/components/ui/tooltip";
 import { asListenTracks, type ListenTrack } from "@/features/stats/types";
 import type { PresenceParticipant, PresenceSource } from "@/stores/sseClient";
 import { SoftBoundary } from "@/app/ErrorBoundary";
+import { avatarDisplaySrc, pageIsActive } from "./presenceAvatar";
+
+function usePageActive() {
+  const [active, setActive] = useState(pageIsActive);
+  useEffect(() => {
+    const sync = () => setActive(pageIsActive());
+    document.addEventListener("visibilitychange", sync);
+    window.addEventListener("focus", sync);
+    window.addEventListener("blur", sync);
+    sync();
+    return () => {
+      document.removeEventListener("visibilitychange", sync);
+      window.removeEventListener("focus", sync);
+      window.removeEventListener("blur", sync);
+    };
+  }, []);
+  return active;
+}
+
+function PresenceAvatar({ src, active }: { src: string; active: boolean }) {
+  return (
+    <img
+      src={avatarDisplaySrc(src, active)}
+      alt=""
+      referrerPolicy="no-referrer"
+      className="h-7 w-7 rounded-full object-cover ring-2 ring-surface-1"
+      decoding={active ? "async" : "sync"}
+    />
+  );
+}
 
 const MAX_VISIBLE_AVATARS = 4;
 
@@ -65,6 +95,7 @@ function sourcePip(source: PresenceSource) {
 
 export function QueuePresence({ className }: { className?: string }) {
   const listeners = usePlayer((s) => s.listeners);
+  const pageActive = usePageActive();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const ordered = orderPresence(listeners, me.data?.id);
   if (!ordered.length) return null;
@@ -83,7 +114,7 @@ export function QueuePresence({ className }: { className?: string }) {
               <Tooltip key={p.user_id || name || String(i)} label={label}>
                 <span className="relative inline-flex h-7 w-7 shrink-0">
                   {p.avatar_url ? (
-                    <img src={p.avatar_url} alt="" referrerPolicy="no-referrer" className="h-7 w-7 rounded-full object-cover ring-2 ring-surface-1" />
+                    <PresenceAvatar src={p.avatar_url} active={pageActive} />
                   ) : (
                     <span className="flex h-7 w-7 items-center justify-center rounded-full bg-surface-3 text-[10px] font-semibold text-foreground ring-2 ring-surface-1">
                       {name.slice(0, 1).toUpperCase()}

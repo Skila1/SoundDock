@@ -7,12 +7,10 @@ import { toast } from "sonner";
 import type { MediaState, QueueState, Track } from "@/types/api";
 import {
   askRendererTabsToStop,
-  discordOptionVisible,
   discordReady,
   getDeviceId,
   getTabRendererId,
   loadDevicePrefs,
-  resolveOutput,
   saveDevicePrefs,
   setManualOutput,
   subscribeRendererChannel,
@@ -460,10 +458,8 @@ function tabId() {
 
 function usingDiscord() {
   const s = usePlayer.getState();
-  if (s.queue?.output_pref === "discord") return true;
-  if (s.queue?.output_pref === "browser") return false;
-  if (s.output === "discord") return discordOptionVisible(s.voice) && resolveOutput(s.voice, loadDevicePrefs().outputManual) === "discord";
-  return false;
+  if (loadDevicePrefs().outputManual === "browser") return false;
+  return s.queue?.output_pref === "discord" || s.queue?.renderer_kind === "discord" || s.queue?.kind === "discord_guild";
 }
 
 function discordBlocked() {
@@ -495,8 +491,8 @@ function patchFromSession(view: SessionView, extra: Record<string, unknown> = {}
     shuffle: !!q.shuffle,
     repeat: q.repeat || "off",
     stopAfterCurrent: !!q.stop_after_current,
-    position: view.playhead.positionMs || q.position_ms || 0,
-    duration: q.duration_ms || usePlayer.getState().duration,
+    position: Number.isFinite(view.playhead.positionMs) ? view.playhead.positionMs : q.position_ms || 0,
+    duration: q.duration_ms || view.playhead.durationMs || usePlayer.getState().duration,
     playbackRate: q.playback_rate && q.playback_rate > 0 ? q.playback_rate : usePlayer.getState().playbackRate,
     autoplay: q.autoplay ?? usePlayer.getState().autoplay,
     output,
@@ -724,8 +720,7 @@ function isPlaybackLive() {
   const s = usePlayer.getState();
   if (s.playing) return true;
   const status = s.queue?.status;
-  if (status === "paused" || status === "playing" || status === "interrupted") return true;
-  return !!s.queue?.current_track_id;
+  return status === "paused" || status === "playing" || status === "interrupted";
 }
 
 function hintPayload(ids: string[], hints?: QueueTrackHint[]) {
@@ -734,19 +729,57 @@ function hintPayload(ids: string[], hints?: QueueTrackHint[]) {
   return hints.filter((h) => h.id && want.has(h.id));
 }
 
+function canPlayOnDiscord() {
+  return loadDevicePrefs().outputManual !== "browser" && discordReady(usePlayer.getState().voice);
+}
+
+function dropToBrowser() {
+  session = applyJoinFailure(session);
+  usePlayer.setState({ output: "browser", queue: { ...(usePlayer.getState().queue || emptyQueue()), output_pref: "browser" } });
+}
+
+async function playOnBrowser(ids: string[], idx: number, hints?: QueueTrackHint[]) {
+  const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
+    track_ids: ids,
+    tracks: hintPayload(ids, hints),
+    start: idx,
+    device_id: getDeviceId(),
+    command_id: newCommandId()
+  });
+  lastQueueMutAt = Date.now();
+  ingestQueue(q);
+  usePlayer.setState(patchFromSession(session, { playing: true, output: "browser" }));
+  const id = q.current_track_id || ids[idx];
+  const hint = hints?.[idx] || hints?.find((h) => h.id === ids[idx]);
+  if (hint?.title) {
+    currentMeta = { id, title: hint.title, artist: hint.artist, duration_ms: hint.duration_ms };
+    usePlayer.setState({ current: currentMeta, duration: hint.duration_ms || 0 });
+  } else {
+    currentMeta = undefined;
+  }
+  listen = null;
+  const t = await usePlayer.getState().hydrateTrack(id);
+  const played = await startLocal(id, 0, true, t);
+  usePlayer.setState({ playing: playingAfterStart(played, true, id), output: "browser" });
+  if (played) beginListen(id);
+  preloadUpcoming(session.queue);
+}
+
 async function appendToQueue(ids: string[], next?: boolean, hints?: QueueTrackHint[]) {
   if (!ids.length) return false;
   if (shouldSkipDupAppend(ids)) return false;
   if (ids.some((id) => !isLibraryTrackId(id))) {
     toast.message("Getting it from YouTube…");
   }
-  if (usingDiscord()) {
+  await usePlayer.getState().pollVoice();
+  if (discordReady(usePlayer.getState().voice) && loadDevicePrefs().outputManual !== "browser") {
     try {
       await joinDiscord();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Join a Discord voice channel to add tracks");
-      return false;
+    } catch {
+      usePlayer.setState({ output: "browser" });
     }
+  } else if (loadDevicePrefs().outputManual !== "browser") {
+    usePlayer.setState({ output: "browser" });
   }
   const prev = usePlayer.getState();
   lastQueueMutAt = Date.now();
@@ -977,7 +1010,7 @@ export const usePlayer = create<PlayerStore>()(
       keyboardShortcuts: false,
       stopAfterCurrent: false,
       sleepUntil: null,
-      output: resolveOutput(null, prefs.outputManual),
+      output: prefs.outputManual === "browser" ? "browser" : "discord",
       voice: null,
       sinkId: prefs.sinkId,
       listeners: [],
@@ -1051,64 +1084,37 @@ export const usePlayer = create<PlayerStore>()(
             toast.message("Getting it from YouTube…");
           }
           await get().pollVoice();
-          if (discordBlocked()) {
-            toast.error("Join a Discord voice channel to play");
-            return;
-          }
-          if (usingDiscord()) {
+          if (canPlayOnDiscord()) {
             pauseAll();
             try {
               const joined = await joinDiscord();
               const next = applyBindResult(session, joined || {}, joined?.guild_id || guildIdOf());
               if (next.ignored === "stale_bind") {
-                toast.error("Voice bind is out of date");
+                dropToBrowser();
+              } else {
+                session = next;
+                const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
+                  track_ids: ids,
+                  tracks: hintPayload(ids, hints),
+                  start: idx,
+                  device_id: getDeviceId(),
+                  command_id: newCommandId()
+                });
+                ingestQueue(q || emptyQueue());
+                set(patchFromSession(session, { playing: true, position: 0, output: "discord" }));
+                lastQueueMutAt = Date.now();
+                const currentId = usePlayer.getState().queue?.current_track_id || ids[idx];
+                await get().hydrateTrack(currentId);
+                ensureSessionPoll();
                 return;
               }
-              session = next;
-              const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
-                track_ids: ids,
-                tracks: hintPayload(ids, hints),
-                start: idx,
-                device_id: getDeviceId(),
-                command_id: newCommandId()
-              });
-              ingestQueue(q || emptyQueue());
-              set(patchFromSession(session, { playing: true, position: 0 }));
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : "Discord play failed";
-              toast.error(msg);
-              return;
+            } catch {
+              dropToBrowser();
             }
-            lastQueueMutAt = Date.now();
-            const currentId = usePlayer.getState().queue?.current_track_id || ids[idx];
-            await get().hydrateTrack(currentId);
-            ensureSessionPoll();
-            return;
+          } else if (get().output === "discord") {
+            dropToBrowser();
           }
-          const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
-            track_ids: ids,
-            tracks: hintPayload(ids, hints),
-            start: idx,
-            device_id: getDeviceId(),
-            command_id: newCommandId()
-          });
-          lastQueueMutAt = Date.now();
-          ingestQueue(q);
-          set(patchFromSession(session, { playing: true }));
-          const id = q.current_track_id || ids[idx];
-          const hint = hints?.[idx] || hints?.find((h) => h.id === ids[idx]);
-          if (hint?.title) {
-            currentMeta = { id, title: hint.title, artist: hint.artist, duration_ms: hint.duration_ms };
-            set({ current: currentMeta, duration: hint.duration_ms || 0 });
-          } else {
-            currentMeta = undefined;
-          }
-          listen = null;
-          const t = await get().hydrateTrack(id);
-          const played = await startLocal(id, 0, true, t);
-          set({ playing: playingAfterStart(played, true, id) });
-          if (played) beginListen(id);
-          preloadUpcoming(session.queue);
+          await playOnBrowser(ids, idx, hints);
         });
       },
       playNow: async (index) => {
@@ -1116,20 +1122,17 @@ export const usePlayer = create<PlayerStore>()(
         const ids = idsOf(q);
         if (!q || index < 0 || index >= ids.length) return;
         await get().pollVoice();
-        if (discordBlocked()) {
-          toast.error("Join a Discord voice channel to play");
-          return;
-        }
-        if (usingDiscord()) {
+        if (canPlayOnDiscord()) {
           pauseAll();
           try {
             await joinDiscord();
             await get().control("index", { index });
-          } catch (e) {
-            toast.error(e instanceof Error ? e.message : "Discord play failed");
             return;
+          } catch {
+            dropToBrowser();
           }
-          return;
+        } else if (get().output === "discord") {
+          dropToBrowser();
         }
         listen = null;
         let jumped = false;
@@ -1299,7 +1302,6 @@ export const usePlayer = create<PlayerStore>()(
           setManualOutput("discord");
           await get().pollVoice();
           if (!discordReady(get().voice)) {
-            setManualOutput("browser");
             session = applyJoinFailure(session);
             set({ output: "browser", playing: false, queue: { ...get().queue, output_pref: "browser" } as PlayerQueue });
             toast.error("Join a Discord voice channel to play");
@@ -1315,7 +1317,6 @@ export const usePlayer = create<PlayerStore>()(
             const next = applyBindResult(session, joined || {}, joined?.guild_id || guildIdOf());
             if (next.ignored === "stale_bind") {
               session = applyJoinFailure(session);
-              setManualOutput("browser");
               set({ output: "browser", queue: { ...get().queue, output_pref: "browser" } as PlayerQueue });
               toast.error("Voice bind is out of date");
               if (wasPlaying && resumeId) {
@@ -1342,7 +1343,6 @@ export const usePlayer = create<PlayerStore>()(
             set(patchFromSession(session, { output: "discord", playing: session.queue.status === "playing" || wasPlaying }));
           } catch (e) {
             session = applyJoinFailure(session);
-            setManualOutput("browser");
             set({ output: "browser", queue: { ...(get().queue || emptyQueue()), output_pref: "browser" } });
             toast.error(e instanceof Error ? e.message : "Discord join failed");
             if (wasPlaying && resumeId) {
@@ -1389,8 +1389,13 @@ export const usePlayer = create<PlayerStore>()(
       pollVoice: async () => {
         const voice = await fetchVoice();
         const manual = loadDevicePrefs().outputManual;
-        const pref = session.queue.output_pref;
-        const output = pref === "discord" || pref === "browser" ? pref : resolveOutput(voice, manual);
+        const cur = get().output;
+        const output =
+          manual === "browser" || voice?.discord_enabled === false
+            ? "browser"
+            : discordReady(voice)
+              ? "discord"
+              : cur || "discord";
         set({ voice, output });
         ensureSessionPoll();
       },
@@ -1614,7 +1619,7 @@ export function attachAudioListeners() {
   }
 
   if (!voiceTimer) {
-    voiceTimer = window.setInterval(() => usePlayer.getState().pollVoice(), 4000);
+    voiceTimer = window.setInterval(() => usePlayer.getState().pollVoice(), 2000);
     usePlayer.getState().pollVoice();
   }
 }

@@ -42,8 +42,21 @@ type Probe struct {
 	EncoderDelay        int
 	EncoderPadding      int
 	MBID                string
+	RecordingMBID       string
+	ArtistMBID          string
+	ArtistSortName      string
+	Credits             []ArtistCredit
+	Genres              []string
 	Source              string
 	Confidence          float64
+}
+
+// ArtistCredit is one MusicBrainz artist-credit entry (primary or featured).
+type ArtistCredit struct {
+	Name     string
+	SortName string
+	MBID     string
+	Role     string
 }
 
 var timedLyricRe = regexp.MustCompile(`\[\d{1,2}:\d{2}(?:[\.:]\d{1,3})?]`)

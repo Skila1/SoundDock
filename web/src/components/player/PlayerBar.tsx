@@ -70,7 +70,13 @@ export function PlayerBar() {
   const p = usePlayer();
   const ui = useUi();
   const t = p.current;
-  const progress = p.duration ? (p.position / p.duration) * 100 : 0;
+  const [scrub, setScrub] = useState<number | null>(null);
+  const pos = scrub ?? Math.min(p.position, p.duration || p.position || 0);
+
+  useEffect(() => {
+    setScrub(null);
+  }, [t?.id]);
+  const progress = p.duration ? Math.min(100, Math.max(0, (pos / p.duration) * 100)) : 0;
   const showDiscord = discordOptionVisible(p.voice);
   const discordOn = discordReady(p.voice);
   const tiny = p.tinyMode;
@@ -152,8 +158,16 @@ export function PlayerBar() {
           )}
         </div>
         <div className="mt-1 flex w-full max-w-xl items-center gap-2">
-          <span className="w-10 text-right text-[10px] text-subtle">{formatDuration(p.position)}</span>
-          <Slider value={[progress]} onValueChange={([v]) => p.seek(((v || 0) / 100) * (p.duration || 0))} />
+          <span className="w-10 text-right text-[10px] text-subtle">{formatDuration(pos)}</span>
+          <Slider
+            value={[progress]}
+            onValueChange={([v]) => setScrub(((v || 0) / 100) * (p.duration || 0))}
+            onValueCommit={([v]) => {
+              const ms = ((v || 0) / 100) * (p.duration || 0);
+              setScrub(null);
+              p.seek(ms);
+            }}
+          />
           <span className="w-10 text-[10px] text-subtle">{formatDuration(p.duration)}</span>
         </div>
       </div>

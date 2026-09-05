@@ -30,7 +30,7 @@ type Extra struct {
 func typeAllowlisted(typ string) bool {
 	switch strings.TrimSpace(typ) {
 	case "scapex.fetch", "tracks.metadata", "library.scan", "scan.duplicates", "lyrics.fetch",
-		"maintenance.retention", "stats.rebuild":
+		"maintenance.retention", "stats.rebuild", "metadata.refresh":
 		return true
 	default:
 		return false
@@ -66,7 +66,7 @@ func AllowCancel(typ, status string, progress int, extra Extra) bool {
 			return false
 		}
 		return true
-	case "library.scan", "tracks.metadata", "scan.duplicates", "lyrics.fetch":
+	case "library.scan", "tracks.metadata", "scan.duplicates", "lyrics.fetch", "metadata.refresh":
 		return true
 	case "maintenance.retention":
 		if status == "queued" || status == "retry" {

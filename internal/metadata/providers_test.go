@@ -61,6 +61,30 @@ func TestMusicBrainzLookupSendsTitle(t *testing.T) {
 	}
 }
 
+func TestMusicBrainzLookupRecordingIncludesGenres(t *testing.T) {
+	prevAPI, prevDelay := mbAPI, mbDelay
+	t.Cleanup(func() { mbAPI = prevAPI; mbDelay = prevDelay })
+	mbDelay = 0
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path + "?" + r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"rec-1","title":"Numb","genres":[{"name":"rock","count":3}]}`)
+	}))
+	defer srv.Close()
+	mbAPI = srv.URL
+	raw, err := (MusicBrainz{}).LookupRecording(t.Context(), "rec-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw["id"] != "rec-1" {
+		t.Fatalf("%v", raw)
+	}
+	if !strings.Contains(gotPath, "/ws/2/recording/rec-1") || !strings.Contains(gotPath, "inc=genres") {
+		t.Fatalf("lookup path %s", gotPath)
+	}
+}
+
 func TestCoverArtFrontURLPrefersFront(t *testing.T) {
 	raw := map[string]any{
 		"images": []any{

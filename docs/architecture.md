@@ -33,7 +33,7 @@ Play and queue HTTP do not wait on yt-dlp. YouTube-shaped refs enqueue acquisiti
 
 ## Metadata
 
-Scan-side Cover Art Archive lookups run when **Admin → Media → Metadata** external providers are on, the file has a MusicBrainz release MBID, and there is no embedded or folder art. This is not a Discord or playback path.
+Scan-side MusicBrainz lookups (when **Admin → Media → Metadata** is on) fill missing tags, official genres, and artist/release MBIDs. Cover Art Archive runs when the file has a MusicBrainz release MBID and there is no embedded or folder art. This is not a Discord or playback path.
 
 ## YouTube fetch
 

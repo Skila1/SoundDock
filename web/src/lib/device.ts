@@ -165,10 +165,10 @@ export function discordReady(voice: VoiceState | null) {
   return !!(voice && voice.discord_enabled && voice.linked && voice.in_voice);
 }
 
-/** Playback target: manual override wins; otherwise Discord when enabled+linked+in_voice. */
+/** Discord is the default. Browser wins only if the user locked it or no seeable VC. */
 export function resolveOutput(voice: VoiceState | null, manual: OutputTarget | null = loadDevicePrefs().outputManual): OutputTarget {
   if (voice && voice.discord_enabled === false) return "browser";
   if (manual === "browser") return "browser";
-  if (manual === "discord") return "discord";
+  if (!voice) return "discord";
   return discordReady(voice) ? "discord" : "browser";
 }

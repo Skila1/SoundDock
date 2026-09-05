@@ -24,15 +24,26 @@ export function nowMono(): number {
   return Date.now();
 }
 
+const MIN_WALL_MS = Date.parse("1970-01-01T00:00:00Z");
+
+function asWallClockMs(ms: number): number | null {
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  if (ms < 1e12) ms *= 1000;
+  if (ms < MIN_WALL_MS) return null;
+  return ms;
+}
+
 export function parseTimeMs(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return value > 0 && value < 1e12 ? value * 1000 : value;
+    return asWallClockMs(value);
   }
   if (typeof value === "string" && value.trim()) {
-    const parsed = Date.parse(value);
-    if (Number.isFinite(parsed)) return parsed;
+    if (/[tT]|-|:/.test(value)) {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return parsed >= MIN_WALL_MS ? parsed : null;
+    }
     const num = Number(value);
-    if (Number.isFinite(num)) return num > 0 && num < 1e12 ? num * 1000 : num;
+    if (Number.isFinite(num)) return asWallClockMs(num);
   }
   return null;
 }

@@ -15,6 +15,7 @@ func TestAllowCancelAllowlist(t *testing.T) {
 		{"scapex.fetch", "running", 10, Extra{FetchStage: StageProcessing}, false},
 		{"scapex.fetch", "running", 80, Extra{}, false},
 		{"tracks.metadata", "running", 0, Extra{}, true},
+		{"metadata.refresh", "running", 40, Extra{}, true},
 		{"library.scan", "queued", 0, Extra{}, true},
 		{"scan.duplicates", "running", 0, Extra{}, true},
 		{"lyrics.fetch", "queued", 0, Extra{}, true},

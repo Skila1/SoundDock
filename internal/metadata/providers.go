@@ -68,13 +68,11 @@ func musicBrainzSearchURL(artist, album, title string, durationMS int) string {
 	return strings.TrimRight(mbAPI, "/") + path + "?query=" + url.QueryEscape(q) + "&fmt=json&limit=5"
 }
 
-func (m MusicBrainz) Lookup(ctx context.Context, artist, album, title string) (map[string]any, error) {
-	u := musicBrainzSearchURL(artist, album, title, m.DurationMS)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+func mbGet(ctx context.Context, rawURL, ua string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	ua := m.UA
 	if ua == "" {
 		ua = mbUserAgent
 	}
@@ -84,6 +82,10 @@ func (m MusicBrainz) Lookup(ctx context.Context, artist, album, title string) (m
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		return nil, fmt.Errorf("musicbrainz %d", resp.StatusCode)
+	}
 	var raw map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&raw); err != nil {
 		return nil, err
@@ -92,6 +94,20 @@ func (m MusicBrainz) Lookup(ctx context.Context, artist, album, title string) (m
 		time.Sleep(mbDelay)
 	}
 	return raw, nil
+}
+
+func (m MusicBrainz) Lookup(ctx context.Context, artist, album, title string) (map[string]any, error) {
+	return mbGet(ctx, musicBrainzSearchURL(artist, album, title, m.DurationMS), m.UA)
+}
+
+// LookupRecording loads official genres, tags, and artist-credits for a recording MBID.
+func (m MusicBrainz) LookupRecording(ctx context.Context, mbid string) (map[string]any, error) {
+	mbid = strings.TrimSpace(mbid)
+	if mbid == "" {
+		return nil, fmt.Errorf("mbid required")
+	}
+	u := strings.TrimRight(mbAPI, "/") + "/ws/2/recording/" + url.PathEscape(mbid) + "?inc=genres+tags+artist-credits+releases&fmt=json"
+	return mbGet(ctx, u, m.UA)
 }
 
 type CoverArt struct{}

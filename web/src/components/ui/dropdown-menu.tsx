@@ -5,12 +5,16 @@ import { cn } from "@/lib/utils";
 export const DropdownMenu = Dropdown.Root;
 export const DropdownMenuTrigger = Dropdown.Trigger;
 
-export function DropdownMenuContent({ className, ...props }: ComponentProps<typeof Dropdown.Content>) {
+export function DropdownMenuContent({ className, onCloseAutoFocus, ...props }: ComponentProps<typeof Dropdown.Content>) {
   return (
     <Dropdown.Portal>
       <Dropdown.Content
         sideOffset={6}
         className={cn("z-50 min-w-44 rounded-lg border border-border bg-surface-1 p-1 shadow-card", className)}
+        onCloseAutoFocus={(e) => {
+          e.preventDefault();
+          onCloseAutoFocus?.(e);
+        }}
         {...props}
       />
     </Dropdown.Portal>

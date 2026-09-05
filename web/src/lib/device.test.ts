@@ -4,8 +4,42 @@ import {
   askRendererTabsToStop,
   getTabRendererGeneration,
   getTabRendererId,
-  subscribeRendererChannel
+  resolveOutput,
+  subscribeRendererChannel,
+  type VoiceState
 } from "@/lib/device";
+
+const readyVoice: VoiceState = {
+  discord_enabled: true,
+  linked: true,
+  in_voice: true,
+  guild_id: "g1",
+  channel_id: "c1"
+};
+
+describe("resolveOutput prefers Discord until a VC is missing", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("defaults to Discord before voice is known", () => {
+    expect(resolveOutput(null, null)).toBe("discord");
+  });
+
+  it("stays on Discord when the listener is in a voice channel", () => {
+    expect(resolveOutput(readyVoice, null)).toBe("discord");
+    expect(resolveOutput(readyVoice, "discord")).toBe("discord");
+  });
+
+  it("falls back to browser when Discord is enabled but no VC is visible", () => {
+    expect(resolveOutput({ ...readyVoice, in_voice: false }, null)).toBe("browser");
+    expect(resolveOutput({ ...readyVoice, in_voice: false }, "discord")).toBe("browser");
+  });
+
+  it("honors an explicit Browser lock", () => {
+    expect(resolveOutput(readyVoice, "browser")).toBe("browser");
+  });
+});
 
 describe("tab renderer identity", () => {
   beforeEach(() => {

@@ -240,6 +240,96 @@ describe("output switch", () => {
     expect(getPlayerSessionForTests().lastBindingRevision).toBe(9);
   });
 
+  it("toggles back to browser and plays locally when no voice channel is visible", async () => {
+    resetPlayerSessionForTests();
+    usePlayer.setState({
+      queue: null,
+      playing: false,
+      output: "discord",
+      voice: { ...voice, in_voice: false },
+      current: undefined,
+      position: 0,
+      duration: 0
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo) => {
+        const url = String(input);
+        if (url.includes("voice-state")) {
+          return { ok: true, json: async () => ({ ...voice, in_voice: false, guild_id: null, channel_id: null }) } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      })
+    );
+    const play = vi.spyOn(engine, "playActive").mockResolvedValue(undefined);
+    vi.mocked(api.post).mockImplementation(async (url: string) => {
+      if (String(url).includes("/discord/join")) throw new Error("should not join");
+      if (String(url).includes("renderer/acquire")) {
+        return queue({ renderer_id: getTabRendererId(), renderer_kind: "browser", output_pref: "browser" });
+      }
+      throw new Error(`unexpected POST ${url}`);
+    });
+    vi.mocked(api.put).mockResolvedValue(
+      queue({
+        output_pref: "browser",
+        renderer_kind: "browser",
+        renderer_id: getTabRendererId(),
+        status: "playing",
+        current_track_id: "t1",
+        position_ms: 0
+      })
+    );
+    vi.mocked(api.get).mockResolvedValue({ id: "t1", title: "Song", duration_ms: 180_000 });
+
+    await usePlayer.getState().playTracks(["t1"]);
+
+    expect(api.post).not.toHaveBeenCalledWith("/api/v1/me/discord/join", expect.any(Object));
+    expect(usePlayer.getState().output).toBe("browser");
+    expect(play).toHaveBeenCalled();
+  });
+
+  it("auto-joins Discord and plays there when the listener is in voice", async () => {
+    resetPlayerSessionForTests();
+    usePlayer.setState({
+      queue: null,
+      playing: false,
+      output: "browser",
+      voice,
+      current: undefined,
+      position: 0,
+      duration: 0
+    });
+    const pause = vi.spyOn(engine, "pauseAll");
+    const play = vi.spyOn(engine, "playActive").mockResolvedValue(undefined);
+    vi.mocked(api.post).mockImplementation(async (url: string) => {
+      if (String(url).includes("/discord/join")) {
+        return { ok: true, guild_id: "g1", binding_revision: 5, session_id: "sess-1" };
+      }
+      throw new Error(`unexpected POST ${url}`);
+    });
+    vi.mocked(api.put).mockResolvedValue(
+      queue({
+        output_pref: "discord",
+        renderer_kind: "discord",
+        renderer_id: "bot-1",
+        status: "playing",
+        current_track_id: "t1",
+        position_ms: 0,
+        binding_revision: 5
+      })
+    );
+    vi.mocked(api.get).mockResolvedValue({ id: "t1", title: "Song", duration_ms: 180_000 });
+
+    await usePlayer.getState().playTracks(["t1"]);
+
+    expect(api.post).toHaveBeenCalledWith("/api/v1/me/discord/join", expect.any(Object));
+    expect(api.put).toHaveBeenCalled();
+    expect(usePlayer.getState().output).toBe("discord");
+    expect(usePlayer.getState().current?.id).toBe("t1");
+    expect(pause).toHaveBeenCalled();
+    expect(play).not.toHaveBeenCalled();
+  });
+
   it("stops HTMLAudio immediately when GET renderer_id is not this tab", async () => {
     seedBrowserPlaying();
     const pause = vi.spyOn(engine, "pauseAll");

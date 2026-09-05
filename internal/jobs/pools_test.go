@@ -95,6 +95,7 @@ func TestPoolForType(t *testing.T) {
 		"library.delete":           PoolMaintenance,
 		"tracks.bulk_delete":       PoolMaintenance,
 		"tracks.metadata":          PoolMaintenance,
+		"metadata.refresh":         PoolMaintenance,
 		"unknown.job":              PoolMaintenance,
 	}
 	for typ, want := range cases {
