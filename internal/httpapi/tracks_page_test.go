@@ -125,3 +125,89 @@ func TestListTracksCursorContract(t *testing.T) {
 		t.Fatalf("last page next_cursor %v", page2.NextCursor)
 	}
 }
+
+func TestListTracksQueryMatchesTitleArtistAndUnplayable(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	s := &Server{Pool: pool}
+	fix := seedGrantLibs(t, pool)
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO library_grants (library_id, user_id, actions)
+		VALUES ($1,$2, ARRAY['read','stream'])`, fix.libA, fix.userID); err != nil {
+		t.Fatal(err)
+	}
+	titleID, ytID, otherID := uuid.New(), uuid.New(), uuid.New()
+	artistID := uuid.New()
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO artists (id, name) VALUES ($1, 'Skila')`, artistID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO tracks (id, library_id, title, duration_ms, acquisition)
+		VALUES
+			($1,$4,'Amana Koyim Drum',1000,''),
+			($2,$4,'Bi Bi Bi Bizamet',1000,'youtube'),
+			($3,$4,'Other Song',1000,'')`,
+		titleID, ytID, otherID, fix.libA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO track_artists (track_id, artist_id, role, position)
+		VALUES ($1,$2,'primary',0)`, ytID, artistID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		c := context.Background()
+		_, _ = pool.Exec(c, `DELETE FROM track_artists WHERE track_id=ANY($1)`, []uuid.UUID{titleID, ytID, otherID})
+		_, _ = pool.Exec(c, `DELETE FROM tracks WHERE id=ANY($1)`, []uuid.UUID{titleID, ytID, otherID})
+		_, _ = pool.Exec(c, `DELETE FROM artists WHERE id=$1`, artistID)
+	})
+
+	u := &auth.User{ID: fix.userID, Username: "user", Permissions: []string{"tracks.read"}}
+	rec := httptest.NewRecorder()
+	s.listTracks(rec, authedJSON(u, "GET", "/api/v1/tracks?limit=50&q=Amana", nil))
+	if rec.Code != 200 {
+		t.Fatalf("title q status %d %s", rec.Code, rec.Body.String())
+	}
+	var page struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || asString(page.Items[0]["id"]) != titleID.String() {
+		t.Fatalf("title q %+v", page.Items)
+	}
+
+	rec = httptest.NewRecorder()
+	s.listTracks(rec, authedJSON(u, "GET", "/api/v1/tracks?limit=50&all=1&q=skila", nil))
+	if rec.Code != 200 {
+		t.Fatalf("artist q status %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 || asString(page.Items[0]["id"]) != ytID.String() {
+		t.Fatalf("artist/youtube q %+v", page.Items)
+	}
+
+	rec = httptest.NewRecorder()
+	s.listTracks(rec, authedJSON(u, "GET", "/api/v1/tracks?limit=50&q=skila", nil))
+	if rec.Code != 200 {
+		t.Fatalf("playable artist q status %d %s", rec.Code, rec.Body.String())
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 0 {
+		t.Fatalf("youtube without file must stay hidden without all=1, got %+v", page.Items)
+	}
+
+	sql, extra := listTracksFilteredSQL("A", true)
+	if !strings.Contains(sql, "ILIKE") || !strings.Contains(sql, "track_artists") {
+		t.Fatalf("filtered sql %s", sql)
+	}
+	if len(extra) != 1 || extra[0] != "%A%" {
+		t.Fatalf("like extra %v", extra)
+	}
+}

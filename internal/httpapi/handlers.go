@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -170,15 +171,49 @@ const defaultTrackPage = 100
 const maxTrackPage = 200
 
 func listTracksSQL() string {
-	return `
+	sql, _ := listTracksFilteredSQL("", false)
+	return sql
+}
+
+func likePattern(q string) string {
+	q = strings.ReplaceAll(q, `\`, `\\`)
+	q = strings.ReplaceAll(q, `%`, `\%`)
+	q = strings.ReplaceAll(q, `_`, `\_`)
+	return "%" + q + "%"
+}
+
+// listTracksFilteredSQL lists grant-scoped tracks. q matches title, album, or artist.
+// includeAll keeps YouTube/ScapeX rows that have no local file (catalog edits).
+func listTracksFilteredSQL(q string, includeAll bool) (string, []any) {
+	var b strings.Builder
+	b.WriteString(`
 		SELECT t.id, t.title, t.duration_ms, t.track_number, t.disc_number, t.year, t.explicit, t.album_id, t.library_id,
 		       coalesce(al.title,''), t.created_at, ` + listenArtistSQL + `
 		FROM tracks t LEFT JOIN albums al ON al.id=t.album_id
-		WHERE t.library_id = ANY($1)
-		  AND ` + trackPlayablePred + `
-		  AND ($2::timestamptz IS NULL OR (t.created_at, t.id) < ($2, $3))
+		WHERE t.library_id = ANY($1)`)
+	if !includeAll {
+		b.WriteString("\n		  AND " + trackPlayablePred)
+	}
+	var extra []any
+	next := 2
+	if strings.TrimSpace(q) != "" {
+		extra = append(extra, likePattern(strings.TrimSpace(q)))
+		b.WriteString(fmt.Sprintf(`
+		  AND (
+		    t.title ILIKE $%d ESCAPE '\'
+		    OR coalesce(al.title,'') ILIKE $%d ESCAPE '\'
+		    OR EXISTS (
+		      SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
+		      WHERE ta.track_id=t.id AND ar.name ILIKE $%d ESCAPE '\'
+		    )
+		  )`, next, next, next))
+		next++
+	}
+	b.WriteString(fmt.Sprintf(`
+		  AND ($%d::timestamptz IS NULL OR (t.created_at, t.id) < ($%d, $%d))
 		ORDER BY t.created_at DESC, t.id DESC
-		LIMIT $4`
+		LIMIT $%d`, next, next, next+1, next+2))
+	return b.String(), extra
 }
 
 func trackPageLimit(raw string) int {
@@ -238,7 +273,12 @@ func (s *Server) listTracks(w http.ResponseWriter, r *http.Request) {
 	if !cursorTime.IsZero() && cursorID != uuid.Nil {
 		cursorArg = cursorTime
 	}
-	rows, err := s.Pool.Query(r.Context(), listTracksSQL(), libs, cursorArg, cursorID, limit+1)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	includeAll := strings.EqualFold(r.URL.Query().Get("all"), "1") || strings.EqualFold(r.URL.Query().Get("all"), "true")
+	sql, extra := listTracksFilteredSQL(q, includeAll)
+	args := append([]any{libs}, extra...)
+	args = append(args, cursorArg, cursorID, limit+1)
+	rows, err := s.Pool.Query(r.Context(), sql, args...)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return

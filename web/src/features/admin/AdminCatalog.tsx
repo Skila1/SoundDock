@@ -9,6 +9,7 @@ import { Field } from "@/components/ui/field";
 import { PageHeader } from "@/components/ui/empty";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import type { Track, TrackPage } from "@/types/api";
 
 type CatalogAlbum = {
   id: string;
@@ -18,15 +19,6 @@ type CatalogAlbum = {
   track_count?: number;
   library_id?: string;
   edition_title?: string;
-};
-
-type SearchHit = {
-  id: string;
-  type: string;
-  title: string;
-  artist?: string;
-  album?: string;
-  year?: number | null;
 };
 
 type TrackMeta = {
@@ -67,19 +59,19 @@ export function AdminCatalog() {
   });
   const tracks = useQuery({
     queryKey: ["admin-catalog-tracks", trackQ],
-    enabled: trackQ.trim().length > 0,
-    queryFn: () =>
-      api.get<{ results: SearchHit[] }>(
-        `/api/v1/search?type=track&limit=80&q=${encodeURIComponent(trackQ.trim())}`
-      )
+    queryFn: () => {
+      const p = new URLSearchParams({ limit: "200", all: "1" });
+      if (trackQ.trim()) p.set("q", trackQ.trim());
+      return api.get<TrackPage>(`/api/v1/tracks?${p}`);
+    }
   });
   const allAlbums = useQuery({
     queryKey: ["admin-catalog-albums-all"],
     queryFn: () => api.get<CatalogAlbum[]>("/api/v1/albums?limit=400")
   });
 
-  const albumList = Array.isArray(albums.data) ? albums.data : [];
-  const trackList = (tracks.data?.results || []).filter((h) => h.type === "track");
+  const albumList = useMemo(() => (Array.isArray(albums.data) ? albums.data : []), [albums.data]);
+  const trackList: Track[] = tracks.data?.items || [];
   const albumOptions = useMemo(
     () => (Array.isArray(allAlbums.data) ? allAlbums.data : albumList),
     [allAlbums.data, albumList]
@@ -348,11 +340,15 @@ export function AdminCatalog() {
                 </Button>
               </label>
             ))}
-            {!trackQ.trim() && (
-              <p className="px-3 py-8 text-center text-sm text-muted">Search to load tracks.</p>
+            {tracks.isError && (
+              <p className="px-3 py-8 text-center text-sm text-muted">
+                Could not load tracks{tracks.error instanceof Error ? `: ${tracks.error.message}` : "."}
+              </p>
             )}
-            {trackQ.trim() && !trackList.length && !tracks.isFetching && (
-              <p className="px-3 py-8 text-center text-sm text-muted">No tracks match.</p>
+            {!tracks.isError && !trackList.length && !tracks.isFetching && (
+              <p className="px-3 py-8 text-center text-sm text-muted">
+                {trackQ.trim() ? "No tracks match." : "No tracks in the catalogue."}
+              </p>
             )}
           </div>
         </section>
