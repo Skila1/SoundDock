@@ -203,7 +203,7 @@ export function PlayerBar() {
             size="icon"
             variant="ghost"
             className={ui.lyricsOpen ? "text-accent" : ""}
-            onClick={() => ui.set({ lyricsOpen: !ui.lyricsOpen, nowPlayingOpen: false })}
+            onClick={() => ui.toggleLyrics()}
             aria-label="Lyrics"
             aria-pressed={ui.lyricsOpen}
           >
@@ -214,7 +214,7 @@ export function PlayerBar() {
           <Button
             size="icon"
             variant="ghost"
-            className={ui.queuePinned || !ui.queueCollapsed || ui.queueOpen ? "text-accent" : ""}
+            className={!ui.lyricsOpen && (ui.queuePinned || !ui.queueCollapsed || ui.queueOpen) ? "text-accent" : ""}
             onClick={() => ui.toggleQueue()}
             aria-label="Queue"
           >

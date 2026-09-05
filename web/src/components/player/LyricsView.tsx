@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Mic2, X } from "lucide-react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
+import { Mic2, PanelRightClose, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Artwork } from "@/components/media/Artwork";
 import { artworkUrl } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { desktopQueue, useUi } from "@/stores/ui";
 import { usePlayer } from "@/stores/player";
-import { useUi } from "@/stores/ui";
 import type { LyricsLine, LyricsWord, TrackLyrics } from "@/types/api";
 import { activeLyricIndex, activeWordIndex, hasPlainBody, karaokeLines, lyricsQueryKey } from "./lyricsSync";
 
@@ -34,6 +34,18 @@ function useSmoothPosition(storePos: number, playing: boolean, rate: number) {
   }, [playing]);
 
   return playing ? pos : storePos;
+}
+
+function useDockedSide() {
+  const [docked, setDocked] = useState(() => desktopQueue());
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1280px)");
+    const sync = () => setDocked(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return docked;
 }
 
 function WordButton({
@@ -88,15 +100,15 @@ function KaraokeLine({
         className={`block w-full text-left leading-relaxed transition-all duration-200 ${
           compact
             ? active
-              ? "text-base font-semibold text-foreground"
+              ? "text-sm font-semibold text-foreground"
               : "text-sm text-muted"
             : active
-              ? "text-2xl font-semibold tracking-tight text-foreground md:text-3xl"
-              : "text-lg text-muted/70 md:text-xl"
+              ? "text-base font-semibold text-foreground"
+              : "text-sm text-muted"
         }`}
       >
         {words.length ? (
-          <span className={`flex flex-wrap gap-x-1.5 gap-y-1 ${compact ? "" : "justify-center"}`}>
+          <span className="flex flex-wrap gap-x-1.5 gap-y-1">
             {words.map((word, i) => (
               <WordButton
                 key={`${word.t_ms}-${i}`}
@@ -139,11 +151,11 @@ export function LyricsKaraoke({
     return (
       <div
         ref={listRef}
-        className={compact ? "max-h-52 overflow-y-auto rounded-lg bg-surface-2/70 px-4 py-3" : "min-h-0 flex-1 overflow-y-auto px-4 py-6"}
+        className={compact ? "max-h-52 overflow-y-auto rounded-lg bg-surface-2/70 px-4 py-3" : "min-h-0 flex-1 overflow-y-auto px-4 py-2"}
         role="region"
         aria-label="Lyrics"
       >
-        <ul className={compact ? "space-y-2" : "mx-auto flex max-w-2xl flex-col gap-5 py-[30vh]"}>
+        <ul className={compact ? "space-y-2" : "space-y-3 py-2"}>
           {lines.map((line, i) => (
             <KaraokeLine
               key={`${line.t_ms}-${i}`}
@@ -162,13 +174,11 @@ export function LyricsKaraoke({
   if (hasPlainBody(lyrics)) {
     return (
       <div
-        className={compact ? "max-h-52 overflow-y-auto rounded-lg bg-surface-2/70 px-4 py-3" : "min-h-0 flex-1 overflow-y-auto px-6 py-8"}
+        className={compact ? "max-h-52 overflow-y-auto rounded-lg bg-surface-2/70 px-4 py-3" : "min-h-0 flex-1 overflow-y-auto px-4 py-3"}
         role="region"
         aria-label="Lyrics"
       >
-        <p className={`mx-auto max-w-xl whitespace-pre-wrap leading-relaxed text-muted ${compact ? "text-sm" : "text-lg"}`}>
-          {lyrics.body}
-        </p>
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted">{lyrics.body}</p>
       </div>
     );
   }
@@ -197,57 +207,77 @@ export function LyricsPrefetch() {
   return null;
 }
 
-export function LyricsView() {
-  const ui = useUi();
+export function LyricsPanel({ onCollapse, onClose }: { onCollapse?: () => void; onClose?: () => void }) {
   const p = usePlayer();
   const t = p.current;
-  const positionMs = useSmoothPosition(p.position, p.playing && ui.lyricsOpen, p.playbackRate || 1);
+  const positionMs = useSmoothPosition(p.position, p.playing, p.playbackRate || 1);
   const q = useQuery({
     queryKey: lyricsQueryKey(t?.id || ""),
     queryFn: () => api.get<TrackLyrics>(`/api/v1/tracks/${encodeURIComponent(t!.id)}/lyrics`),
-    enabled: ui.lyricsOpen && Boolean(t?.id),
+    enabled: Boolean(t?.id),
     staleTime: 10 * 60_000
   });
   const lyrics = q.data;
   const showKaraoke = Boolean(lyrics && (karaokeLines(lyrics).length || hasPlainBody(lyrics)));
 
   return (
-    <Dialog open={ui.lyricsOpen} onOpenChange={(open) => ui.set({ lyricsOpen: open })}>
-      <DialogContent
-        hideClose
-        overlayClassName="bottom-[72px]"
-        className="fixed inset-x-0 top-0 bottom-[72px] left-0 z-50 flex h-auto max-h-none w-full max-w-none translate-x-0 translate-y-0 flex-col overflow-hidden rounded-none border-0 bg-background p-0 sm:w-full"
-      >
-        <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-          <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md bg-surface-2">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-between gap-2 px-4 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="h-9 w-9 shrink-0 overflow-hidden rounded-md bg-surface-2">
             {t && <Artwork src={artworkUrl("track", t.id, "thumb")} id={t.id} name={t.title} kind="track" />}
           </div>
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold">{t?.title || "Nothing playing"}</div>
-            <div className="truncate text-xs text-muted">{t?.artists?.map((a) => a.name).join(", ") || t?.artist || ""}</div>
+          <div className="min-w-0">
+            <h2 className="truncate text-sm font-semibold">{t?.title || "Lyrics"}</h2>
+            <p className="truncate text-xs text-muted">{t?.artists?.map((a) => a.name).join(", ") || t?.artist || ""}</p>
           </div>
-          <Button size="icon" variant="ghost" onClick={() => ui.set({ lyricsOpen: false })} aria-label="Close lyrics">
-            <X />
-          </Button>
         </div>
-        {q.isLoading && t ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-muted">Loading lyrics…</div>
-        ) : showKaraoke && lyrics ? (
-          <LyricsKaraoke lyrics={lyrics} positionMs={positionMs} onSeek={(ms) => p.seek(ms)} />
-        ) : (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-            <div className="rounded-full bg-surface-2 p-3">
-              <Mic2 className="h-6 w-6 text-muted" />
-            </div>
-            <p className="text-base font-semibold">{t ? "No lyrics for this track" : "Nothing playing"}</p>
-            <p className="max-w-sm text-sm text-muted">
-              {t
-                ? "SoundDock looks up cached, embedded, and on-disk lyrics, then LRCLIB when that is enabled in Admin."
-                : "Play a song, then open lyrics again."}
-            </p>
+        <div className="flex shrink-0 items-center gap-1">
+          {onCollapse && (
+            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onCollapse} aria-label="Close lyrics">
+              <PanelRightClose className="h-4 w-4" />
+            </Button>
+          )}
+          {onClose && (
+            <Button size="icon" variant="ghost" className="h-8 w-8" onClick={onClose} aria-label="Close lyrics">
+              <X className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      </div>
+      {q.isLoading && t ? (
+        <div className="flex flex-1 items-center justify-center px-4 text-sm text-muted">Loading lyrics…</div>
+      ) : showKaraoke && lyrics ? (
+        <LyricsKaraoke lyrics={lyrics} positionMs={positionMs} onSeek={(ms) => p.seek(ms)} />
+      ) : (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          <div className="rounded-full bg-surface-2 p-3">
+            <Mic2 className="h-5 w-5 text-muted" />
           </div>
-        )}
-      </DialogContent>
-    </Dialog>
+          <p className="text-sm font-semibold">{t ? "No lyrics for this track" : "Nothing playing"}</p>
+          <p className="text-xs text-muted">
+            {t
+              ? "Cached, embedded, and on-disk lyrics are used first. LRCLIB is used when enabled in Admin."
+              : "Play a song, then open lyrics again."}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function LyricsSheet() {
+  const ui = useUi();
+  const docked = useDockedSide();
+  return (
+    <Sheet open={ui.lyricsOpen && !docked} onOpenChange={(open) => !open && ui.closeLyrics()}>
+      <SheetContent
+        side={typeof window !== "undefined" && window.innerWidth < 768 ? "bottom" : "right"}
+        className="flex flex-col p-0"
+        hideClose
+      >
+        <LyricsPanel onClose={() => ui.closeLyrics()} />
+      </SheetContent>
+    </Sheet>
   );
 }

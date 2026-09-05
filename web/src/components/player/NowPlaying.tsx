@@ -57,7 +57,7 @@ export function NowPlaying() {
           {showLyrics && lyrics && (
             <div className="mt-4">
               <LyricsKaraoke lyrics={lyrics} positionMs={p.position} compact onSeek={(ms) => p.seek(ms)} />
-              <Button size="sm" variant="ghost" className="mt-2" onClick={() => ui.set({ lyricsOpen: true, nowPlayingOpen: false })}>
+              <Button size="sm" variant="ghost" className="mt-2" onClick={() => ui.openLyrics()}>
                 Open lyrics
               </Button>
             </div>

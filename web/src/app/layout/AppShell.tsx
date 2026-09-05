@@ -8,13 +8,13 @@ import { PlayerBar } from "@/components/player/PlayerBar";
 import { QueuePanel } from "@/components/player/QueuePanel";
 import { QueueSheet } from "@/components/player/QueueSheet";
 import { NowPlaying } from "@/components/player/NowPlaying";
-import { LyricsPrefetch, LyricsView } from "@/components/player/LyricsView";
+import { LyricsPanel, LyricsPrefetch, LyricsSheet } from "@/components/player/LyricsView";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { PrefsSync } from "@/stores/prefs";
 import { attachAudioListeners, usePlayer } from "@/stores/player";
 import { ensureDiscordPresence } from "@/features/settings/discordPresence";
-import { useUi } from "@/stores/ui";
+import { queueDocked, useUi } from "@/stores/ui";
 import { api } from "@/lib/api";
 import type { User } from "@/types/api";
 
@@ -45,7 +45,7 @@ export function AppShell({ user }: { user: User }) {
     ensureDiscordPresence();
   }, []);
   const title = Object.entries(titles).find(([k]) => (k === "/" ? loc.pathname === "/" : loc.pathname.startsWith(k)))?.[1];
-  const queueOpen = ui.queuePinned || !ui.queueCollapsed;
+  const sideOpen = ui.lyricsOpen || queueDocked(ui);
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
@@ -59,9 +59,13 @@ export function AppShell({ user }: { user: User }) {
             <Outlet />
           </main>
         </div>
-        {queueOpen && (
+        {sideOpen && (
           <aside className="hidden h-full min-h-0 w-[300px] shrink-0 flex-col overflow-hidden border-l border-border bg-surface-1/80 xl:flex">
-            <QueuePanel onCollapse={() => ui.closeQueue()} />
+            {ui.lyricsOpen ? (
+              <LyricsPanel onCollapse={() => ui.closeLyrics()} />
+            ) : (
+              <QueuePanel onCollapse={() => ui.closeQueue()} />
+            )}
           </aside>
         )}
       </div>
@@ -69,7 +73,7 @@ export function AppShell({ user }: { user: User }) {
       <MobileNav />
       <QueueSheet />
       <NowPlaying />
-      <LyricsView />
+      <LyricsSheet />
       <LyricsPrefetch />
       <Sheet open={ui.mobileNav} onOpenChange={(v) => ui.set({ mobileNav: v })}>
         <SheetContent side="left" title="Menu">
