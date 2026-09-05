@@ -17,8 +17,9 @@ require (
 	golang.org/x/sys v0.34.0
 )
 
-// Upstream discordgo v0.29.0 has no DAVE. Discord voice now requires it (close 4017).
-replace github.com/bwmarrin/discordgo => github.com/yeongaori/discordgo-fork v0.0.0-20260627070107-c65bda26a53b
+// yeongaori discordgo-fork (DAVE) plus SoundDock voice patches: Opcode 5 speaking
+// must be bitmask+ssrc, and UDP frames must not leave before DAVE CanEncrypt.
+replace github.com/bwmarrin/discordgo => ./third_party/discordgo
 
 require (
 	github.com/beorn7/perks v1.0.1 // indirect
