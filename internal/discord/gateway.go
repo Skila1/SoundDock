@@ -133,10 +133,8 @@ func (b *Bot) onGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
 	if err != nil || !enabled || token == "" || appID == nil || *appID == "" {
 		return
 	}
-	body, _ := marshalCommands()
-	u := "https://discord.com/api/v10/applications/" + *appID + "/guilds/" + g.ID + "/commands"
-	if err := putDiscordJSON(ctx, token, u, body); err != nil {
-		b.log.Warn("guild command register", "guild", g.ID, "err", err)
+	if err := putDiscordJSON(ctx, token, guildCommandsURL(*appID, g.ID), []byte("[]")); err != nil {
+		b.log.Warn("guild command wipe", "guild", g.ID, "err", err)
 	}
 }
 

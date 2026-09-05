@@ -130,6 +130,7 @@ func main() {
 		dock := scapex.NewDockWithPool(pool, inbox)
 		srv.ScapeX = scapex.NewLocal(scapex.NewService(nil, dock))
 	}
+	srv.WirePlayback()
 	if fsys, err := web.FS(); err == nil {
 		srv.Web = fsys
 	}

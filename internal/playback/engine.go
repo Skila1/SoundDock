@@ -94,11 +94,23 @@ type db interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
+// AutoplayFiller appends radio tracks. It must use Add, not Control (Control
+// would recurse into the filler on skip).
+type AutoplayFiller func(ctx context.Context, sid uuid.UUID) error
+
 type Engine struct {
-	pool *pgxpool.Pool
-	mu   sync.Map
-	rnd  *rand.Rand
-	rndM sync.Mutex
+	pool   *pgxpool.Pool
+	mu     sync.Map
+	rnd    *rand.Rand
+	rndM   sync.Mutex
+	filler AutoplayFiller
+}
+
+func (e *Engine) SetAutoplayFiller(fn AutoplayFiller) {
+	if e == nil {
+		return
+	}
+	e.filler = fn
 }
 
 func New(pool *pgxpool.Pool) *Engine { return &Engine{pool: pool} }
@@ -322,6 +334,14 @@ func (e *Engine) Add(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, nex
 	m := e.lock(sid.String())
 	m.Lock()
 	defer m.Unlock()
+	return e.AddLocked(ctx, sid, tracks, next)
+}
+
+// AddLocked appends tracks. The caller must already hold the session mutex.
+func (e *Engine) AddLocked(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID, next bool) error {
+	if e == nil || len(tracks) == 0 {
+		return nil
+	}
 	tx, err := e.pool.Begin(ctx)
 	if err != nil {
 		return err

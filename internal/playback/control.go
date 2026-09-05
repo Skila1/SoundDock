@@ -12,10 +12,14 @@ import (
 )
 
 func (e *Engine) Control(ctx context.Context, sid uuid.UUID, action string, extra map[string]any) error {
+	extra = normalizeControlExtra(action, extra)
+	if action == "skip" || action == "next" {
+		// Fill before the session lock so radio/YouTube work cannot stall pause/skip.
+		e.runAutoplayFiller(ctx, sid)
+	}
 	m := e.lock(sid.String())
 	m.Lock()
 	defer m.Unlock()
-	extra = normalizeControlExtra(action, extra)
 
 	tx, err := e.pool.Begin(ctx)
 	if err != nil {

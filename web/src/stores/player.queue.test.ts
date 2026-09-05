@@ -239,3 +239,41 @@ describe("add to queue keeps playback", () => {
     expect(api.post).toHaveBeenCalled();
   });
 });
+
+describe("autoplay persists on the session", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    sessionStorage.clear();
+    localStorage.clear();
+    resetPlayerSessionForTests();
+    vi.mocked(api.get).mockReset();
+    vi.mocked(api.post).mockReset();
+  });
+
+  it("writes autoplay to the session so Discord polls cannot flip the switch off", async () => {
+    seedPlaying(queue({ autoplay: false }));
+    usePlayer.setState({ autoplay: false });
+    vi.mocked(api.post).mockImplementation(async (url: string, body?: unknown) => {
+      if (!String(url).includes("/me/queue/control")) {
+        throw new Error(`unexpected POST ${url}`);
+      }
+      const sent = body as { action?: string; extra?: { autoplay?: boolean } };
+      expect(sent.action).toBe("autoplay");
+      expect(sent.extra?.autoplay).toBe(true);
+      return queue({ autoplay: true, state_revision: 6 });
+    });
+
+    await usePlayer.getState().setAutoplay(true);
+
+    expect(usePlayer.getState().autoplay).toBe(true);
+    applyRemoteQueueForTests(queue({ autoplay: true, state_revision: 7 }));
+    expect(usePlayer.getState().autoplay).toBe(true);
+  });
+
+  it("follows the session when autoplay is turned off remotely", () => {
+    seedPlaying(queue({ autoplay: true }));
+    usePlayer.setState({ autoplay: true });
+    applyRemoteQueueForTests(queue({ autoplay: false, state_revision: 8 }));
+    expect(usePlayer.getState().autoplay).toBe(false);
+  });
+});

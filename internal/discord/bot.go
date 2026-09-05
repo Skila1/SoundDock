@@ -212,25 +212,54 @@ func commands() []slashCmd {
 	}
 }
 
+func globalCommandsURL(appID string) string {
+	return "https://discord.com/api/v10/applications/" + appID + "/commands"
+}
+
+func guildCommandsURL(appID, guildID string) string {
+	return "https://discord.com/api/v10/applications/" + appID + "/guilds/" + guildID + "/commands"
+}
+
+type commandPut struct {
+	URL  string
+	Body []byte
+}
+
+// commandSyncPuts registers one global catalogue and wipes every guild copy.
+// Guild + global with the same names shows every slash command twice.
+func commandSyncPuts(appID string, guildIDs []string) []commandPut {
+	body, _ := json.Marshal(commands())
+	out := []commandPut{{URL: globalCommandsURL(appID), Body: body}}
+	empty := []byte("[]")
+	for _, id := range guildIDs {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		out = append(out, commandPut{URL: guildCommandsURL(appID, id), Body: empty})
+	}
+	return out
+}
+
 func (b *Bot) syncCommands(ctx context.Context, token string, appID *string) error {
 	if appID == nil || *appID == "" {
 		return fmt.Errorf("no application id")
-	}
-	body, _ := json.Marshal(commands())
-	global := "https://discord.com/api/v10/applications/" + *appID + "/commands"
-	if err := putDiscordJSON(ctx, token, global, body); err != nil {
-		return fmt.Errorf("global commands: %w", err)
 	}
 	guilds, err := listBotGuilds(ctx, token)
 	if err != nil {
 		return err
 	}
-	var last error
+	ids := make([]string, 0, len(guilds))
 	for _, g := range guilds {
 		_, _ = b.pool.Exec(ctx, `INSERT INTO discord_guilds (id, name) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name`, g.ID, g.Name)
-		u := "https://discord.com/api/v10/applications/" + *appID + "/guilds/" + g.ID + "/commands"
-		if err := putDiscordJSON(ctx, token, u, body); err != nil {
-			b.log.Warn("guild command sync", "guild", g.ID, "err", err)
+		ids = append(ids, g.ID)
+	}
+	var last error
+	for i, op := range commandSyncPuts(*appID, ids) {
+		if err := putDiscordJSON(ctx, token, op.URL, op.Body); err != nil {
+			if i == 0 {
+				return fmt.Errorf("global commands: %w", err)
+			}
+			b.log.Warn("guild command wipe", "url", op.URL, "err", err)
 			last = err
 		}
 	}

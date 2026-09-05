@@ -977,7 +977,7 @@ type PlayerStore = {
   pollVoice: () => Promise<void>;
   syncDiscordQueue: () => Promise<void>;
   setPlaybackRate: (r: number) => void;
-  setAutoplay: (on: boolean) => void;
+  setAutoplay: (on: boolean) => Promise<void>;
   setVisualizer: (on: boolean) => void;
   setTinyMode: (on: boolean) => void;
   setKeyboardShortcuts: (on: boolean) => void;
@@ -1016,8 +1016,12 @@ export const usePlayer = create<PlayerStore>()(
           await get().pollVoice();
           const { queue: q, clock } = await fetchQueue();
           ingestQueue(q || emptyQueue(), { clock });
+          const prefsNow = loadDevicePrefs();
           const discord = usingDiscord() || shouldStopHtmlAudio(session.queue, tabId());
           set(patchFromSession(session, { playing: discord ? session.queue.status === "playing" : false }));
+          if (prefsNow.autoplaySet && prefsNow.autoplay !== Boolean(session.queue.autoplay)) {
+            set({ autoplay: prefsNow.autoplay });
+          }
           applyVolume(get().volume, get().muted);
           if (q.current_track_id) {
             const t = await get().hydrateTrack(q.current_track_id);
@@ -1042,6 +1046,9 @@ export const usePlayer = create<PlayerStore>()(
                 nextMeta = t;
               })
               .catch(() => undefined);
+          }
+          if (prefsNow.autoplaySet && prefsNow.autoplay !== Boolean(session.queue.autoplay)) {
+            await get().control("autoplay", { autoplay: prefsNow.autoplay });
           }
           ensureSessionPoll();
           ensureQueueSse().start({ resync: false });
@@ -1193,6 +1200,7 @@ export const usePlayer = create<PlayerStore>()(
           action === "mute" ||
           action === "unmute" ||
           action === "stop_after_current" ||
+          action === "autoplay" ||
           action === "remove" ||
           action === "clear" ||
           action === "undo";
@@ -1423,9 +1431,14 @@ export const usePlayer = create<PlayerStore>()(
         set({ playbackRate: rate });
         publishMediaPosition();
       },
-      setAutoplay: (on) => {
+      setAutoplay: async (on) => {
         saveDevicePrefs({ autoplay: on, autoplaySet: true });
         set({ autoplay: on });
+        try {
+          await get().control("autoplay", { autoplay: on });
+        } catch {
+          /* keep local */
+        }
         if (on) maybeReplenishRadio();
       },
       setVisualizer: (on) => {

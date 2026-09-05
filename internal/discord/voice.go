@@ -409,6 +409,8 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 		return
 	}
 
+	go b.play.MaybeReplenish(context.Background(), sid)
+
 	src, gainDB, durationMS, err := b.ffmpegSourceForTrack(ctx, trackID, st)
 	if err != nil {
 		b.recordPlaybackError(ctx, guildID, trackID, "ffmpeg", err.Error())

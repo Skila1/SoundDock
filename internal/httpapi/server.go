@@ -75,9 +75,12 @@ type Server struct {
 
 	// youtubeFillHook replaces similarYouTube in tests. Production stays nil.
 	youtubeFillHook func(ctx context.Context, seed uuid.UUID, need int, have []uuid.UUID) []string
+	// autoplaySelectHook replaces library radio.Select in tests. Production stays nil.
+	autoplaySelectHook func(ctx context.Context, seed uuid.UUID, exclude []uuid.UUID) []uuid.UUID
 }
 
 func (s *Server) Router() http.Handler {
+	s.WirePlayback()
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
