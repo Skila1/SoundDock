@@ -481,9 +481,9 @@ func (s *Server) adminBackup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT id, action, target, ip, created_at FROM audit_events ORDER BY created_at DESC LIMIT 200`)
+	rows, _ := s.Pool.Query(r.Context(), `SELECT id, actor_user_id, action, target, ip, created_at FROM audit_events ORDER BY created_at DESC LIMIT 200`)
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "action", "target", "ip", "created_at"))
+	writeJSON(w, 200, scanMaps(rows, "id", "actor_user_id", "action", "target", "ip", "created_at"))
 }
 
 func (s *Server) adminWebhooks(w http.ResponseWriter, r *http.Request) {
@@ -756,10 +756,11 @@ func (s *Server) discordGet(w http.ResponseWriter, r *http.Request) {
 	var enabled bool
 	var appID, status, clientID *string
 	var tok, sec []byte
-	_ = s.Pool.QueryRow(r.Context(), `SELECT enabled, application_id, last_gateway_status, bot_token_enc, client_id, client_secret_enc FROM discord_settings WHERE id=1`).Scan(&enabled, &appID, &status, &tok, &clientID, &sec)
+	var lastErr, commands *string
+	_ = s.Pool.QueryRow(r.Context(), `SELECT enabled, application_id, last_gateway_status, bot_token_enc, client_id, client_secret_enc, last_error_redacted, command_registration_status FROM discord_settings WHERE id=1`).Scan(&enabled, &appID, &status, &tok, &clientID, &sec, &lastErr, &commands)
 	reg, _ := auth.LoadDiscordRegistration(r.Context(), s.Pool)
 	oauth := auth.LoadDiscordOAuth(r.Context(), s.Pool, s.Box)
-	writeJSON(w, 200, map[string]any{
+	out := map[string]any{
 		"enabled":                    enabled,
 		"application_id":             appID,
 		"client_id":                  clientID,
@@ -774,7 +775,14 @@ func (s *Server) discordGet(w http.ResponseWriter, r *http.Request) {
 		"registration_guild_id":      reg.GuildID,
 		"registration_role_enabled":  reg.RoleEnabled,
 		"registration_role_id":       reg.RoleID,
-	})
+	}
+	if commands != nil {
+		out["command_registration_status"] = *commands
+	}
+	if lastErr != nil && *lastErr != "" {
+		out["last_error"] = inspectRedact(*lastErr)
+	}
+	writeJSON(w, 200, out)
 }
 
 func (s *Server) discordPut(w http.ResponseWriter, r *http.Request) {
@@ -899,15 +907,11 @@ func (s *Server) discordDisconnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) discordSessions(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT guild_id, voice_channel_id, connected, last_disconnect_reason FROM discord_voice_runtime`)
-	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "guild_id", "voice_channel_id", "connected", "reason"))
+	writeJSON(w, 200, s.listDiscordRuntime(r.Context()))
 }
 
 func (s *Server) discordLogs(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT guild_id, error_class, message, created_at FROM discord_playback_errors ORDER BY created_at DESC LIMIT 100`)
-	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "guild_id", "error_class", "message", "created_at"))
+	writeJSON(w, 200, s.listDiscordPlaybackErrors(r.Context(), 100))
 }
 
 func (s *Server) adminUpdatesGet(w http.ResponseWriter, r *http.Request) {

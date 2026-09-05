@@ -86,6 +86,26 @@ func TestWebSessionMigratesLegacyLeavesDiscord(t *testing.T) {
 	}
 }
 
+func TestWebSessionUnknownUserLeavesUserIDNull(t *testing.T) {
+	pool := testPool(t)
+	e := New(pool)
+	clientID := uuid.New()
+	sid, err := e.WebSession(context.Background(), clientID, "api")
+	if err != nil {
+		t.Fatalf("WebSession for unknown user: %v", err)
+	}
+	var uid *uuid.UUID
+	if err := pool.QueryRow(context.Background(), `SELECT user_id FROM playback_sessions WHERE id=$1`, sid).Scan(&uid); err != nil {
+		t.Fatal(err)
+	}
+	if uid != nil {
+		t.Fatalf("user_id %s", uid)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM playback_sessions WHERE id=$1`, sid)
+	})
+}
+
 func TestQueueGetAdditiveFields(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()

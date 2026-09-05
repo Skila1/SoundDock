@@ -22,6 +22,7 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
       ["providers", "External providers"],
       ["webhooks", "Webhooks"],
       ["security", "Security"],
+      ["inspect", "Inspect"],
       ["logs", "Logs"],
       ["updates", "Updates"],
       ["maintenance", "Maintenance"],

@@ -874,9 +874,15 @@ export function AdminDiscord() {
           </li>
         ))}
       </ul>
+      {d.data?.last_error && <p className="mb-4 text-sm text-destructive">{d.data.last_error}</p>}
       <h3 className="mb-2 mt-6 font-semibold">Voice sessions</h3>
       {(sessions.data || []).map((s) => (
-        <div key={s.guild_id} className="text-sm text-muted">{s.guild_id} · {s.connected ? "connected" : s.reason || "idle"}</div>
+        <div key={s.guild_id} className="mb-2 text-sm text-muted">
+          {s.guild_name || s.guild_id} · {s.connected ? "connected" : s.last_disconnect_reason || s.reason || "idle"}
+          {s.session_id ? ` · ${s.session_id}` : ""}
+          {s.status ? ` · ${s.status}` : ""}
+          {s.current_track_id ? ` · track ${s.current_track_id}` : ""}
+        </div>
       ))}
     </div>
   );

@@ -25,12 +25,24 @@ func (e *Engine) Session(ctx context.Context, kind, owner string, userID *uuid.U
 	return id, err
 }
 
+func (e *Engine) knownUserID(ctx context.Context, userID uuid.UUID) any {
+	if userID == uuid.Nil {
+		return nil
+	}
+	var ok bool
+	if err := e.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM users WHERE id=$1)`, userID).Scan(&ok); err != nil || !ok {
+		return nil
+	}
+	return userID
+}
+
 func (e *Engine) WebSession(ctx context.Context, userID uuid.UUID, deviceID string) (uuid.UUID, error) {
 	deviceID = strings.TrimSpace(deviceID)
 	if deviceID == "" {
 		deviceID = "web"
 	}
 	key := WebOwnerKey(userID, deviceID)
+	uid := e.knownUserID(ctx, userID)
 	m := e.lock("web-migrate:" + userID.String())
 	m.Lock()
 	defer m.Unlock()
@@ -38,7 +50,7 @@ func (e *Engine) WebSession(ctx context.Context, userID uuid.UUID, deviceID stri
 	var id uuid.UUID
 	err := e.pool.QueryRow(ctx, `SELECT id FROM playback_sessions WHERE kind='web_device' AND owner_key=$1`, key).Scan(&id)
 	if err == nil {
-		_, _ = e.pool.Exec(ctx, `UPDATE playback_sessions SET device_id=$2, last_device=$2, user_id=$3, updated_at=now() WHERE id=$1 AND kind='web_device'`, id, deviceID, userID)
+		_, _ = e.pool.Exec(ctx, `UPDATE playback_sessions SET device_id=$2, last_device=$2, user_id=coalesce($3, user_id), updated_at=now() WHERE id=$1 AND kind='web_device'`, id, deviceID, uid)
 		return id, nil
 	}
 	if err != pgx.ErrNoRows {
@@ -50,9 +62,9 @@ func (e *Engine) WebSession(ctx context.Context, userID uuid.UUID, deviceID stri
 	if err == nil {
 		_, err = e.pool.Exec(ctx, `
 			UPDATE playback_sessions
-			SET owner_key=$2, device_id=$3, last_device=$3, user_id=$4, updated_at=now()
+			SET owner_key=$2, device_id=$3, last_device=$3, user_id=coalesce($4, user_id), updated_at=now()
 			WHERE id=$1 AND kind='web_device' AND owner_key=$5`,
-			id, key, deviceID, userID, legacy)
+			id, key, deviceID, uid, legacy)
 		return id, err
 	}
 	if err != pgx.ErrNoRows {
@@ -61,6 +73,6 @@ func (e *Engine) WebSession(ctx context.Context, userID uuid.UUID, deviceID stri
 
 	err = e.pool.QueryRow(ctx, `
 		INSERT INTO playback_sessions (kind, owner_key, user_id, device_id, last_device)
-		VALUES ('web_device',$1,$2,$3,$3) RETURNING id`, key, userID, deviceID).Scan(&id)
+		VALUES ('web_device',$1,$2,$3,$3) RETURNING id`, key, uid, deviceID).Scan(&id)
 	return id, err
 }

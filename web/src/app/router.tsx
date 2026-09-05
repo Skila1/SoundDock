@@ -66,6 +66,7 @@ const AdminLyrics = lazy(() => import("@/features/admin/AdminLyrics").then((m) =
 const AdminGrants = lazy(() => import("@/features/admin/AdminGrants").then((m) => ({ default: m.AdminGrants })));
 const AdminSecurity = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminSecurity })));
 const AdminLogs = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminLogs })));
+const AdminInspect = lazy(() => import("@/features/admin/AdminInspect").then((m) => ({ default: m.AdminInspect })));
 const AdminUpdates = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminUpdates })));
 
 function Fallback() {
@@ -180,6 +181,7 @@ export function AppRouter() {
             <Route path="acquisition-policy" element={<AdminAcquisitionPolicy />} />
             <Route path="duplicate-review" element={<AdminDuplicateReview />} />
             <Route path="security" element={<AdminSecurity />} />
+            <Route path="inspect" element={<AdminInspect />} />
             <Route path="logs" element={<AdminLogs />} />
             <Route path="cloudflare" element={<Navigate to="/admin" replace />} />
             <Route path="updates" element={<AdminUpdates />} />
