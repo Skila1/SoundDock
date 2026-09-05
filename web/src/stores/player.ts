@@ -462,11 +462,6 @@ function usingDiscord() {
   return s.queue?.output_pref === "discord" || s.queue?.renderer_kind === "discord" || s.queue?.kind === "discord_guild";
 }
 
-function discordBlocked() {
-  const s = usePlayer.getState();
-  return usingDiscord() && !discordReady(s.voice);
-}
-
 function interpolatedNow(): number {
   const ph = session.playhead;
   return interpolatePosition({
