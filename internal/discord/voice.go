@@ -27,15 +27,6 @@ type guildRuntime struct {
 
 var idleSince sync.Map
 
-func sendSilenceFrames(ctx context.Context, vc *discordgo.VoiceConnection) {
-	silence := []byte{0xF8, 0xFF, 0xFE}
-	for i := 0; i < 5; i++ {
-		if !sendOpus(ctx, vc, silence) {
-			return
-		}
-	}
-}
-
 func sendOpus(ctx context.Context, vc *discordgo.VoiceConnection, pkt []byte) (ok bool) {
 	if vc == nil || vc.OpusSend == nil || vc.Status == discordgo.VoiceConnectionStatusDead {
 		return false
@@ -99,7 +90,7 @@ func waitDAVEReady(vc *discordgo.VoiceConnection, d time.Duration) error {
 	ctx, cancel := context.WithTimeout(context.Background(), d)
 	defer cancel()
 	if err := vc.WaitForDAVEReady(ctx); err != nil {
-		return fmt.Errorf("DAVE encrypt not ready: %w", err)
+		return err
 	}
 	return nil
 }
@@ -179,8 +170,6 @@ func (b *Bot) finishVoiceJoin(ctx context.Context, vc *discordgo.VoiceConnection
 		b.markVoiceDisconnected(ctx, guildID, "timeout waiting for DAVE")
 		return fmt.Errorf("timeout waiting for DAVE: %w", err)
 	}
-	// Register SSRC with Discord before any audio (docs + discord.py).
-	_ = vc.Speaking(false)
 	b.markVoiceConnected(ctx, guildID, channelID, sid)
 	return nil
 }
@@ -473,12 +462,7 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 	defer enc.Close()
 
 	_ = vc.Speaking(true)
-	defer func() {
-		flush, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-		defer cancel()
-		sendSilenceFrames(flush, vc)
-		_ = vc.Speaking(false)
-	}()
+	defer vc.Speaking(false)
 
 	started := time.Now()
 	lastPosWrite := time.Time{}

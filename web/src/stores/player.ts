@@ -7,7 +7,9 @@ import { toast } from "sonner";
 import type { MediaState, QueueState, Track } from "@/types/api";
 import {
   askRendererTabsToStop,
+  discordOptionVisible,
   discordReady,
+  resolveOutput,
   getDeviceId,
   getTabRendererId,
   loadDevicePrefs,
@@ -458,11 +460,15 @@ function tabId() {
 
 function usingDiscord() {
   const s = usePlayer.getState();
-  if (loadDevicePrefs().outputManual === "browser") return false;
-  if (s.output === "browser") return false;
-  if (s.queue?.output_pref === "browser") return false;
   if (s.queue?.output_pref === "discord") return true;
-  return s.queue?.renderer_kind === "discord" && s.output === "discord";
+  if (s.queue?.output_pref === "browser") return false;
+  if (s.output === "discord") return discordOptionVisible(s.voice) && resolveOutput(s.voice, loadDevicePrefs().outputManual) === "discord";
+  return false;
+}
+
+function discordBlocked() {
+  const s = usePlayer.getState();
+  return usingDiscord() && !discordReady(s.voice);
 }
 
 function interpolatedNow(): number {
@@ -480,13 +486,7 @@ function interpolatedNow(): number {
 
 function patchFromSession(view: SessionView, extra: Record<string, unknown> = {}) {
   const q = view.queue as PlayerQueue;
-  const locked = loadDevicePrefs().outputManual;
-  const output =
-    locked === "browser"
-      ? "browser"
-      : q.output_pref === "discord" || q.output_pref === "browser"
-        ? q.output_pref
-        : usePlayer.getState().output;
+  const output = q.output_pref === "discord" || q.output_pref === "browser" ? q.output_pref : usePlayer.getState().output;
   return {
     queue: q,
     playing: q.status === "playing",
@@ -730,12 +730,7 @@ function hintPayload(ids: string[], hints?: QueueTrackHint[]) {
 }
 
 function canPlayOnDiscord() {
-  return loadDevicePrefs().outputManual === "discord" && discordReady(usePlayer.getState().voice);
-}
-
-function dropToBrowser() {
-  session = applyJoinFailure(session);
-  usePlayer.setState({ output: "browser", queue: { ...(usePlayer.getState().queue || emptyQueue()), output_pref: "browser" } });
+  return loadDevicePrefs().outputManual !== "browser" && discordReady(usePlayer.getState().voice);
 }
 
 async function playOnBrowser(ids: string[], idx: number, hints?: QueueTrackHint[]) {
@@ -1084,35 +1079,38 @@ export const usePlayer = create<PlayerStore>()(
             toast.message("Getting it from YouTube…");
           }
           await get().pollVoice();
-          if (canPlayOnDiscord()) {
+          if (discordBlocked()) {
+            toast.error("Join a Discord voice channel to play");
+            return;
+          }
+          if (usingDiscord() || canPlayOnDiscord()) {
             pauseAll();
             try {
               const joined = await joinDiscord();
               const next = applyBindResult(session, joined || {}, joined?.guild_id || guildIdOf());
               if (next.ignored === "stale_bind") {
-                dropToBrowser();
-              } else {
-                session = next;
-                const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
-                  track_ids: ids,
-                  tracks: hintPayload(ids, hints),
-                  start: idx,
-                  device_id: getDeviceId(),
-                  command_id: newCommandId()
-                });
-                ingestQueue(q || emptyQueue());
-                set(patchFromSession(session, { playing: true, position: 0, output: "discord" }));
-                lastQueueMutAt = Date.now();
-                const currentId = usePlayer.getState().queue?.current_track_id || ids[idx];
-                await get().hydrateTrack(currentId);
-                ensureSessionPoll();
+                toast.error("Voice bind is out of date");
                 return;
               }
-            } catch {
-              dropToBrowser();
+              session = next;
+              const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
+                track_ids: ids,
+                tracks: hintPayload(ids, hints),
+                start: idx,
+                device_id: getDeviceId(),
+                command_id: newCommandId()
+              });
+              ingestQueue(q || emptyQueue());
+              set(patchFromSession(session, { playing: true, position: 0, output: "discord" }));
+              lastQueueMutAt = Date.now();
+              const currentId = usePlayer.getState().queue?.current_track_id || ids[idx];
+              await get().hydrateTrack(currentId);
+              ensureSessionPoll();
+              return;
+            } catch (e) {
+              toast.error(e instanceof Error ? e.message : "Discord play failed");
+              return;
             }
-          } else if (get().output === "discord") {
-            dropToBrowser();
           }
           await playOnBrowser(ids, idx, hints);
         });
@@ -1122,17 +1120,20 @@ export const usePlayer = create<PlayerStore>()(
         const ids = idsOf(q);
         if (!q || index < 0 || index >= ids.length) return;
         await get().pollVoice();
-        if (canPlayOnDiscord()) {
+        if (discordBlocked()) {
+          toast.error("Join a Discord voice channel to play");
+          return;
+        }
+        if (usingDiscord() || canPlayOnDiscord()) {
           pauseAll();
           try {
             await joinDiscord();
             await get().control("index", { index });
             return;
-          } catch {
-            dropToBrowser();
+          } catch (e) {
+            toast.error(e instanceof Error ? e.message : "Discord play failed");
+            return;
           }
-        } else if (get().output === "discord") {
-          dropToBrowser();
         }
         listen = null;
         let jumped = false;
@@ -1389,15 +1390,8 @@ export const usePlayer = create<PlayerStore>()(
       pollVoice: async () => {
         const voice = await fetchVoice();
         const manual = loadDevicePrefs().outputManual;
-        const cur = get().output;
-        const output =
-          manual === "browser" || voice?.discord_enabled === false
-            ? "browser"
-            : manual === "discord" && discordReady(voice)
-              ? "discord"
-              : cur === "discord" && discordReady(voice)
-                ? "discord"
-                : "browser";
+        const pref = session.queue.output_pref;
+        const output = pref === "discord" || pref === "browser" ? pref : resolveOutput(voice, manual);
         set({ voice, output });
         ensureSessionPoll();
       },

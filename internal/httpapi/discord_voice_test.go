@@ -335,7 +335,7 @@ func TestControlCommandConflict409(t *testing.T) {
 	}
 }
 
-func TestAcquireBrowserLeaseStealsDiscordOnUserGesture(t *testing.T) {
+func TestAcquireBrowserLeaseConflictWhileDiscordHolds(t *testing.T) {
 	s, pool := wave1HTTPServer(t)
 	did := "w1b-a-" + uuid.NewString()[:8]
 	u := seedQueueUser(t, pool, did)
@@ -365,8 +365,11 @@ func TestAcquireBrowserLeaseStealsDiscordOnUserGesture(t *testing.T) {
 	s.queueRendererAcquire(arec, authedJSON(u, http.MethodPost, "/api/v1/me/queue/renderer/acquire", map[string]any{
 		"renderer_id": "browser-1",
 	}))
-	if arec.Code != 200 {
+	if arec.Code != 409 {
 		t.Fatalf("acquire %d %s", arec.Code, arec.Body.String())
+	}
+	if !bytes.Contains(arec.Body.Bytes(), []byte("lease_conflict")) {
+		t.Fatalf("body %s", arec.Body.String())
 	}
 }
 

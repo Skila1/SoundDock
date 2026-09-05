@@ -17,7 +17,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
     && apt-get update && apt-get install -y --no-install-recommends git ca-certificates
 COPY go.mod go.sum ./
-COPY third_party ./third_party
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 COPY cmd ./cmd

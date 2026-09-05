@@ -288,7 +288,7 @@ describe("output switch", () => {
     expect(play).toHaveBeenCalled();
   });
 
-  it("plays in the browser when the listener is in voice unless Discord is locked", async () => {
+  it("auto-joins Discord and plays there when the listener is in voice", async () => {
     resetPlayerSessionForTests();
     usePlayer.setState({
       queue: null,
@@ -299,69 +299,35 @@ describe("output switch", () => {
       position: 0,
       duration: 0
     });
+    const pause = vi.spyOn(engine, "pauseAll");
     const play = vi.spyOn(engine, "playActive").mockResolvedValue(undefined);
     vi.mocked(api.post).mockImplementation(async (url: string) => {
-      if (String(url).includes("/discord/join")) throw new Error("should not join");
-      if (String(url).includes("renderer/acquire")) {
-        return queue({ renderer_id: getTabRendererId(), renderer_kind: "browser", output_pref: "browser" });
+      if (String(url).includes("/discord/join")) {
+        return { ok: true, guild_id: "g1", binding_revision: 5, session_id: "sess-1" };
       }
       throw new Error(`unexpected POST ${url}`);
     });
     vi.mocked(api.put).mockResolvedValue(
       queue({
-        output_pref: "browser",
-        renderer_kind: "browser",
-        renderer_id: getTabRendererId(),
+        output_pref: "discord",
+        renderer_kind: "discord",
+        renderer_id: "bot-1",
         status: "playing",
         current_track_id: "t1",
-        position_ms: 0
+        position_ms: 0,
+        binding_revision: 5
       })
     );
     vi.mocked(api.get).mockResolvedValue({ id: "t1", title: "Song", duration_ms: 180_000 });
 
     await usePlayer.getState().playTracks(["t1"]);
 
-    expect(api.post).not.toHaveBeenCalledWith("/api/v1/me/discord/join", expect.any(Object));
-    expect(usePlayer.getState().output).toBe("browser");
-    expect(play).toHaveBeenCalled();
-  });
-
-  it("honors a Browser lock even if the session renderer is still Discord", async () => {
-    localStorage.setItem(
-      "sd-device",
-      JSON.stringify({ deviceId: "dev-1", outputManual: "browser", sinkId: "", autoplay: false, visualizer: false, playbackRate: 1 })
-    );
-    const q = queue({
-      output_pref: "discord",
-      renderer_kind: "discord",
-      renderer_id: "bot-1",
-      binding_revision: 4
-    });
-    resetPlayerSessionForTests({
-      ...initialSession(),
-      lastAppliedRevision: 4,
-      lastPlayheadSequence: 4,
-      lastInstanceId: "inst-1",
-      lastBindingRevision: 4,
-      lastBindingByGuild: { g1: 4 },
-      queue: q
-    });
-    usePlayer.setState({
-      queue: q,
-      playing: true,
-      output: "browser",
-      voice,
-      current: { id: "t1", title: "Song" },
-      position: 8_000,
-      duration: 180_000
-    });
-    const pause = vi.spyOn(engine, "pauseAll");
-    vi.mocked(api.get).mockResolvedValue(q);
-
-    await usePlayer.getState().syncDiscordQueue();
-
-    expect(usePlayer.getState().output).toBe("browser");
-    expect(pause).not.toHaveBeenCalled();
+    expect(api.post).toHaveBeenCalledWith("/api/v1/me/discord/join", expect.any(Object));
+    expect(api.put).toHaveBeenCalled();
+    expect(usePlayer.getState().output).toBe("discord");
+    expect(usePlayer.getState().current?.id).toBe("t1");
+    expect(pause).toHaveBeenCalled();
+    expect(play).not.toHaveBeenCalled();
   });
 
   it("stops HTMLAudio immediately when GET renderer_id is not this tab", async () => {

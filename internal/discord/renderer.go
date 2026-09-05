@@ -117,18 +117,25 @@ func (b *Bot) voiceChannelForGuild(guildID string) string {
 const staleBrowserLease = 45 * time.Second
 
 // shouldClaimDiscordLease is true when this worker may CAS-claim Discord.
-// A live Browser tab still wins. output_pref is a web hint, not a mute:
-// Discord commands and a closed tab must not depend on it.
+// Never steal a Browser holder. Guild-native sessions may claim despite the
+// schema default output_pref=browser so slash /play can emit PCM.
 func shouldClaimDiscordLease(kind, outputPref, rendererKind string) bool {
-	_ = kind
-	_ = outputPref
-	return rendererKind != playback.RendererBrowser
+	if rendererKind == playback.RendererBrowser {
+		return false
+	}
+	if outputPref == playback.OutputDiscord {
+		return true
+	}
+	return kind == "discord_guild"
 }
 
-// shouldEmitDiscordPCM is true when this worker holds the Discord lease.
-// The lease is the authority. A closed web tab must not keep the bot silent.
+// shouldEmitDiscordPCM is true only when this worker holds the Discord lease
+// and the session wants Discord output. Browser output stays in VC silently.
 func shouldEmitDiscordPCM(st map[string]any, rendererID string, generation int64) bool {
-	return holdsRendererLease(st, rendererID, generation)
+	if !holdsRendererLease(st, rendererID, generation) {
+		return false
+	}
+	return outputPrefOf(st) == playback.OutputDiscord
 }
 
 func outputPrefOf(st map[string]any) string {

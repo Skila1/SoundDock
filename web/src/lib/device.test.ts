@@ -22,8 +22,8 @@ describe("resolveOutput prefers Discord until a VC is missing", () => {
     localStorage.clear();
   });
 
-  it("defaults to Discord before voice is known", () => {
-    expect(resolveOutput(null, null)).toBe("discord");
+  it("defaults to browser before voice is known", () => {
+    expect(resolveOutput(null, null)).toBe("browser");
   });
 
   it("stays on Discord when the listener is in a voice channel", () => {
@@ -33,7 +33,6 @@ describe("resolveOutput prefers Discord until a VC is missing", () => {
 
   it("falls back to browser when Discord is enabled but no VC is visible", () => {
     expect(resolveOutput({ ...readyVoice, in_voice: false }, null)).toBe("browser");
-    expect(resolveOutput({ ...readyVoice, in_voice: false }, "discord")).toBe("browser");
   });
 
   it("honors an explicit Browser lock", () => {

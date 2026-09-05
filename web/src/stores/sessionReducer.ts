@@ -127,7 +127,8 @@ export function tabOwnsBrowserLease(
   tabRendererId: string | null | undefined
 ): boolean {
   if (!snap || !tabRendererId) return false;
-  if (snap.renderer_kind === "discord") return false;
+  if (snap.output_pref === "discord" || snap.renderer_kind === "discord") return false;
+  if (snap.renderer_kind && snap.renderer_kind !== "browser" && snap.renderer_kind !== "none") return false;
   if (!snap.renderer_id) return false;
   return snap.renderer_kind === "browser" && snap.renderer_id === tabRendererId;
 }
@@ -137,9 +138,8 @@ export function shouldStopHtmlAudio(
   tabRendererId: string | null | undefined
 ): boolean {
   if (!snap) return false;
-  if (tabRendererId && snap.renderer_kind === "browser" && snap.renderer_id && snap.renderer_id !== tabRendererId) {
-    return true;
-  }
+  if (snap.output_pref === "discord" || snap.renderer_kind === "discord") return true;
+  if (tabRendererId && snap.renderer_id && snap.renderer_id !== tabRendererId) return true;
   return false;
 }
 
