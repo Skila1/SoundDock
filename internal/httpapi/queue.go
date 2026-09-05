@@ -40,15 +40,11 @@ func requestPlaybackTarget(r *http.Request, extra map[string]any, bodyTarget str
 // it returns their personal web_device session. Unlinked users never attach.
 // target=discord is not a second-queue selector.
 func (s *Server) attachedPlaySession(r *http.Request, extra map[string]any, deviceID string) (uuid.UUID, error) {
-	u := currentUser(r)
-	personal, err := s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(deviceID, requestDeviceID(r, extra)))
-	if err != nil {
-		return uuid.Nil, err
-	}
 	if attached, ok := s.attachedBoundSession(r); ok {
 		return attached, nil
 	}
-	return personal, nil
+	u := currentUser(r)
+	return s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(deviceID, requestDeviceID(r, extra)))
 }
 
 func (s *Server) playSession(r *http.Request, extra map[string]any, bodyTarget, deviceID string) (uuid.UUID, error) {

@@ -50,7 +50,13 @@ func (e *Engine) WebSession(ctx context.Context, userID uuid.UUID, deviceID stri
 	var id uuid.UUID
 	err := e.pool.QueryRow(ctx, `SELECT id FROM playback_sessions WHERE kind='web_device' AND owner_key=$1`, key).Scan(&id)
 	if err == nil {
-		_, _ = e.pool.Exec(ctx, `UPDATE playback_sessions SET device_id=$2, last_device=$2, user_id=coalesce($3, user_id), updated_at=now() WHERE id=$1 AND kind='web_device'`, id, deviceID, uid)
+		_, _ = e.pool.Exec(ctx, `
+			UPDATE playback_sessions
+			SET device_id=$2, last_device=$2, user_id=coalesce($3, user_id)
+			WHERE id=$1 AND kind='web_device'
+			  AND (device_id IS DISTINCT FROM $2 OR last_device IS DISTINCT FROM $2 OR ($3::uuid IS NOT NULL AND user_id IS DISTINCT FROM $3))`,
+			id, deviceID, uid)
+		e.stopEmptyPlaying(ctx, id)
 		return id, nil
 	}
 	if err != pgx.ErrNoRows {
@@ -77,7 +83,21 @@ func (e *Engine) WebSession(ctx context.Context, userID uuid.UUID, deviceID stri
 	return id, err
 }
 
-// ReapOrphanPlaying stops stale web sessions that stayed "playing" with no renderer.
+func (e *Engine) stopEmptyPlaying(ctx context.Context, sid uuid.UUID) {
+	if e == nil || e.pool == nil || sid == uuid.Nil {
+		return
+	}
+	_, _ = e.pool.Exec(ctx, `
+		UPDATE playback_sessions
+		SET status='stopped', updated_at=now()
+		WHERE id=$1
+		  AND status='playing'
+		  AND coalesce(renderer_kind,'none')='none'
+		  AND current_track_id IS NULL
+		  AND NOT EXISTS (SELECT 1 FROM playback_queue_items WHERE session_id=$1)`, sid)
+}
+
+// ReapOrphanPlaying stops empty or stale web sessions that stayed "playing".
 // Those rows steal attach/seek from the live Discord session.
 func (e *Engine) ReapOrphanPlaying(ctx context.Context, keep uuid.UUID) {
 	if e == nil || e.pool == nil {
@@ -90,7 +110,7 @@ func (e *Engine) ReapOrphanPlaying(ctx context.Context, keep uuid.UUID) {
 		  AND status='playing'
 		  AND kind='web_device'
 		  AND (
-		    (coalesce(renderer_kind,'none')='none' AND updated_at < now() - interval '90 seconds')
+		    (coalesce(renderer_kind,'none')='none' AND current_track_id IS NULL)
 		    OR updated_at < now() - interval '24 hours'
 		  )`, keep)
 }

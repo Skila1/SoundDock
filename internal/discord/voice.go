@@ -496,6 +496,9 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 		}
 		if time.Since(lastPosWrite) >= time.Second {
 			lastPosWrite = time.Now()
+			if b.MediaBusy != nil {
+				b.MediaBusy.Heartbeat(ctx, mediabusy.KindDiscord, holder)
+			}
 			if instanceID == uuid.Nil {
 				if cur, err := b.play.Get(ctx, sid); err == nil {
 					instanceID = playbackInstanceID(cur)

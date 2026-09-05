@@ -50,14 +50,20 @@ func emptyList() []map[string]any {
 func (s *Server) adminInspect(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	limit := inspectLimit(r, 40, 200)
+	window := 48 * time.Hour
+	disc := s.inspectDiscord(ctx, limit)
+	if errs, ok := disc["playback_errors"].([]map[string]any); ok {
+		disc["playback_errors"] = inspectRecent(errs, window)
+	}
 	writeJSON(w, 200, map[string]any{
 		"generated_at": time.Now().UTC().Format(time.RFC3339),
+		"error_window": "48h",
 		"endpoints":    adminInspectEndpoints(),
 		"counts":       s.inspectCounts(ctx),
 		"playback":     map[string]any{"sessions": s.listPlaybackSessions(ctx, playbackInspectFilter{Limit: limit})},
-		"discord":      s.inspectDiscord(ctx, limit),
-		"errors":       map[string]any{"items": s.listInspectErrors(ctx, inspectErrorFilter{Limit: limit})},
-		"jobs":         map[string]any{"failed": s.listFailedJobs(ctx, limit)},
+		"discord":      disc,
+		"errors":       map[string]any{"items": inspectRecent(s.listInspectErrors(ctx, inspectErrorFilter{Limit: limit}), window)},
+		"jobs":         map[string]any{"failed": inspectRecent(s.listFailedJobs(ctx, limit), window)},
 		"acquisition": map[string]any{
 			"intents": s.listAcquisitionIntents(ctx, acquisitionInspectFilter{FailedOnly: true, Limit: limit}),
 			"holds":   s.listMediaHolds(ctx, limit),
@@ -1184,6 +1190,24 @@ func (s *Server) collectExternalSyncAsErrors(ctx context.Context, limit int) []m
 			extra["external_playlist_id"] = playlist.String()
 		}
 		out = append(out, inspectErr(at, msg, "sync_run", extra))
+	}
+	return out
+}
+
+func inspectRecent(items []map[string]any, maxAge time.Duration) []map[string]any {
+	if len(items) == 0 {
+		return emptyList()
+	}
+	cut := time.Now().Add(-maxAge)
+	out := emptyList()
+	for _, m := range items {
+		t := asTime(m["at"])
+		if t.IsZero() {
+			t = asTime(m["created_at"])
+		}
+		if t.IsZero() || !t.Before(cut) {
+			out = append(out, m)
+		}
 	}
 	return out
 }

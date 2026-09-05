@@ -204,6 +204,35 @@ func TestExpirePayloadJSON(t *testing.T) {
 	}
 }
 
+func TestWebSessionStopsEmptyPlaying(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	e := New(pool)
+	userID := uuid.New()
+	username := "empty-" + userID.String()[:8]
+	if _, err := pool.Exec(ctx, `INSERT INTO users (id, username, password_hash, display_name) VALUES ($1,$2,'x',$2)`, userID, username); err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM playback_sessions WHERE user_id=$1 OR owner_key LIKE $2`, userID, userID.String()+":%")
+		_, _ = pool.Exec(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+	})
+	if _, err := pool.Exec(ctx, `INSERT INTO playback_sessions (kind, owner_key, user_id, status, renderer_kind, device_id) VALUES ('web_device',$1,$2,'playing','none','web')`, WebOwnerKey(userID, "web"), userID); err != nil {
+		t.Fatal(err)
+	}
+	sid, err := e.WebSession(ctx, userID, "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := pool.QueryRow(ctx, `SELECT status FROM playback_sessions WHERE id=$1`, sid).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "stopped" {
+		t.Fatalf("status %s", status)
+	}
+}
+
 func TestReapOrphanPlayingStopsStaleWebNone(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
@@ -222,10 +251,10 @@ func TestReapOrphanPlayingStopsStaleWebNone(t *testing.T) {
 	if err := pool.QueryRow(ctx, `INSERT INTO playback_sessions (kind, owner_key, user_id, status, renderer_kind) VALUES ('discord_guild',$1,$2,'playing','discord') RETURNING id`, userID.String()+":guild", userID).Scan(&keep); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO playback_sessions (kind, owner_key, user_id, status, renderer_kind, updated_at) VALUES ('web_device',$1,$2,'playing','none', now() - interval '3 minutes') RETURNING id`, userID.String()+":web", userID).Scan(&zombie); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO playback_sessions (kind, owner_key, user_id, status, renderer_kind) VALUES ('web_device',$1,$2,'playing','none') RETURNING id`, userID.String()+":web", userID).Scan(&zombie); err != nil {
 		t.Fatal(err)
 	}
-	if err := pool.QueryRow(ctx, `INSERT INTO playback_sessions (kind, owner_key, user_id, status, renderer_kind) VALUES ('web_device',$1,$2,'playing','none') RETURNING id`, userID.String()+":fresh", userID).Scan(&fresh); err != nil {
+	if err := pool.QueryRow(ctx, `INSERT INTO playback_sessions (kind, owner_key, user_id, status, renderer_kind) VALUES ('web_device',$1,$2,'playing','browser') RETURNING id`, userID.String()+":fresh", userID).Scan(&fresh); err != nil {
 		t.Fatal(err)
 	}
 
