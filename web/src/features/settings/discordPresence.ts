@@ -4,7 +4,7 @@ import { usePlayer } from "@/stores/player";
 const STORAGE_KEY = "sd-discord-presence";
 const ACTIVITY_DEBOUNCE_MS = 400;
 
-/** Discord desktop RPC. Only 6463 — walking 6463–6472 floods the console when Discord is closed. */
+/** Discord desktop RPC. Only 6463 - walking 6463-6472 floods the console when Discord is closed. */
 const RPC_PORT = 6463;
 
 let subscribed = false;
@@ -33,7 +33,7 @@ function activityKey(act: Activity | null) {
   return [act.title, act.artist || "", act.playing ? "1" : "0", act.startedAt ? Math.floor(act.startedAt / 5000) : "0"].join("|");
 }
 
-/** Never close() a CONNECTING socket — Chrome logs that as a failed handshake. */
+/** Never close() a CONNECTING socket - Chrome logs that as a failed handshake. */
 function abandon(socket: WebSocket) {
   socket.onopen = null;
   socket.onerror = null;

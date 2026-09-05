@@ -14,7 +14,7 @@ import (
 )
 
 // Admin inspect dumps. An admin API key can read live playback, Discord bind
-// state, and every error table — /me/queue only sees the caller's session.
+// state, and every error table - /me/queue only sees the caller's session.
 
 func inspectLimit(r *http.Request, def, max int) int {
 	n, _ := strconv.Atoi(r.URL.Query().Get("limit"))

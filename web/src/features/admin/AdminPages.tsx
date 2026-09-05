@@ -1160,7 +1160,7 @@ export function AdminMetadata() {
             <p className="mt-1 text-sm text-muted">
               Looks up every track on MusicBrainz and fills missing tags, genres, artist IDs, and cover art. Locked tracks are skipped.
               {tracks > 0 && (
-                <> About {tracks} track{tracks === 1 ? "" : "s"} — MusicBrainz allows one request per second, so a full pass can take several minutes.</>
+                <> About {tracks} track{tracks === 1 ? "" : "s"} - MusicBrainz allows one request per second, so a full pass can take several minutes.</>
               )}
             </p>
           </div>

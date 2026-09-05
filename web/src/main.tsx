@@ -31,7 +31,7 @@ const updateSW = registerSW({
 });
 
 window.addEventListener("beforeinstallprompt", () => {
-  // Do not preventDefault — Chrome logs a warning unless we also call prompt().
+  // Do not preventDefault - Chrome logs a warning unless we also call prompt().
   if (sessionStorage.getItem("sd-install-toast") === "1") return;
   sessionStorage.setItem("sd-install-toast", "1");
   toast("Install SoundDock from the browser menu for offline playback.");

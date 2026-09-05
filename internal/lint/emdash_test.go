@@ -18,7 +18,7 @@ func TestNoAuthoredEmDash(t *testing.T) {
 	root := repoRoot(t)
 	skipDir := map[string]bool{
 		".git": true, "node_modules": true, "dist": true, "data": true,
-		"bin": true, ".cursor": true,
+		"bin": true, ".cursor": true, "third_party": true, "vendor": true,
 	}
 	var hits []string
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {

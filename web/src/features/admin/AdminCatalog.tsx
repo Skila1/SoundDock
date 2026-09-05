@@ -214,7 +214,7 @@ export function AdminCatalog() {
     <div>
       <PageHeader
         title="Catalog"
-        description="Edit albums and track metadata. Autoplay uses genre and tags only — not titles. One-track albums from imports can be merged here."
+        description="Edit albums and track metadata. Autoplay uses genre and tags only - not titles. One-track albums from imports can be merged here."
         actions={
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" /> New album
@@ -317,13 +317,13 @@ export function AdminCatalog() {
                 {albumOptions.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.title}
-                    {a.artist ? ` — ${a.artist}` : ""}
+                    {a.artist ? ` - ${a.artist}` : ""}
                   </option>
                 ))}
               </select>
             </Field>
             <Field label="Or new album title">
-              <Input value={moveNewTitle} onChange={(e) => setMoveNewTitle(e.target.value)} placeholder="Skila — Singles" />
+              <Input value={moveNewTitle} onChange={(e) => setMoveNewTitle(e.target.value)} placeholder="Skila - Singles" />
             </Field>
             <Button size="sm" onClick={() => moveSelected()}>
               Move selected tracks
