@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { orderPresence, presenceLabel } from "@/components/player/QueuePanel";
+import { orderPresence, presenceLabel, queueReorderTarget, showQueueInsertLine } from "@/components/player/QueuePanel";
 
 describe("orderPresence", () => {
   it("does not throw on missing display names", () => {
@@ -22,3 +22,20 @@ describe("orderPresence", () => {
     expect(rows[0].user_id).toBe("me");
   });
 });
+
+describe("queue insert line", () => {
+  it("shows a marker on the hovered index and not on the dragged row", () => {
+    expect(showQueueInsertLine(2, 5, 5)).toBe(true);
+    expect(showQueueInsertLine(2, 5, 2)).toBe(false);
+    expect(showQueueInsertLine(2, 2, 2)).toBe(false);
+    expect(showQueueInsertLine(-1, 3, 3)).toBe(false);
+  });
+
+  it("maps a trailing drop onto the last slot", () => {
+    expect(queueReorderTarget(1, 4, 4)).toBe(3);
+    expect(queueReorderTarget(3, 4, 4)).toBeNull();
+    expect(queueReorderTarget(2, 2, 5)).toBeNull();
+    expect(queueReorderTarget(0, 2, 5)).toBe(2);
+  });
+});
+

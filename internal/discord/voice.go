@@ -375,9 +375,11 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 			pos := sessionPositionMS(st)
 			expected := appliedStart + int(time.Since(appliedAt).Milliseconds())
 			if pos-expected > 2000 || expected-pos > 2000 {
+				// Seek: restart ffmpeg this tick instead of waiting another poll.
 				stopTrack()
+			} else {
+				continue
 			}
-			continue
 		}
 		stopTrack()
 		current, status = tid, stat

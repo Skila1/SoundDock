@@ -48,6 +48,20 @@ func seqOf(q map[string]any) int64 {
 	return 0
 }
 
+func posOf(q map[string]any) int {
+	switch v := q["position_ms"].(type) {
+	case int:
+		return v
+	case int32:
+		return int(v)
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	}
+	return 0
+}
+
 func instanceOf(q map[string]any) uuid.UUID {
 	switch v := q["playback_instance_id"].(type) {
 	case uuid.UUID:
@@ -486,5 +500,55 @@ func TestCheckpointRejectsStaleInstance(t *testing.T) {
 	}
 	if err := e.CheckpointPlayhead(ctx, sid, uuid.New(), 10); !errors.Is(err, ErrInstanceMismatch) {
 		t.Fatalf("want instance_mismatch got %v", err)
+	}
+}
+
+func TestCheckpointPlayheadRejectsFarSeekJump(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	e := New(pool)
+	userID := seedUser(t, pool)
+	a, b := fixtureTracks(t, pool)
+	sid, err := e.WebSession(ctx, userID, "browser-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Replace(ctx, sid, []uuid.UUID{a, b}, 0); err != nil {
+		t.Fatal(err)
+	}
+	q, err := e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst := instanceOf(q)
+	if inst == uuid.Nil {
+		t.Fatal("expected instance")
+	}
+	if err := e.CheckpointPlayhead(ctx, sid, inst, 1200); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Control(ctx, sid, "seek", map[string]any{"position_ms": 120_000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.CheckpointPlayhead(ctx, sid, inst, 1500); err != nil {
+		t.Fatal(err)
+	}
+	q, err = e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if posOf(q) < 120_000 {
+		t.Fatalf("pre-seek elapsed overwrote seek, position %d", posOf(q))
+	}
+	if err := e.CheckpointPlayhead(ctx, sid, inst, 121_000); err != nil {
+		t.Fatal(err)
+	}
+	q, err = e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := posOf(q)
+	if got < 120_000 {
+		t.Fatalf("position %d want ~121000", got)
 	}
 }

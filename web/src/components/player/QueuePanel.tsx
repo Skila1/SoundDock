@@ -1,25 +1,29 @@
-import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
-import { Download, GripVertical, History, ListMusic, ListPlus, PanelRightClose, Pin, PinOff, Play, Trash2, Undo2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { Download, GripVertical, History, ListMusic, ListPlus, MoreHorizontal, PanelRightClose, Pin, PinOff, Play, Trash2, Undo2, X } from "lucide-react";
 import { fillableTrackIds, saveTracksOffline } from "@/lib/offlineFill";
+import { addTracksToPlaylist, downloadTrack } from "@/components/media/TrackList";
 import { Button } from "@/components/ui/button";
 import { Artwork } from "@/components/media/Artwork";
-import { artworkUrl, cn, relativeTime } from "@/lib/utils";
+import { artworkUrl, cn, isLibraryTrackId, relativeTime } from "@/lib/utils";
 import { usePlayer, type PlayerQueueItem, type RequestedBy } from "@/stores/player";
 import { useUi } from "@/stores/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Track, User } from "@/types/api";
+import type { Favourite, Playlist, Track, User } from "@/types/api";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
-import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Tooltip } from "@/components/ui/tooltip";
 import { asListenTracks, type ListenTrack } from "@/features/stats/types";
 import type { PresenceParticipant, PresenceSource } from "@/stores/sseClient";
 import { SoftBoundary } from "@/app/ErrorBoundary";
 import { avatarDisplaySrc, pageIsActive } from "./presenceAvatar";
+import { refreshCatalogue, removeTracksFromCaches } from "@/lib/catalogue";
+import { toast } from "sonner";
 
 function usePageActive() {
   const [active, setActive] = useState(pageIsActive);
@@ -139,6 +143,31 @@ export function QueuePresence({ className }: { className?: string }) {
   );
 }
 
+export function showQueueInsertLine(from: number, over: number | null, at: number): boolean {
+  if (from < 0 || over == null || over < 0) return false;
+  if (from === over) return false;
+  return over === at;
+}
+
+export function queueReorderTarget(from: number, over: number, length: number): number | null {
+  if (from < 0 || length <= 0 || over < 0) return null;
+  const to = over >= length ? length - 1 : over;
+  if (to < 0 || from === to) return null;
+  return to;
+}
+
+function QueueInsertLine({ active }: { active: boolean }) {
+  return (
+    <div
+      className="overflow-hidden transition-[height,opacity] duration-150 ease-out"
+      style={{ height: active ? 8 : 0, opacity: active ? 1 : 0 }}
+      aria-hidden
+    >
+      <div className="mx-2 h-2 rounded-full bg-accent shadow-[0_0_10px] shadow-accent/40" />
+    </div>
+  );
+}
+
 export function QueuePanel({
   onClose,
   onCollapse,
@@ -150,11 +179,27 @@ export function QueuePanel({
 }) {
   const p = usePlayer();
   const ui = useUi();
-  const drag = useRef<number>(-1);
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const [dragFrom, setDragFrom] = useState(-1);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+  const [flashId, setFlashId] = useState<string | null>(null);
   const [saveOpen, setSaveOpen] = useState(false);
   const [name, setName] = useState("Queue");
   const [view, setView] = useState<"queue" | "history">("queue");
+  const [plOpen, setPlOpen] = useState(false);
+  const [pendingIds, setPendingIds] = useState<string[]>([]);
+  const [delOpen, setDelOpen] = useState(false);
+  const [delFiles, setDelFiles] = useState(false);
+  const [delId, setDelId] = useState<string | null>(null);
+  const [delQueueIndex, setDelQueueIndex] = useState<number | null>(null);
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
+  const favs = useQuery({ queryKey: ["favourites"], queryFn: () => api.get<Favourite[]>("/api/v1/favourites") });
+  const playlists = useQuery({
+    queryKey: ["playlists"],
+    queryFn: () => api.get<Playlist[]>("/api/v1/playlists"),
+    enabled: plOpen
+  });
   const items = (p.queue?.items || []).filter((i): i is PlayerQueueItem => !!i && typeof i.track_id === "string");
   const ids = items.map((i) => i.track_id);
   const { data: tracks } = useQuery({
@@ -183,30 +228,147 @@ export function QueuePanel({
   const upcoming = items.slice(current + 1);
   const activeCount = now ? 1 + upcoming.length : upcoming.length;
   const historyTracks = asListenTracks(hist.data);
+  const admin = !!me.data?.is_admin;
+  const favSet = useMemo(
+    () => new Set((favs.data || []).filter((f) => f.type === "track").map((f) => f.id)),
+    [favs.data]
+  );
+
+  const clearDrag = () => {
+    setDragFrom(-1);
+    setOverIndex(null);
+  };
+
+  const dropAt = (over: number) => {
+    const to = queueReorderTarget(dragFrom, over, items.length);
+    const from = dragFrom;
+    const moved = from >= 0 ? items[from] : undefined;
+    clearDrag();
+    if (to == null) return;
+    p.control("reorder", { from, to });
+    if (moved?.id) {
+      setFlashId(moved.id);
+      window.setTimeout(() => setFlashId((id) => (id === moved.id ? null : id)), 450);
+    }
+  };
 
   const removeAt = (i: number) => {
-    if (i === current) return;
     p.control("remove", { position: i });
+  };
+
+  const playNext = (i: number) => {
+    if (i === current) return;
+    const to = current + 1;
+    if (i === to) return;
+    p.control("reorder", { from: i, to });
+  };
+
+  const toggleFav = async (t: Track) => {
+    if (t.source === "youtube" || !isLibraryTrackId(t.id)) {
+      toast.message("Play or queue it first so it lands in the library");
+      return;
+    }
+    const on = !favSet.has(t.id);
+    await api.post("/api/v1/favourites", { type: "track", id: t.id, on });
+    qc.invalidateQueries({ queryKey: ["favourites"] });
+    toast.success(on ? "Favourited" : "Removed from favourites");
   };
 
   const row = (item: PlayerQueueItem, i: number, opts: { nowPlaying?: boolean }) => {
     const t = map.get(item.track_id);
     const addedBy = !opts.nowPlaying ? addedByLabel(item.requested_by, me.data?.id, p.listeners) : null;
+    const artistId = t?.artists?.[0]?.id;
+    const canDelete = admin && t?.source !== "youtube" && isLibraryTrackId(item.track_id);
+    const actions: ({ kind: "item"; label: string; onSelect: () => void; danger?: boolean } | { kind: "sep" })[] = [
+      ...(opts.nowPlaying
+        ? [{ kind: "item" as const, label: "Restart", onSelect: () => p.seek(0) }]
+        : [
+            { kind: "item" as const, label: "Play now", onSelect: () => void p.playNow(i) },
+            { kind: "item" as const, label: "Play next", onSelect: () => playNext(i) }
+          ]),
+      { kind: "item", label: "Remove from queue", onSelect: () => removeAt(i) },
+      { kind: "sep" },
+      ...(t && t.source !== "youtube" && isLibraryTrackId(t.id)
+        ? [{ kind: "item" as const, label: favSet.has(t.id) ? "Unfavourite" : "Favourite", onSelect: () => void toggleFav(t) }]
+        : []),
+      {
+        kind: "item",
+        label: "Add to playlist",
+        onSelect: () => {
+          setPendingIds([item.track_id]);
+          setPlOpen(true);
+        }
+      },
+      { kind: "item", label: "Save offline", onSelect: () => saveTracksOffline([item.track_id]) },
+      ...(t ? [{ kind: "item" as const, label: "Download", onSelect: () => downloadTrack(t) }] : []),
+      { kind: "sep" },
+      { kind: "item", label: "Go to track info", onSelect: () => navigate(`/tracks/${item.track_id}`) },
+      ...(t?.album_id ? [{ kind: "item" as const, label: "Go to album", onSelect: () => navigate(`/albums/${t.album_id}`) }] : []),
+      ...(artistId ? [{ kind: "item" as const, label: "Go to artist", onSelect: () => navigate(`/artists/${artistId}`) }] : []),
+      ...(isLibraryTrackId(item.track_id)
+        ? [{ kind: "item" as const, label: "Start radio", onSelect: () => navigate(`/radio/track/${item.track_id}`) }]
+        : []),
+      ...(canDelete
+        ? [
+            { kind: "sep" as const },
+            {
+              kind: "item" as const,
+              label: "Delete from library",
+              danger: true,
+              onSelect: () => {
+                setDelId(item.track_id);
+                setDelQueueIndex(i);
+                setDelFiles(false);
+                setDelOpen(true);
+              }
+            }
+          ]
+        : [])
+    ];
+    const menuNodes = (Item: typeof ContextMenuItem | typeof DropdownMenuItem, Sep: typeof ContextMenuSeparator | typeof DropdownMenuSeparator) =>
+      actions.map((a, n) =>
+        a.kind === "sep" ? (
+          <Sep key={`sep-${n}`} />
+        ) : (
+          <Item key={a.label} className={a.danger ? "text-destructive" : undefined} onSelect={a.onSelect}>
+            {a.label}
+          </Item>
+        )
+      );
     const body = (
       <div
-        draggable
-        onDragStart={() => {
-          drag.current = i;
+        data-queue-row={item.id}
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          if (overIndex !== i) setOverIndex(i);
         }}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={() => {
-          const from = drag.current;
-          if (from < 0 || from === i) return;
-          p.control("reorder", { from, to: i });
+        onDrop={(e) => {
+          e.preventDefault();
+          dropAt(i);
         }}
-        className={`group flex cursor-grab items-center gap-2 rounded-md p-2 active:cursor-grabbing ${opts.nowPlaying ? "bg-surface-2" : "hover:bg-surface-2"}`}
+        className={cn(
+          "group flex items-center gap-2 rounded-md p-2 transition-opacity duration-150",
+          opts.nowPlaying ? "bg-surface-2" : "hover:bg-surface-2",
+          dragFrom === i && "opacity-40",
+          flashId === item.id && "ring-1 ring-accent bg-accent/10"
+        )}
       >
-        <GripVertical className="h-3.5 w-3.5 shrink-0 text-subtle" />
+        <span
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.effectAllowed = "move";
+            const rowEl = (e.currentTarget as HTMLElement).closest("[data-queue-row]");
+            if (rowEl instanceof HTMLElement) e.dataTransfer.setDragImage(rowEl, 16, 20);
+            setDragFrom(i);
+            setOverIndex(i);
+          }}
+          onDragEnd={clearDrag}
+          className="flex h-8 w-6 shrink-0 cursor-grab items-center justify-center text-subtle active:cursor-grabbing"
+          aria-label="Drag to reorder"
+        >
+          <GripVertical className="h-3.5 w-3.5" />
+        </span>
         <div className="h-10 w-10 overflow-hidden rounded">
           <Artwork src={artworkUrl("track", item.track_id, "thumb")} id={item.track_id} name={t?.title} kind="track" size="sm" />
         </div>
@@ -223,6 +385,23 @@ export function QueuePanel({
             <div className="truncate text-[11px] text-subtle">{addedBy}</div>
           ) : null}
         </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 shrink-0"
+              aria-label="Track actions"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+            {menuNodes(DropdownMenuItem, DropdownMenuSeparator)}
+          </DropdownMenuContent>
+        </DropdownMenu>
         {!opts.nowPlaying && (
           <>
             <Button
@@ -253,15 +432,14 @@ export function QueuePanel({
         )}
       </div>
     );
-    if (opts.nowPlaying) return <div key={item.id}>{body}</div>;
     return (
-      <ContextMenu key={item.id}>
-        <ContextMenuTrigger asChild>{body}</ContextMenuTrigger>
-        <ContextMenuContent>
-          <ContextMenuItem onSelect={() => p.playNow(i)}>Play now</ContextMenuItem>
-          <ContextMenuItem onSelect={() => removeAt(i)}>Remove from queue</ContextMenuItem>
-        </ContextMenuContent>
-      </ContextMenu>
+      <div key={item.id}>
+        <QueueInsertLine active={showQueueInsertLine(dragFrom, overIndex, i)} />
+        <ContextMenu>
+          <ContextMenuTrigger asChild>{body}</ContextMenuTrigger>
+          <ContextMenuContent>{menuNodes(ContextMenuItem, ContextMenuSeparator)}</ContextMenuContent>
+        </ContextMenu>
+      </div>
     );
   };
 
@@ -378,6 +556,21 @@ export function QueuePanel({
             <section>
               <div className="mb-1 px-2 text-xs font-semibold uppercase tracking-wide text-subtle">Up next</div>
               {upcoming.map((item, n) => row(item, current + 1 + n, {}))}
+              {items.length > 0 && (
+                <div
+                  className="min-h-3"
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    if (overIndex !== items.length) setOverIndex(items.length);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    dropAt(items.length);
+                  }}
+                >
+                  <QueueInsertLine active={showQueueInsertLine(dragFrom, overIndex, items.length)} />
+                </div>
+              )}
               {!upcoming.length && <p className="px-2 text-sm text-muted">{now ? "Nothing queued after this track." : "Queue is empty. Play a track from Home."}</p>}
             </section>
           </>
@@ -414,6 +607,61 @@ export function QueuePanel({
               <Button type="submit">Save</Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={plOpen} onOpenChange={setPlOpen}>
+        <DialogContent title="Add to playlist">
+          <div className="max-h-72 space-y-1 overflow-auto">
+            {(playlists.data || []).map((pl) => (
+              <button
+                key={pl.id}
+                type="button"
+                className="block w-full rounded-md px-2 py-2 text-left text-sm hover:bg-surface-2"
+                onClick={async () => {
+                  await addTracksToPlaylist(pl.id, pendingIds);
+                  setPlOpen(false);
+                }}
+              >
+                {pl.name}
+              </button>
+            ))}
+            {!playlists.data?.length && !playlists.isLoading && <p className="text-sm text-muted">No playlists yet.</p>}
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={delOpen} onOpenChange={setDelOpen}>
+        <DialogContent title="Remove from library">
+          <div className="space-y-3">
+            <p className="text-sm text-muted">This removes the track from SoundDock. NAS, local, and external source files are not deleted.</p>
+            <label className="flex items-center justify-between gap-3 text-sm">
+              Also delete SoundDock-managed files
+              <Switch checked={delFiles} onCheckedChange={setDelFiles} />
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setDelOpen(false)}>Cancel</Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={async () => {
+                  if (!delId) return;
+                  try {
+                    await api.post("/api/v1/tracks/bulk", { ids: [delId], delete: true, delete_files: delFiles });
+                    removeTracksFromCaches(qc, [delId]);
+                    if (delQueueIndex != null) p.control("remove", { position: delQueueIndex });
+                    toast.success("Removed");
+                    setDelOpen(false);
+                    setDelId(null);
+                    setDelQueueIndex(null);
+                    refreshCatalogue(qc);
+                  } catch {
+                    toast.error("Could not remove track");
+                  }
+                }}
+              >
+                Remove
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

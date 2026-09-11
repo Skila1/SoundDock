@@ -82,6 +82,36 @@ describe("stale playhead_sequence", () => {
     expect(seek.playheadApplied).toBe(true);
     expect(seek.playhead.checkpointPositionMs).toBe(500);
   });
+
+  it("accepts a far seek when only playhead_sequence increased", () => {
+    const first = applySnapshot(
+      initialSession(),
+      snap({ playhead_sequence: 4, position_ms: 8_000, state_revision: 1, status: "playing" }),
+      { nowMs: 1_000 }
+    );
+    const seek = applySnapshot(
+      first,
+      snap({ playhead_sequence: 5, position_ms: 120_000, state_revision: 1, status: "playing" }),
+      { nowMs: 1_200 }
+    );
+    expect(seek.playheadApplied).toBe(true);
+    expect(seek.playhead.checkpointPositionMs).toBe(120_000);
+  });
+
+  it("still slews a far jump on the same playhead_sequence", () => {
+    const first = applySnapshot(
+      initialSession(),
+      snap({ playhead_sequence: 4, position_ms: 8_000, state_revision: 1, status: "playing" }),
+      { nowMs: 1_000 }
+    );
+    const noisy = applySnapshot(
+      first,
+      snap({ playhead_sequence: 4, position_ms: 120_000, state_revision: 1, status: "playing" }),
+      { nowMs: 1_200 }
+    );
+    expect(noisy.playheadApplied).toBe(false);
+    expect(noisy.playhead.checkpointPositionMs).toBe(8_000);
+  });
 });
 
 describe("bind revision", () => {

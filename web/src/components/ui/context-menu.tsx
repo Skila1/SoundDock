@@ -23,3 +23,5 @@ export function ContextMenuContent({ className, onCloseAutoFocus, ...props }: Co
 export function ContextMenuItem({ className, ...props }: ComponentProps<typeof Ctx.Item>) {
   return <Ctx.Item className={cn("flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-surface-2", className)} {...props} />;
 }
+
+export const ContextMenuSeparator = () => <Ctx.Separator className="my-1 h-px bg-border" />;

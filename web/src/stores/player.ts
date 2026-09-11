@@ -483,6 +483,26 @@ function interpolatedNow(): number {
   });
 }
 
+/** Pin the local playhead to a user seek so Discord interpolation cannot snap back. */
+function applyLocalSeek(ms: number) {
+  const now = Date.now();
+  const positionMs = Math.max(0, Math.round(ms));
+  session = {
+    ...session,
+    queue: {
+      ...session.queue,
+      position_ms: positionMs,
+      checkpoint_at: new Date(now).toISOString()
+    },
+    playhead: {
+      ...session.playhead,
+      positionMs,
+      checkpointPositionMs: positionMs,
+      checkpointAtMs: now
+    }
+  };
+}
+
 function patchFromSession(view: SessionView, extra: Record<string, unknown> = {}) {
   const q = view.queue as PlayerQueue;
   const output = q.output_pref === "discord" || q.output_pref === "browser" ? q.output_pref : usePlayer.getState().output;
@@ -521,6 +541,7 @@ function ingestQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kind?: "
 }
 
 function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kind?: "snapshot" | "playhead" }) {
+  if (seeking && opts?.kind === "playhead") return;
   const prev = usePlayer.getState();
   const prevId = prev.queue?.current_track_id;
   const prevItems = prev.queue?.items;
@@ -1271,15 +1292,23 @@ export const usePlayer = create<PlayerStore>()(
         ensureSessionPoll();
       },
       seek: (ms) => {
+        const positionMs = Math.max(0, Math.round(ms));
         seeking = true;
         clearCrossfadeTimer();
-        if (!usingDiscord()) seekActive(ms);
-        set({ position: ms });
-        seeking = false;
+        if (!usingDiscord()) seekActive(positionMs);
+        applyLocalSeek(positionMs);
+        set({ position: positionMs });
         const t = get().current;
-        if (t) markProgress(t.id, ms, get().duration);
-        get().control("seek", { position_ms: Math.round(ms) }).catch(() => undefined);
+        if (t) markProgress(t.id, positionMs, get().duration);
         publishMediaPosition();
+        void get()
+          .control("seek", { position_ms: positionMs })
+          .catch(() => undefined)
+          .finally(() => {
+            seeking = false;
+            set({ position: interpolatedNow() });
+            publishMediaPosition();
+          });
       },
       setVolume: (v) => {
         const next = Math.min(1, Math.max(0, v));
@@ -1400,6 +1429,7 @@ export const usePlayer = create<PlayerStore>()(
         ensureSessionPoll();
       },
       syncDiscordQueue: async () => {
+        if (seeking) return;
         try {
           const { queue: q, clock } = await fetchQueue();
           if (!q) return;

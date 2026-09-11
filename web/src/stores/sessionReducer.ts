@@ -296,6 +296,7 @@ export function applySnapshot(view: SessionView, snap: QueueSnapshot, opts: Appl
         view.playhead
       );
       const revisionIncreased = hasRev && incomingRev > view.lastAppliedRevision;
+      const sequenceIncreased = hasSeq && seq > lastPlayheadSequence;
       const prevPos = interpolatePosition({
         playing: view.playhead.playing,
         checkpointPositionMs: view.playhead.checkpointPositionMs,
@@ -305,9 +306,12 @@ export function applySnapshot(view: SessionView, snap: QueueSnapshot, opts: Appl
         nowMs,
         offsetMs: view.playhead.offsetMs
       });
+      // Same-sequence GET noise is slewed. A higher playhead_sequence is a
+      // real seek or checkpoint and must not be rejected as a 1s refine jump.
       if (
         view.playhead.sequence > 0 &&
         !revisionIncreased &&
+        !sequenceIncreased &&
         !instanceChanged &&
         lastInstanceId != null &&
         !shouldAcceptRefine(prevPos, nextPlayhead.positionMs, false)
