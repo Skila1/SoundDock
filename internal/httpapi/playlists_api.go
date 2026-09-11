@@ -279,6 +279,11 @@ func (s *Server) addPlaylistTracks(w http.ResponseWriter, r *http.Request) {
 		TrackIDs []uuid.UUID `json:"track_ids"`
 	}
 	_ = decodeJSON(r, &body)
+	for _, t := range body.TrackIDs {
+		if !s.requireTrackLibrary(w, r, t, "read") {
+			return
+		}
+	}
 	var max int
 	_ = s.Pool.QueryRow(r.Context(), `SELECT coalesce(max(position),-1) FROM playlist_entries WHERE playlist_id=$1`, id).Scan(&max)
 	for i, t := range body.TrackIDs {
@@ -344,13 +349,14 @@ func (s *Server) importM3U(w http.ResponseWriter, r *http.Request) {
 	var id uuid.UUID
 	_ = s.Pool.QueryRow(r.Context(), `INSERT INTO playlists (user_id, name) VALUES ($1,'Imported M3U') RETURNING id`, currentUser(r).ID).Scan(&id)
 	pos := 0
+	libs := s.libraryIDs(r.Context(), currentUser(r))
 	for _, line := range strings.Split(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
 		var tid uuid.UUID
-		err := s.Pool.QueryRow(r.Context(), `SELECT id FROM tracks WHERE title ILIKE $1 LIMIT 1`, "%"+baseName(line)+"%").Scan(&tid)
+		err := s.Pool.QueryRow(r.Context(), `SELECT id FROM tracks WHERE title ILIKE $1 AND library_id = ANY($2) LIMIT 1`, "%"+baseName(line)+"%", libs).Scan(&tid)
 		if err == nil {
 			_, _ = s.Pool.Exec(r.Context(), `INSERT INTO playlist_entries (playlist_id, track_id, position) VALUES ($1,$2,$3)`, id, tid, pos)
 			pos++

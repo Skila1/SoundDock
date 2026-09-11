@@ -45,6 +45,11 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 	if body.Scopes == nil {
 		body.Scopes = []string{}
 	}
+	scopes, err := normalizeAPIKeyScopes(body.Scopes)
+	if err != nil {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
 	secret, err := cryptox.RandomToken(32)
 	if err != nil {
 		writeErr(w, 500, "token", err.Error())
@@ -59,7 +64,7 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 	err = s.Pool.QueryRow(r.Context(), `
 		INSERT INTO personal_access_tokens (user_id, name, prefix, secret_hash, scopes)
 		VALUES ($1,$2,$3,$4,$5) RETURNING id, created_at`,
-		u.ID, strings.TrimSpace(body.Name), prefix, hash, body.Scopes).Scan(&id, &created)
+		u.ID, strings.TrimSpace(body.Name), prefix, hash, scopes).Scan(&id, &created)
 	if err != nil {
 		writeErr(w, 500, "token", err.Error())
 		return
@@ -69,7 +74,7 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		"id":         id,
 		"name":       strings.TrimSpace(body.Name),
 		"prefix":     prefix,
-		"scopes":     body.Scopes,
+		"scopes":     scopes,
 		"created_at": created,
 		"secret":     plain,
 		"note":       "shown once",

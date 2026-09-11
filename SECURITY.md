@@ -10,8 +10,8 @@ SoundDock is designed to be internet-exposable. Please report vulnerabilities pr
 
 ## Hardening checklist
 
-- Set a long random `SD_MASTER_KEY`
-- Use HTTPS (`SD_PUBLIC_URL`, `SD_COOKIE_SECURE=true`)
+- Set a long random `SD_MASTER_KEY` (empty and the documented placeholder are rejected at boot)
+- Use HTTPS (`SD_PUBLIC_URL` = tunnel hostname, `SD_COOKIE_SECURE=true`)
 - Restrict `SD_TRUSTED_PROXIES`
 - Keep `/metrics` disabled or token-protected
 - Run containers as non-root (default image)

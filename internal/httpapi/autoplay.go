@@ -71,12 +71,22 @@ func (s *Server) ReplenishAutoplay(ctx context.Context, sid uuid.UUID) error {
 	if !playback.ShouldReplenishAutoplay(autoplay, stopAfter, n-idx) {
 		return nil
 	}
-	ok, err := s.Play.HasAudioListener(fillCtx, sid)
+	go s.replenishAutoplayYouTube(sid, seed, userID, have)
+	return nil
+}
+
+func (s *Server) replenishAutoplayYouTube(sid, seed, userID uuid.UUID, have []uuid.UUID) {
+	if s == nil || s.Play == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	ok, err := s.Play.HasAudioListener(ctx, sid)
 	if err != nil || !ok {
-		return nil
+		return
 	}
 	need := radio.ClampFill(8)
-	hits := s.youtubeFillHits(fillCtx, seed, need, have)
+	hits := s.youtubeFillHits(ctx, seed, need, have)
 	var refs []string
 	seen := map[string]struct{}{}
 	for _, h := range hits {
@@ -90,11 +100,11 @@ func (s *Server) ReplenishAutoplay(ctx context.Context, sid uuid.UUID) error {
 		refs = append(refs, h.ID)
 	}
 	if len(refs) == 0 {
-		return nil
+		return
 	}
-	ids, err := s.resolvePlayTracks(fillCtx, refs)
+	ids, err := s.resolvePlayTracks(ctx, refs)
 	if err != nil || len(ids) == 0 {
-		return err
+		return
 	}
 	var add []uuid.UUID
 	known := map[uuid.UUID]struct{}{}
@@ -111,7 +121,7 @@ func (s *Server) ReplenishAutoplay(ctx context.Context, sid uuid.UUID) error {
 		known[id] = struct{}{}
 		add = append(add, id)
 	}
-	return s.addAutoplayTracks(fillCtx, sid, userID, add)
+	_ = s.addAutoplayTracks(ctx, sid, userID, add)
 }
 
 func (s *Server) autoplayLibraryTracks(ctx context.Context, userID, seed uuid.UUID, exclude []uuid.UUID) []uuid.UUID {

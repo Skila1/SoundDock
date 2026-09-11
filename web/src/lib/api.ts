@@ -9,6 +9,10 @@ async function parse(r: Response) {
     }
     const err = new Error(msg) as Error & { status: number };
     err.status = r.status;
+    if (r.status === 401) {
+      const { queryClient } = await import("@/app/providers");
+      queryClient.removeQueries({ queryKey: ["me"] });
+    }
     throw err;
   }
   if (r.status === 204) return null;

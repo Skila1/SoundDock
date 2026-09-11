@@ -8,6 +8,7 @@ import (
 	"math"
 	"os/exec"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -245,8 +246,7 @@ func (b *Bot) LeaveGuild(ctx context.Context, guildID string) error {
 	b.stopStreamer(guildID)
 	b.dropVoice(guildID)
 	if held && rt.SessionID != uuid.Nil && b.play != nil {
-		_ = b.play.Control(ctx, rt.SessionID, "stop", nil)
-		_ = b.play.Control(ctx, rt.SessionID, "clear", map[string]any{"all": true})
+		_ = b.play.Control(ctx, rt.SessionID, "pause", nil)
 	}
 	if held && b.play != nil {
 		expected := rt.BindingRevision
@@ -413,6 +413,20 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 
 	src, gainDB, durationMS, err := b.ffmpegSourceForTrack(ctx, trackID, st)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if b.waitForRestoringTrack(ctx, trackID) {
+			src, gainDB, durationMS, err = b.ffmpegSourceForTrack(ctx, trackID, st)
+		}
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		if b.trackIsRestoring(ctx, trackID) {
+			return
+		}
 		b.recordPlaybackError(ctx, guildID, trackID, "ffmpeg", err.Error())
 		_ = b.play.Control(ctx, sid, "skip", skipControlExtra(false))
 		return
@@ -636,6 +650,70 @@ func pcmGainDB(mode string, trackGain, albumGain *float64) float64 {
 	return 0
 }
 
+func (b *Bot) trackHasOriginal(ctx context.Context, trackID uuid.UUID) bool {
+	if b == nil || b.pool == nil || trackID == uuid.Nil {
+		return false
+	}
+	var ok bool
+	err := b.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM track_files
+			WHERE track_id=$1 AND quality='original' AND deleted_at IS NULL
+		)`, trackID).Scan(&ok)
+	return err == nil && ok
+}
+
+func (b *Bot) trackIsRestoring(ctx context.Context, trackID uuid.UUID) bool {
+	if b == nil || b.pool == nil || trackID == uuid.Nil {
+		return false
+	}
+	if b.trackHasOriginal(ctx, trackID) {
+		return false
+	}
+	var status string
+	err := b.pool.QueryRow(ctx, `
+		SELECT status FROM acquisition_intents
+		WHERE track_id=$1
+		ORDER BY created_at DESC
+		LIMIT 1`, trackID).Scan(&status)
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "open", "queued", "pending", "running", "retry", "retrying",
+		"downloading", "processing", "scanning":
+		return true
+	default:
+		return false
+	}
+}
+
+// waitForRestoringTrack blocks until the original file exists, restoration
+// stops, or ctx is done. It does not skip; the caller decides.
+func (b *Bot) waitForRestoringTrack(ctx context.Context, trackID uuid.UUID) bool {
+	if b.trackHasOriginal(ctx, trackID) {
+		return true
+	}
+	if !b.trackIsRestoring(ctx, trackID) {
+		return false
+	}
+	tick := time.NewTicker(400 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-tick.C:
+			if b.trackHasOriginal(ctx, trackID) {
+				return true
+			}
+			if !b.trackIsRestoring(ctx, trackID) {
+				return false
+			}
+		}
+	}
+}
+
 func (b *Bot) ffmpegSourceForTrack(ctx context.Context, trackID uuid.UUID, st map[string]any) (pcmSource, float64, int, error) {
 	var libID uuid.UUID
 	var key string
@@ -756,7 +834,7 @@ func (b *Bot) reconcileVoice(ctx context.Context) {
 		if rows.Scan(&gid, &ch, &connected, &reason) != nil {
 			continue
 		}
-		wantJoin := !connected && ch != nil && *ch != "" && reason != nil && *reason == "pending_join"
+		wantJoin := !connected && ch != nil && *ch != "" && reason != nil && (*reason == "pending_join" || *reason == "stale_runtime")
 		if wantJoin {
 			if err := b.JoinChannel(ctx, gid, *ch); err != nil {
 				b.log.Warn("pending join", "guild", gid, "err", err)

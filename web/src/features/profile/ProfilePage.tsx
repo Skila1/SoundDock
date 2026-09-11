@@ -12,6 +12,7 @@ import { usePrefs } from "@/stores/prefs";
 import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 import { relativeTime } from "@/lib/utils";
 import { toast } from "sonner";
+import { resetClientSession } from "@/features/auth/sessionReset";
 import type { User } from "@/types/api";
 
 type SessionRow = {
@@ -208,7 +209,11 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
         <Button variant="outline" onClick={() => (window.location.href = "/profile/devices")}>Devices</Button>
         <Button variant="outline" onClick={() => (window.location.href = "/profile/party")}>Party</Button>
         <Button variant="outline" onClick={() => window.open("/api/v1/me/export")}>Export my data</Button>
-        <Button variant="ghost" onClick={() => api.post("/api/v1/auth/logout-all").then(() => toast.success("Sessions revoked"))}>Revoke other sessions</Button>
+        <Button variant="ghost" onClick={() => api.post("/api/v1/auth/logout-all").then(() => {
+          resetClientSession();
+          toast.success("Sessions revoked");
+          window.location.assign("/");
+        })}>Revoke other sessions</Button>
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { Heart, ListMusic, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Square, X } from "lucide-react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -27,7 +28,12 @@ export function NowPlaying() {
   const ui = useUi();
   const p = usePlayer();
   const t = p.current;
-  const progress = p.duration ? (p.position / p.duration) * 100 : 0;
+  const [scrub, setScrub] = useState<number | null>(null);
+  const pos = scrub ?? Math.min(p.position, p.duration || p.position || 0);
+  const progress = p.duration ? Math.min(100, Math.max(0, (pos / p.duration) * 100)) : 0;
+  useEffect(() => {
+    setScrub(null);
+  }, [t?.id]);
   const RepeatIcon = p.repeat === "one" ? Repeat1 : Repeat;
   const lyricsQ = useQuery({
     queryKey: lyricsQueryKey(t?.id || ""),
@@ -63,8 +69,16 @@ export function NowPlaying() {
             </div>
           )}
           <div className="mt-4 flex items-center gap-2">
-            <span className="w-10 text-xs text-subtle">{formatDuration(p.position)}</span>
-            <Slider value={[progress]} onValueChange={([v]) => p.seek(((v || 0) / 100) * (p.duration || 0))} />
+            <span className="w-10 text-xs text-subtle">{formatDuration(pos)}</span>
+            <Slider
+              value={[progress]}
+              onValueChange={([v]) => setScrub(((v || 0) / 100) * (p.duration || 0))}
+              onValueCommit={([v]) => {
+                const ms = ((v || 0) / 100) * (p.duration || 0);
+                setScrub(null);
+                p.seek(ms);
+              }}
+            />
             <span className="w-10 text-xs text-subtle">{formatDuration(p.duration)}</span>
           </div>
           <div className="mt-4 flex items-center justify-center gap-3">

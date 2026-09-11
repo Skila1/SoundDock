@@ -251,7 +251,9 @@ func (s *Service) trackRadio(ctx context.Context, trackID uuid.UUID, libs []uuid
 	if _, err := s.TrackMeta(ctx, trackID); err != nil {
 		return nil, err
 	}
-	seeds := uniqueAppend([]uuid.UUID{trackID}, recent, 6)
+	// Recent listens are exclude-only. Using them as extra seeds mixes unrelated
+	// genres into the fill (UK rap plus a later classical listen).
+	seeds := []uuid.UUID{trackID}
 	queueSkip := uniqueAppend([]uuid.UUID{trackID}, queue, len(queue)+1)
 	strict := uniqueAppend(append([]uuid.UUID{}, queueSkip...), recent, len(queueSkip)+len(recent))
 
@@ -301,46 +303,75 @@ func (s *Service) fillFromSeeds(ctx context.Context, seeds []uuid.UUID, libs []u
 }
 
 func (s *Service) similarFromSeed(ctx context.Context, trackID uuid.UUID, libs []uuid.UUID, limit int, skip []uuid.UUID) ([]uuid.UUID, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
 	meta, err := s.TrackMeta(ctx, trackID)
 	if err != nil {
 		return nil, err
 	}
-	tokens := GenreTokens(meta.Genre, meta.Tags)
-	if len(tokens) == 0 {
-		return nil, nil
-	}
-	blocked := idsOrDummy(uniqueAppend([]uuid.UUID{trackID}, skip, len(skip)+1))
-	ids, err := s.queryIDs(ctx, `
-		SELECT t.id FROM tracks t
-		JOIN track_genres tg ON tg.track_id=t.id
-		WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
-		  AND tg.genre_id IN (SELECT genre_id FROM track_genres WHERE track_id=$3)
-		ORDER BY random() LIMIT $4`, libs, blocked, trackID, limit)
+	artistIDs, err := s.primaryArtistIDs(ctx, trackID)
 	if err != nil {
 		return nil, err
 	}
-	if len(ids) >= limit {
-		return ids, nil
+	genreIDs, err := s.trackGenreIDs(ctx, trackID)
+	if err != nil {
+		return nil, err
 	}
-	for _, tok := range tokens {
-		if len(ids) >= limit {
-			break
-		}
-		pat := "%" + tok + "%"
+	if len(artistIDs) == 0 && len(genreIDs) == 0 {
+		return nil, nil
+	}
+	blocked := idsOrDummy(uniqueAppend([]uuid.UUID{trackID}, skip, len(skip)+1))
+	var ids []uuid.UUID
+	if len(artistIDs) > 0 {
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
+			JOIN track_artists ta ON ta.track_id=t.id
+			WHERE ta.artist_id = ANY($1) AND ta.role='primary'
+			  AND t.library_id = ANY($2) AND t.id <> ALL($3)
+			ORDER BY random() LIMIT $4`, artistIDs, libs, blocked, limit)
+		if err != nil {
+			return nil, err
+		}
+		ids = uniqueAppend(ids, more, limit)
+	}
+	if len(ids) < limit && len(genreIDs) > 0 {
+		more, err := s.queryIDs(ctx, `
+			SELECT t.id FROM tracks t
+			JOIN track_genres tg ON tg.track_id=t.id
 			WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
-			  AND (t.genre_text ILIKE $3 OR EXISTS (
-				SELECT 1 FROM track_genres tg JOIN genres g ON g.id=tg.genre_id
-				WHERE tg.track_id=t.id AND g.name ILIKE $3
-			  ))
-			ORDER BY random() LIMIT $4`, libs, idsOrDummy(append(blocked, ids...)), pat, limit-len(ids))
+			  AND tg.genre_id = ANY($3)
+			GROUP BY t.id
+			ORDER BY COUNT(*) DESC, random()
+			LIMIT $4`, libs, idsOrDummy(append(blocked, ids...)), genreIDs, limit-len(ids))
+		if err != nil {
+			return ids, err
+		}
+		ids = uniqueAppend(ids, more, limit)
+	}
+	if len(ids) < limit && meta.AlbumID != nil && *meta.AlbumID != uuid.Nil {
+		more, err := s.queryIDs(ctx, `
+			SELECT t.id FROM tracks t
+			WHERE t.album_id=$1 AND t.library_id = ANY($2) AND t.id <> ALL($3)
+			ORDER BY t.disc_number, t.track_number, random()
+			LIMIT $4`, *meta.AlbumID, libs, idsOrDummy(append(blocked, ids...)), limit-len(ids))
 		if err != nil {
 			return ids, err
 		}
 		ids = uniqueAppend(ids, more, limit)
 	}
 	return ids, nil
+}
+
+func (s *Service) primaryArtistIDs(ctx context.Context, trackID uuid.UUID) ([]uuid.UUID, error) {
+	return s.queryIDs(ctx, `
+		SELECT artist_id FROM track_artists
+		WHERE track_id=$1 AND role='primary'
+		ORDER BY position`, trackID)
+}
+
+func (s *Service) trackGenreIDs(ctx context.Context, trackID uuid.UUID) ([]uuid.UUID, error) {
+	return s.queryIDs(ctx, `SELECT genre_id FROM track_genres WHERE track_id=$1`, trackID)
 }
 
 func (s *Service) dropSameSongs(ctx context.Context, seedTitle string, ids []uuid.UUID) ([]uuid.UUID, error) {
@@ -502,13 +533,22 @@ func FirstGenre(s string) string {
 	return g
 }
 
-// SimilarQuery is the YouTube autoplay search. Title and artist are never used.
-func SimilarQuery(genre string, tags []string) string {
-	toks := GenreTokens(genre, tags)
-	if len(toks) == 0 {
-		return ""
+// SimilarQuery is the YouTube autoplay search. Prefer "{artist} {primary genre}".
+// Never append "mix" or dump every tag. Empty is better than a vague query.
+func SimilarQuery(artist, genre string, tags []string) string {
+	artist = strings.TrimSpace(artist)
+	primary := FirstGenre(genre)
+	if primary == "" && len(tags) > 0 {
+		primary = strings.TrimSpace(tags[0])
 	}
-	return strings.Join(toks, " ") + " mix"
+	switch {
+	case artist != "" && primary != "":
+		return artist + " " + primary
+	case artist != "":
+		return artist
+	default:
+		return primary
+	}
 }
 
 func SameSong(a, b string) bool {

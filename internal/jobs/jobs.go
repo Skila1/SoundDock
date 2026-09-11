@@ -612,7 +612,26 @@ func (rt *poolRuntime) runJob(parent context.Context, job Job, cfg PoolConfig) {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	err := h(ctx, job)
+	done := make(chan error, 1)
+	go func() {
+		done <- h(ctx, job)
+	}()
+	tick := time.NewTicker(200 * time.Millisecond)
+	defer tick.Stop()
+	var err error
+wait:
+	for {
+		select {
+		case err = <-done:
+			break wait
+		case <-tick.C:
+			if r.Cancelled(parent, job.ID) {
+				cancel()
+				err = <-done
+				break wait
+			}
+		}
+	}
 	if err == nil {
 		_, _ = r.db.Exec(parent, `
 			UPDATE jobs SET status='completed', progress=100, finished_at=now(), locked_until=NULL, updated_at=now()

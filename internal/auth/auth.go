@@ -207,6 +207,19 @@ func (s *Service) DeleteSession(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+func (s *Service) DeleteSessionForUser(ctx context.Context, id, userID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE id=$1 AND user_id=$2`, id, userID)
+	return err
+}
+
+func (s *Service) DeleteOtherSessions(ctx context.Context, userID, keep uuid.UUID) error {
+	if keep == uuid.Nil {
+		return s.DeleteUserSessions(ctx, userID)
+	}
+	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1 AND id<>$2`, userID, keep)
+	return err
+}
+
 func (s *Service) DeleteUserSessions(ctx context.Context, userID uuid.UUID) error {
 	_, err := s.pool.Exec(ctx, `DELETE FROM sessions WHERE user_id=$1`, userID)
 	return err

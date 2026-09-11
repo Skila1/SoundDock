@@ -480,6 +480,10 @@ func (s *Server) getParty(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "party", err.Error())
 		return
 	}
+	if sid != uuid.Nil && !s.partyVisibleTo(r.Context(), sid, u.ID) {
+		writeErr(w, 403, "party", "not a member of this party")
+		return
+	}
 	if sid == uuid.Nil {
 		found, ok, ferr := s.Play.FindPartyForUser(r.Context(), u.ID)
 		if ferr != nil {
@@ -629,6 +633,20 @@ func (s *Server) partySession(r *http.Request, bodyID *uuid.UUID) (uuid.UUID, er
 	return uuid.Nil, nil
 }
 
+func (s *Server) partyVisibleTo(ctx context.Context, sid, userID uuid.UUID) bool {
+	if s == nil || s.Pool == nil || sid == uuid.Nil || userID == uuid.Nil {
+		return false
+	}
+	var n int
+	err := s.Pool.QueryRow(ctx, `
+		SELECT 1 FROM playback_sessions s
+		WHERE s.id=$1 AND (
+			s.user_id=$2 OR s.party_host_user_id=$2
+			OR EXISTS (SELECT 1 FROM party_members m WHERE m.session_id=s.id AND m.user_id=$2)
+		)`, sid, userID).Scan(&n)
+	return err == nil
+}
+
 func (s *Server) enqueuePartyExpire(r *http.Request, sid uuid.UUID, exp time.Time) {
 	if s.Jobs == nil {
 		return
@@ -641,6 +659,9 @@ func (s *Server) enqueuePartyExpire(r *http.Request, sid uuid.UUID, exp time.Tim
 }
 
 func (s *Server) maybeListenSkip(r *http.Request, sid uuid.UUID, extra map[string]any) {
+	if ended, ok := extraBoolMap(extra, "ended"); ok && ended {
+		return
+	}
 	q, err := s.Play.Get(r.Context(), sid)
 	if err != nil {
 		return
@@ -793,6 +814,24 @@ func extraStringMap(extra map[string]any, key string) string {
 	return s
 }
 
+func extraBoolMap(extra map[string]any, key string) (bool, bool) {
+	if extra == nil {
+		return false, false
+	}
+	v, ok := extra[key]
+	if !ok || v == nil {
+		return false, false
+	}
+	switch t := v.(type) {
+	case bool:
+		return t, true
+	case string:
+		return strings.EqualFold(t, "true") || t == "1", true
+	default:
+		return false, false
+	}
+}
+
 func extraIntMap(extra map[string]any, key string) (int, bool) {
 	n, ok := extraInt64Map(extra, key)
 	return int(n), ok
@@ -918,6 +957,9 @@ func uuidStrings(ids []uuid.UUID) []string {
 
 func (s *Server) enqueueAcquireRefs(ctx context.Context, refs []string) {
 	if s == nil || s.Jobs == nil || len(refs) == 0 {
+		return
+	}
+	if _, err := s.enqueueYouTubeRefs(ctx, refs); err == nil {
 		return
 	}
 	_, _ = s.Jobs.Enqueue(ctx, "scapex.fetch", map[string]any{"urls": refs})

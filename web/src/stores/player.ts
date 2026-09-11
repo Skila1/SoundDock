@@ -121,7 +121,6 @@ type ListenScratch = { id: string; counted: boolean; skipped: boolean };
 let seeking = false;
 let persistPosAt = 0;
 let listen: ListenScratch | null = null;
-let radioBusy = false;
 let xfTimer: number | undefined;
 let sleepHandle: number | undefined;
 let voiceTimer: number | undefined;
@@ -613,6 +612,11 @@ function ensureQueueSse(): QueueSseClient {
     onJobProgress: () => undefined,
     onAuthLost: () => {
       queueSse?.stop();
+      pauseAll();
+      clearCrossfadeTimer();
+      queryClient.removeQueries({
+        predicate: (q) => q.queryKey[0] !== "setup"
+      });
     }
   });
   return queueSse;
@@ -712,7 +716,8 @@ async function startLocal(id: string, positionMsValue: number, shouldPlay: boole
   try {
     await playActive();
     return true;
-  } catch {
+  } catch (e) {
+    if (isNotAllowed(e)) toast.error("Click play");
     return false;
   }
 }
@@ -811,41 +816,17 @@ async function appendToQueue(ids: string[], next?: boolean, hints?: QueueTrackHi
   return true;
 }
 
-async function maybeReplenishRadio() {
-  const s = usePlayer.getState();
-  if (!s.autoplay || s.stopAfterCurrent || radioBusy) return;
-  const items = s.queue?.items || [];
-  const idx = s.queue?.current_index ?? 0;
-  if (!items.length || items.length - idx > 2) return;
-  const seed = s.current?.id;
-  if (!seed || !isLibraryTrackId(seed)) return;
-  radioBusy = true;
-  try {
-    const have = new Set(items.map((it) => it.track_id));
-    have.add(seed);
-    const exclude = [...have].filter((id) => isLibraryTrackId(id)).slice(-80);
-    const r = await api.get<{ track_ids?: string[]; youtube_ids?: string[] }>(
-      `/api/v1/radio?kind=track&seed_id=${encodeURIComponent(seed)}&limit=8&fill=youtube&exclude=${exclude.map(encodeURIComponent).join(",")}&recent=40`
-    );
-    const extra = (r.track_ids || []).filter((id) => id && !have.has(id));
-    if (extra.length) await usePlayer.getState().add(extra, false);
-    const yt = (r.youtube_ids || []).filter(Boolean).slice(0, 6);
-    for (let i = 0; i < yt.length; i += 4) {
-      const live = usePlayer.getState();
-      if (!live.autoplay || live.stopAfterCurrent) break;
-      await live.add(yt.slice(i, i + 4), false);
-    }
-  } catch {
-    /* radio optional */
-  } finally {
-    radioBusy = false;
+function clearCrossfadeTimer() {
+  if (xfTimer) {
+    window.clearTimeout(xfTimer);
+    xfTimer = undefined;
   }
 }
 
 function scheduleCrossfade() {
-  if (xfTimer) window.clearTimeout(xfTimer);
+  clearCrossfadeTimer();
   const s = usePlayer.getState();
-  if (usingDiscord()) return;
+  if (usingDiscord() || !s.playing) return;
   const xf = (s.queue?.crossfade_seconds || 0) * 1000;
   const gapless = looksGapless(currentMeta, nextMeta);
   const pad = encoderEndPadSeconds(currentMeta) * 1000;
@@ -863,7 +844,9 @@ async function beginNext(fromEnded: boolean, gapless: boolean, xfMs: number) {
   if (advancing) return;
   advancing = true;
   try {
+  clearCrossfadeTimer();
   const s = usePlayer.getState();
+  if (!s.playing && !fromEnded) return;
   if (s.stopAfterCurrent) {
     await s.control("stop");
     return;
@@ -876,8 +859,8 @@ async function beginNext(fromEnded: boolean, gapless: boolean, xfMs: number) {
       seekActive(encoderStartSeconds(currentMeta) * 1000);
       try {
         await playActive();
-      } catch {
-        /* ignore */
+      } catch (e) {
+        if (isNotAllowed(e)) toast.error("Click play");
       }
     }
     return;
@@ -887,7 +870,10 @@ async function beginNext(fromEnded: boolean, gapless: boolean, xfMs: number) {
   let next = idx + 1;
   if (next >= items.length) {
     if (s.repeat === "queue") next = 0;
-    else {
+    else if (s.autoplay || s.shuffle) {
+      await s.control("skip", { ended: fromEnded, position_ms: Math.round(s.position) });
+      return;
+    } else {
       await s.control("stop");
       return;
     }
@@ -902,8 +888,9 @@ async function beginNext(fromEnded: boolean, gapless: boolean, xfMs: number) {
       try {
         idle.currentTime = encoderStartSeconds(nextMeta);
         await idle.play();
-      } catch {
-        await s.control("skip");
+      } catch (e) {
+        if (isNotAllowed(e)) toast.error("Click play");
+        await s.control("skip", { ended: fromEnded, position_ms: Math.round(s.position) });
         return;
       }
       const from = idleSlot;
@@ -917,7 +904,7 @@ async function beginNext(fromEnded: boolean, gapless: boolean, xfMs: number) {
         setFade(1, 1);
       }, xfMs);
       skipLocalStart = true;
-      await s.control("skip");
+      await s.control("skip", { ended: fromEnded, position_ms: Math.round(s.position) });
       skipLocalStart = false;
       return;
     }
@@ -927,17 +914,21 @@ async function beginNext(fromEnded: boolean, gapless: boolean, xfMs: number) {
       getAudio().pause();
       swapActive();
       skipLocalStart = true;
-      await s.control("skip");
+      await s.control("skip", { ended: fromEnded, position_ms: Math.round(s.position) });
       skipLocalStart = false;
       return;
-    } catch {
-      /* control skip below */
+    } catch (e) {
+      if (isNotAllowed(e)) toast.error("Click play");
     }
   }
-  await s.control("skip");
+  await s.control("skip", { ended: fromEnded, position_ms: Math.round(s.position) });
   } finally {
     advancing = false;
   }
+}
+
+function isNotAllowed(e: unknown) {
+  return e instanceof DOMException && e.name === "NotAllowedError";
 }
 
 const prefs = loadDevicePrefs();
@@ -1170,6 +1161,9 @@ export const usePlayer = create<PlayerStore>()(
         await enqueueQueueOp(() => appendToQueue(ids, next, hints));
       },
       control: async (action, extra) => {
+        if (action === "pause" || action === "stop" || action === "skip" || action === "next" || action === "previous") {
+          clearCrossfadeTimer();
+        }
         if (action === "pause") {
           pauseAll();
           extra = { ...extra, position_ms: Math.round(get().position) };
@@ -1278,6 +1272,7 @@ export const usePlayer = create<PlayerStore>()(
       },
       seek: (ms) => {
         seeking = true;
+        clearCrossfadeTimer();
         if (!usingDiscord()) seekActive(ms);
         set({ position: ms });
         seeking = false;
@@ -1418,8 +1413,6 @@ export const usePlayer = create<PlayerStore>()(
           if (q.current_track_id && (q.current_track_id !== cur.queue?.current_track_id || !cur.current)) {
             await get().hydrateTrack(q.current_track_id);
           }
-          const idx = q.current_index ?? 0;
-          if ((q.items || []).length - idx <= 2) maybeReplenishRadio();
         } catch {
           /* 409 not in voice, or offline */
         }
@@ -1439,7 +1432,6 @@ export const usePlayer = create<PlayerStore>()(
         } catch {
           /* keep local */
         }
-        if (on) maybeReplenishRadio();
       },
       setVisualizer: (on) => {
         saveDevicePrefs({ visualizer: on });
@@ -1525,7 +1517,6 @@ function onTimeUpdate(el: HTMLAudioElement) {
     persistPosAt = Date.now();
     usePlayer.getState().control("seek", { position_ms: Math.round(pos) }).catch(() => undefined);
   }
-  if (remainingMs() < 12000) maybeReplenishRadio();
   scheduleCrossfade();
   publishMediaPosition();
 }
@@ -1541,7 +1532,9 @@ function onEnded(el: HTMLAudioElement) {
     listen = null;
     beginListen(s.current?.id || "");
     seekActive(encoderStartSeconds(currentMeta) * 1000);
-    playActive().catch(() => undefined);
+    playActive().catch((e) => {
+      if (isNotAllowed(e)) toast.error("Click play");
+    });
     return;
   }
   beginNext(true, looksGapless(currentMeta, nextMeta), (s.queue?.crossfade_seconds || 0) * 1000);
@@ -1560,6 +1553,16 @@ export function attachAudioListeners() {
     const bind = (el: HTMLAudioElement) => {
       el.ontimeupdate = () => onTimeUpdate(el);
       el.onended = () => onEnded(el);
+      el.onerror = () => {
+        if (usingDiscord() || el !== getAudio()) return;
+        toast.error("This track could not be played");
+        const s = usePlayer.getState();
+        if (s.autoplay || s.shuffle || (s.queue?.items || []).length > (s.queue?.current_index ?? 0) + 1) {
+          s.control("skip", { ended: true, position_ms: Math.round(s.position) }).catch(() => undefined);
+        } else {
+          s.control("stop").catch(() => undefined);
+        }
+      };
       el.onplay = () => {
         if (usingDiscord() || shouldStopHtmlAudio(session.queue, tabId())) {
           pauseAll();

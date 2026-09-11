@@ -8,7 +8,7 @@ SoundDock is an open-source, self-hosted music platform for organising, streamin
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
 ```
 
-A whiptail installer (same idea as Proxmox helper scripts) writes a Docker Compose project in `./sounddock` under your current directory (`~/sounddock` if you run it from home). If you are already in a folder named `sounddock`, it installs there. It installs Docker if missing and starts the stack. Docker publishes port 8080. Cloudflare Tunnel is optional. Discord is configured in the web Admin after first launch. Then you manage it like any Compose stack:
+A whiptail installer (same idea as Proxmox helper scripts) writes a Docker Compose project in `./sounddock` under your current directory (`~/sounddock` if you run it from home). If you are already in a folder named `sounddock`, it installs there. It installs Docker if missing and starts the stack. Docker publishes port 8080 on the host for local access. Production public access is a Cloudflare Tunnel to `http://localhost:8080`. Do not treat the published Docker port as the public URL. Set `SD_PUBLIC_URL` to the tunnel hostname (required for CORS, cookies, and OAuth). Discord is configured in the web Admin after first launch. Then you manage it like any Compose stack:
 
 ```bash
 cd ~/sounddock
@@ -35,7 +35,7 @@ License: **GNU Affero General Public License v3.0 or later**.
 SoundDock is built to be the system your library, players, and bots talk to. The web player and native Discord worker are first-party clients of the same API.
 
 - **Storage.** Libraries on local disk, NAS/NFS/SMB, Docker volumes, and S3-compatible object storage (Cloudflare R2, AWS S3, MinIO, B2). Scan in place, resumable uploads, Remote Import of direct HTTP(S) media URLs, migrate into managed storage.
-- **API.** REST `/api/v1`, OpenAPI at `/api/docs`, search for humans and bots, API keys (`sd_…`), optional OpenSubsonic, signed webhooks. Stream URLs only. Never filesystem paths.
+- **API.** REST `/api/v1`, OpenAPI at `/api/docs`, search for humans and bots, API keys (`sd_…`), signed webhooks. Stream URLs only. Never filesystem paths. OpenSubsonic is a stub (`SD_OPENSUBSONIC=false`); leave it off.
 - **Web/PWA.** Queue, ReplayGain, optional crossfade. Artists, albums, tracks, playlists, favourites.
 - **Discord.** Optional OAuth sign-in (server/role registration whitelist). Optional native voice worker that plays **your** library. No Lavalink, YouTube, or Spotify. `/link` in Discord completes in the web UI.
 - **Playlist matching.** Connect Spotify, YouTube, SoundCloud, or Apple Music and import playlist URLs. Titles are matched against **your** library. Provider audio is not downloaded.
@@ -45,7 +45,7 @@ SoundDock is built to be the system your library, players, and bots talk to. The
 
 ```bash
 cp .env.example .env
-# set POSTGRES_PASSWORD, SD_MASTER_KEY
+# set POSTGRES_PASSWORD and a unique SD_MASTER_KEY (not the placeholder)
 # Discord is configured in Admin after first launch
 docker compose up -d --build
 ```
@@ -54,7 +54,9 @@ Production hosts should `docker compose pull && docker compose up -d` so they us
 
 The Discord voice worker (`discord-worker`) starts with the default Compose stack.
 
-Cloudflare Tunnel is a **systemd** service (`cloudflared`), not Compose. Point the tunnel at `http://localhost:8080`.
+Cloudflare Tunnel is a **systemd** service (`cloudflared`), not Compose. Point the tunnel at `http://localhost:8080`. Set `SD_PUBLIC_URL` to that public `https://` hostname.
+
+After a backup restore, restart **both** Compose services (`sounddock` and `discord-worker`). Restore only exits the app process.
 
 ```bash
 # PostgreSQL 16, then:

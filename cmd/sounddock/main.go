@@ -80,6 +80,10 @@ func main() {
 	}
 	defer pool.Close()
 
+	if cryptox.WeakMasterKey(cfg.MasterKey) {
+		log.Error("master key", "err", "SD_MASTER_KEY is empty or the documented example value")
+		os.Exit(1)
+	}
 	box, err := cryptox.New(cfg.MasterKey)
 	if err != nil {
 		log.Error("master key", "err", err)
@@ -221,6 +225,7 @@ func main() {
 	if role == config.RoleAll || role == config.RoleDiscord {
 		bot := discordx.New(pool, box, se, play, log, srv.ProviderFor)
 		bot.MediaBusy = busy
+		srv.Healthz = bot.GatewayHealthy
 		go func() {
 			if err := bot.Run(ctx); err != nil {
 				log.Error("discord", "err", err)

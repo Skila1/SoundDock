@@ -9,17 +9,26 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"strings"
 )
 
-var ErrNoKey = errors.New("master key is not configured")
+var (
+	ErrNoKey   = errors.New("master key is not configured")
+	exampleKey = "change-me-to-32-plus-random-bytes"
+)
+
+func WeakMasterKey(master string) bool {
+	k := strings.TrimSpace(master)
+	return k == "" || k == exampleKey
+}
 
 type Box struct {
 	key []byte
 }
 
 func New(master string) (*Box, error) {
-	if master == "" {
-		return &Box{}, nil
+	if WeakMasterKey(master) {
+		return nil, ErrNoKey
 	}
 	sum := sha256.Sum256([]byte(master))
 	return &Box{key: sum[:]}, nil
@@ -88,6 +97,9 @@ func HashToken(tok string) string {
 }
 
 func SigningKey(master string) []byte {
+	if WeakMasterKey(master) {
+		return nil
+	}
 	sum := sha256.Sum256([]byte("sounddock-stream|" + master))
 	return sum[:]
 }

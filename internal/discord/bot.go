@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -45,7 +46,8 @@ type Bot struct {
 
 	voices sync.Map // guildID -> *guildRuntime
 
-	gwOn int32
+	gwOn  int32
+	gwGen int32
 
 	rendererID      string
 	generation      int64
@@ -149,6 +151,20 @@ func (b *Bot) tick(ctx context.Context) {
 	}
 	b.reconcileVoice(ctx)
 	b.heartbeatHeldLeases(ctx)
+}
+
+func (b *Bot) GatewayHealthy(ctx context.Context) error {
+	if b == nil {
+		return nil
+	}
+	enabled, token, _, _, err := b.loadSettings(ctx)
+	if err != nil || !enabled || token == "" {
+		return nil
+	}
+	if atomic.LoadInt32(&b.gwOn) != 1 {
+		return fmt.Errorf("discord gateway down")
+	}
+	return nil
 }
 
 func (b *Bot) loadSettings(ctx context.Context) (enabled bool, token string, appID *string, cmdStatus string, err error) {

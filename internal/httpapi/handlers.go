@@ -26,6 +26,13 @@ import (
 	"github.com/sounddock/sounddock/internal/stream"
 )
 
+func (s *Server) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{
+		Name: "sd_session", Value: "", Path: "/", MaxAge: -1, HttpOnly: true,
+		Secure: s.cookieSecureFor(r), SameSite: http.SameSiteLaxMode,
+	})
+}
+
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie("sd_session"); err == nil {
 		u, sid, err := s.Auth.SessionUser(r.Context(), c.Value)
@@ -34,14 +41,14 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 			_ = u
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: "sd_session", Path: "/", MaxAge: -1})
+	s.clearSessionCookie(w, r)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
 func (s *Server) logoutAll(w http.ResponseWriter, r *http.Request) {
 	u := currentUser(r)
 	_ = s.Auth.DeleteUserSessions(r.Context(), u.ID)
-	http.SetCookie(w, &http.Cookie{Name: "sd_session", Path: "/", MaxAge: -1})
+	s.clearSessionCookie(w, r)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -99,6 +106,13 @@ func (s *Server) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "password", "could not change password")
 		return
 	}
+	keep := uuid.Nil
+	if c, err := r.Cookie("sd_session"); err == nil {
+		if _, sid, err := s.Auth.SessionUser(r.Context(), c.Value); err == nil {
+			keep = sid
+		}
+	}
+	_ = s.Auth.DeleteOtherSessions(r.Context(), currentUser(r).ID, keep)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -108,8 +122,15 @@ func (s *Server) mySessions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteSession(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
-	_ = s.Auth.DeleteSession(r.Context(), id)
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "invalid id")
+		return
+	}
+	if err := s.Auth.DeleteSessionForUser(r.Context(), id, currentUser(r).ID); err != nil {
+		writeErr(w, 500, "session", err.Error())
+		return
+	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -548,7 +569,14 @@ func (s *Server) artistArtwork(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) playlistArtwork(w http.ResponseWriter, r *http.Request) {
-	id, _ := uuid.Parse(chi.URLParam(r, "id"))
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "invalid id")
+		return
+	}
+	if _, ok := s.requirePlaylistSee(w, r, id); !ok {
+		return
+	}
 	s.serveArtwork(w, r, "playlist", id)
 }
 
@@ -826,6 +854,7 @@ func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
 	body.LibraryID = libID
 	body.URL = ""
 	body.Extra = list
+	body.UserID = u.ID
 	id, err := s.Jobs.Enqueue(r.Context(), "ingest.url", body)
 	if err != nil {
 		s.writeJobErr(w, err)
@@ -835,10 +864,12 @@ func (s *Server) importURL(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) importJobs(w http.ResponseWriter, r *http.Request) {
+	u := currentUser(r)
 	rows, err := s.Pool.Query(r.Context(), `
 		SELECT id, type, status, progress, last_error, created_at,
 			COALESCE(jsonb_array_length(payload->'urls'), 0)
-		FROM jobs WHERE type='ingest.url' ORDER BY created_at DESC LIMIT 50`)
+		FROM jobs WHERE type='ingest.url' AND payload->>'user_id'=$1
+		ORDER BY created_at DESC LIMIT 50`, u.ID)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return

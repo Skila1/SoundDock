@@ -1,6 +1,6 @@
 # Installation
 
-One command. A whiptail TUI writes a Docker Compose project in `./sounddock` under the current directory (`~/sounddock` from your home directory). Docker publishes port 8080. Optional Cloudflare Tunnel is the public URL. Do not `apt install docker`.
+One command. A whiptail TUI writes a Docker Compose project in `./sounddock` under the current directory (`~/sounddock` from your home directory). Docker publishes port 8080 for local/LAN access. Production public URL is an optional Cloudflare Tunnel to `http://localhost:8080`. Set `SD_PUBLIC_URL` to the tunnel hostname. Do not `apt install docker`.
 
 ```bash
 sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
@@ -8,7 +8,7 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/ma
 
 The wizard does not ask for an install path or a library folder. Run it from the directory that should contain `sounddock`. If that folder is already named `sounddock`, it installs in place. Cloudflared, if enabled, is a systemd service. It does not ask for an IP, a public URL, or Discord credentials.
 
-Open `http://<host>:8080` (or your tunnel) and create the first local administrator, or restore an encrypted R2 backup with the recovery passphrase. Configure Discord later under **Admin → Discord**. The Discord voice worker is already in the Compose stack. Paste your Discord user ID under **Administrators** so you keep admin when Discord sign-in is on. The first Discord user to sign in (when there is not already an administrator) is also marked administrator.
+Open `http://<host>:8080` on the LAN, or the tunnel hostname if you enabled Cloudflare Tunnel, and create the first local administrator, or restore an encrypted R2 backup with the recovery passphrase. After restore, `docker compose restart sounddock discord-worker` so both processes reload the restored master key. Configure Discord later under **Admin → Discord**. The Discord voice worker is already in the Compose stack. Paste your Discord user ID under **Administrators** so you keep admin when Discord sign-in is on. The first Discord user to sign in (when there is not already an administrator) is also marked administrator.
 
 Disaster recovery: see [backup.md](backup.md). NAS folders are not inside the archive; remount `SD_LIBRARY_HOST` to the same trees.
 

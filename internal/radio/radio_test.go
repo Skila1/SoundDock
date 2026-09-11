@@ -39,17 +39,24 @@ func TestClampFill(t *testing.T) {
 }
 
 func TestSimilarQuery(t *testing.T) {
-	if SimilarQuery("Rock, Metal", nil) != "Rock Metal mix" {
-		t.Fatal(SimilarQuery("Rock, Metal", nil))
+	if SimilarQuery("Stormzy", "UK Rap, Grime", nil) != "Stormzy UK Rap" {
+		t.Fatal(SimilarQuery("Stormzy", "UK Rap, Grime", nil))
 	}
-	if SimilarQuery("Pop", []string{"synth"}) != "Pop synth mix" {
-		t.Fatal(SimilarQuery("Pop", []string{"synth"}))
+	if SimilarQuery("Stormzy", "", nil) != "Stormzy" {
+		t.Fatal(SimilarQuery("Stormzy", "", nil))
 	}
-	if SimilarQuery("", nil) != "" {
+	if SimilarQuery("", "Pop", []string{"synth"}) != "Pop" {
+		t.Fatal(SimilarQuery("", "Pop", []string{"synth"}))
+	}
+	if SimilarQuery("", "", nil) != "" {
 		t.Fatal("empty must not fall back to a title")
 	}
-	if SimilarQuery("  ", []string{"", " "}) != "" {
+	if SimilarQuery("  ", "  ", []string{"", " "}) != "" {
 		t.Fatal("whitespace only")
+	}
+	got := SimilarQuery("Artist", "Rock, Metal", nil)
+	if strings.Contains(got, "mix") {
+		t.Fatalf("must not append mix: %q", got)
 	}
 }
 

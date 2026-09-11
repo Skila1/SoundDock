@@ -26,7 +26,7 @@ Changing the passphrase re-wraps future backups. **Old backups stay recoverable 
 1. Enter the recovery passphrase.
 2. SoundDock decrypts, verifies checksums, then wipes and applies. Wipe does not run if the passphrase is wrong or the archive is corrupt.
 3. The master key is written to `/data/master.key` (this file wins over `SD_MASTER_KEY`).
-4. The process restarts. Review **Restore requirements** for host values still needed (`SD_PUBLIC_URL`, `SD_LIBRARY_HOST`, and any env-only secrets).
+4. The app process exits so Docker can restart it. Restart **both** Compose services (`docker compose restart sounddock discord-worker`) so the Discord worker also reloads `/data/master.key` and the restored database. Review **Restore requirements** for host values still needed (`SD_PUBLIC_URL`, `SD_LIBRARY_HOST`, and any env-only secrets).
 
 A schema newer than this image is refused.
 

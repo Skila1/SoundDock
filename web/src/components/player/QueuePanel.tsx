@@ -202,7 +202,7 @@ export function QueuePanel({
         onDrop={() => {
           const from = drag.current;
           if (from < 0 || from === i) return;
-          p.control("reorder", { from, to: i }).then(() => p.load());
+          p.control("reorder", { from, to: i });
         }}
         className={`group flex cursor-grab items-center gap-2 rounded-md p-2 active:cursor-grabbing ${opts.nowPlaying ? "bg-surface-2" : "hover:bg-surface-2"}`}
       >

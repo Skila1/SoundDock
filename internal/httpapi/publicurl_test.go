@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -11,11 +12,13 @@ import (
 )
 
 func TestAbsURLCloudflare(t *testing.T) {
-	s := &Server{Cfg: config.Config{}}
+	s := &Server{Cfg: config.Config{TrustedProxies: []string{"127.0.0.1/32", "::1/128"}}}
 	r := httptest.NewRequest(http.MethodGet, "http://localhost:8080/api/v1/auth/discord", nil)
+	r.RemoteAddr = "127.0.0.1:1234"
 	r.Header.Set("X-Forwarded-Proto", "https")
 	r.Header.Set("X-Forwarded-Host", "bot.nxsrp.com")
 	r.Host = "localhost:8080"
+	r = r.WithContext(context.WithValue(r.Context(), peerKey{}, "127.0.0.1:1234"))
 	if got := s.absURL(r); got != "https://bot.nxsrp.com" {
 		t.Fatalf("got %s", got)
 	}
@@ -24,11 +27,48 @@ func TestAbsURLCloudflare(t *testing.T) {
 	}
 }
 
-func TestAbsURLCFRay(t *testing.T) {
-	s := &Server{Cfg: config.Config{}}
+func TestAbsURLIgnoresUntrustedForwardedHost(t *testing.T) {
+	s := &Server{Cfg: config.Config{TrustedProxies: []string{"127.0.0.1/32"}}}
 	r := httptest.NewRequest(http.MethodGet, "http://localhost:8080/", nil)
+	r.RemoteAddr = "203.0.113.9:9"
+	r.Host = "localhost:8080"
+	r.Header.Set("X-Forwarded-Host", "evil.example")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	r = r.WithContext(context.WithValue(r.Context(), peerKey{}, "203.0.113.9:9"))
+	if got := s.absURL(r); got != "http://localhost:8080" {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestAbsURLPublicURLWins(t *testing.T) {
+	s := &Server{Cfg: config.Config{PublicURL: "https://app.example.test"}}
+	r := httptest.NewRequest(http.MethodGet, "http://localhost:8080/", nil)
+	r.Header.Set("X-Forwarded-Host", "evil.example")
+	if got := s.absURL(r); got != "https://app.example.test" {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestCORSOriginAllowlist(t *testing.T) {
+	s := &Server{Cfg: config.Config{PublicURL: "https://app.example.test"}}
+	if !s.corsOriginOK(nil, "http://localhost:5173") {
+		t.Fatal("vite")
+	}
+	if !s.corsOriginOK(nil, "https://app.example.test") {
+		t.Fatal("public url")
+	}
+	if s.corsOriginOK(nil, "https://evil.example") {
+		t.Fatal("random origin")
+	}
+}
+
+func TestAbsURLCFRay(t *testing.T) {
+	s := &Server{Cfg: config.Config{TrustedProxies: []string{"127.0.0.1/32"}}}
+	r := httptest.NewRequest(http.MethodGet, "http://localhost:8080/", nil)
+	r.RemoteAddr = "127.0.0.1:9"
 	r.Host = "bot.nxsrp.com"
 	r.Header.Set("CF-Ray", "abc")
+	r = r.WithContext(context.WithValue(r.Context(), peerKey{}, "127.0.0.1:9"))
 	if got := s.absURL(r); got != "https://bot.nxsrp.com" {
 		t.Fatalf("got %s", got)
 	}

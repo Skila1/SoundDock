@@ -1,7 +1,9 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -144,6 +146,19 @@ func TestHealthzUnaffectedByMaintenanceGuard(t *testing.T) {
 	}
 	if rec.Body.String() != "ok" {
 		t.Fatalf("body %q", rec.Body.String())
+	}
+}
+
+func TestHealthzExtraCheck(t *testing.T) {
+	s := &Server{Healthz: func(context.Context) error {
+		return errors.New("discord gateway down")
+	}}
+	h := s.Router()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("healthz %d body %s", rec.Code, rec.Body.String())
 	}
 }
 

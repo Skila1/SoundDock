@@ -19,8 +19,10 @@ This repo: `docker compose up -d --build` still builds a local image tagged as t
 - `redis`
 - `search` (Meilisearch)
 
-Cloudflare Tunnel is installed by the installer as a **systemd** service (`cloudflared`), not a Compose profile. Origin: `http://localhost:8080`.
+Cloudflare Tunnel is installed by the installer as a **systemd** service (`cloudflared`), not a Compose profile. Origin: `http://localhost:8080`. Do not publish port 8080 as the public URL. Set `SD_PUBLIC_URL` to the tunnel `https://` hostname so CORS, session cookies, and OAuth callbacks match the browser origin.
 
-Health: `/healthz`, `/readyz`. Stop grace period is 45s for FFmpeg and Discord drain.
+Health: `/healthz`, `/readyz`. The Discord worker's `/healthz` fails when the bot is enabled and the gateway is down. Stop grace period is 45s for FFmpeg and Discord drain.
 
 Worker pool **Memory cap (MB, advisory)** in Admin → Workers is not a Docker/cgroup memory limit.
+
+After a backup restore, restart both `sounddock` and `discord-worker`. Restore only exits the app container.

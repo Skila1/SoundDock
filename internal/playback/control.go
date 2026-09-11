@@ -106,7 +106,17 @@ func (e *Engine) Control(ctx context.Context, sid uuid.UUID, action string, extr
 			return err
 		}
 	}
-	return e.commitSession(ctx, tx, sid, "session.state")
+	if err := e.commitSession(ctx, tx, sid, "session.state"); err != nil {
+		return err
+	}
+	if action == "autoplay" {
+		if v, ok := extraBool(extra, "autoplay"); ok && v {
+			go e.MaybeReplenish(context.WithoutCancel(ctx), sid)
+		} else if v, ok := extraBool(extra, "enabled"); ok && v {
+			go e.MaybeReplenish(context.WithoutCancel(ctx), sid)
+		}
+	}
+	return nil
 }
 
 func (e *Engine) controlTx(ctx context.Context, tx db, sid uuid.UUID, action string, extra map[string]any) (bool, error) {

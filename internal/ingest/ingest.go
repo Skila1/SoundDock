@@ -42,6 +42,7 @@ type URLPayload struct {
 	URL       string    `json:"url"`
 	Extra     []string  `json:"urls"`
 	LibraryID uuid.UUID `json:"library_id"`
+	UserID    uuid.UUID `json:"user_id,omitempty"`
 }
 
 type UploadComplete struct {

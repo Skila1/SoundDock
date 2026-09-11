@@ -436,6 +436,9 @@ func (s *Server) matchExternalItem(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", "track_id required")
 		return
 	}
+	if !s.requireTrackLibrary(w, r, body.TrackID, "read") {
+		return
+	}
 	var prov, extID string
 	err := s.Pool.QueryRow(r.Context(), `SELECT p.provider, i.provider_track_id FROM external_playlist_items i JOIN external_playlists p ON p.id=i.external_playlist_id WHERE i.id=$1 AND p.sounddock_playlist_id=$2 AND p.user_id=$3`, iid, pid, u.ID).Scan(&prov, &extID)
 	if err != nil {

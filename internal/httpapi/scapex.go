@@ -167,7 +167,7 @@ func (s *Server) enqueueYouTubeRefs(ctx context.Context, refs []string) ([]uuid.
 	if len(refs) == 0 {
 		return nil, nil
 	}
-	if s.Jobs == nil || !s.Jobs.Started() {
+	if s.Jobs == nil {
 		if s.ScapeX == nil {
 			return nil, errScapeXDown
 		}
@@ -322,7 +322,7 @@ func (s *Server) similarYouTubeHits(ctx context.Context, seed uuid.UUID, need in
 	if err != nil {
 		return nil
 	}
-	q := radio.SimilarQuery(meta.Genre, meta.Tags)
+	q := radio.SimilarQuery(meta.Artist, meta.Genre, meta.Tags)
 	if q == "" {
 		return nil
 	}

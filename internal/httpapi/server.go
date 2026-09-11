@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,18 +78,21 @@ type Server struct {
 	youtubeFillHook func(ctx context.Context, seed uuid.UUID, need int, have []uuid.UUID) []string
 	// autoplaySelectHook replaces library radio.Select in tests. Production stays nil.
 	autoplaySelectHook func(ctx context.Context, seed uuid.UUID, exclude []uuid.UUID) []uuid.UUID
+	// Healthz is an extra live check (Discord gateway for the discord role).
+	Healthz func(context.Context) error
 }
 
 func (s *Server) Router() http.Handler {
 	s.WirePlayback()
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
+	r.Use(capturePeer)
 	r.Use(middleware.RealIP)
 	r.Use(s.proxyHeaders)
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173"},
-		AllowOriginFunc:  func(r *http.Request, origin string) bool { return true },
+		AllowOriginFunc:  s.corsOriginOK,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Requested-With", "Upload-Offset", "Upload-Length", "Tus-Resumable"},
 		ExposedHeaders:   []string{"Upload-Offset", "Location"},
@@ -97,7 +101,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(noStoreAPI)
 	r.Use(s.MaintenanceGuard)
 
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("ok")) })
+	r.Get("/healthz", s.healthz)
 	r.Get("/readyz", s.readyz)
 	if s.Cfg.MetricsEnabled {
 		r.Group(func(r chi.Router) {
@@ -445,6 +449,63 @@ func sanitizeInternal(msg string) string {
 	return s
 }
 
+func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
+	if s != nil && s.Healthz != nil {
+		if err := s.Healthz(r.Context()); err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+	}
+	w.Write([]byte("ok"))
+}
+
+type peerKey struct{}
+
+func capturePeer(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), peerKey{}, r.RemoteAddr)))
+	})
+}
+
+func (s *Server) trustedPeer(r *http.Request) bool {
+	raw, _ := r.Context().Value(peerKey{}).(string)
+	if raw == "" {
+		raw = r.RemoteAddr
+	}
+	host := raw
+	if h, _, err := net.SplitHostPort(raw); err == nil {
+		host = h
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, n := range s.Cfg.TrustedNets() {
+		if n != nil && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) corsOriginOK(_ *http.Request, origin string) bool {
+	origin = strings.TrimRight(strings.TrimSpace(origin), "/")
+	if origin == "" {
+		return false
+	}
+	allowed := map[string]struct{}{
+		"http://localhost:5173":  {},
+		"http://127.0.0.1:5173": {},
+	}
+	if s != nil && s.Cfg.PublicURL != "" {
+		if u, err := url.Parse(s.Cfg.PublicURL); err == nil && u.Scheme != "" && u.Host != "" {
+			allowed[strings.TrimRight(u.Scheme+"://"+u.Host, "/")] = struct{}{}
+		}
+	}
+	_, ok := allowed[origin]
+	return ok
+}
+
 func (s *Server) proxyHeaders(next http.Handler) http.Handler {
 	nets := s.Cfg.TrustedNets()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -618,7 +679,7 @@ func bearer(r *http.Request) string {
 	if strings.HasPrefix(strings.ToLower(h), "bearer ") {
 		return strings.TrimSpace(h[7:])
 	}
-	return r.URL.Query().Get("access_token")
+	return ""
 }
 
 func currentUser(r *http.Request) *auth.User {
@@ -640,10 +701,15 @@ func (s *Server) requireAdmin(next http.Handler) http.Handler {
 func (s *Server) apiKeyUser(ctx context.Context, tok string) (*auth.User, error) {
 	hash := cryptox.HashToken(tok)
 	var uid uuid.UUID
-	err := s.Pool.QueryRow(ctx, `SELECT user_id FROM personal_access_tokens WHERE secret_hash=$1 AND revoked_at IS NULL`, hash).Scan(&uid)
+	var scopes []string
+	err := s.Pool.QueryRow(ctx, `SELECT user_id, scopes FROM personal_access_tokens WHERE secret_hash=$1 AND revoked_at IS NULL`, hash).Scan(&uid, &scopes)
 	if err == nil {
 		_, _ = s.Pool.Exec(ctx, `UPDATE personal_access_tokens SET last_used_at=now() WHERE secret_hash=$1 AND revoked_at IS NULL`, hash)
-		return s.Auth.GetUser(ctx, uid)
+		u, err := s.Auth.GetUser(ctx, uid)
+		if err != nil {
+			return nil, err
+		}
+		return applyPATScopes(u, scopes), nil
 	}
 	var cid uuid.UUID
 	err = s.Pool.QueryRow(ctx, `SELECT client_id FROM api_client_keys WHERE secret_hash=$1 AND revoked_at IS NULL`, hash).Scan(&cid)
@@ -651,18 +717,50 @@ func (s *Server) apiKeyUser(ctx context.Context, tok string) (*auth.User, error)
 		return nil, err
 	}
 	_, _ = s.Pool.Exec(ctx, `UPDATE api_clients SET last_used_at=now() WHERE id=$1`, cid)
-	u := &auth.User{ID: cid, Username: "integration", Permissions: []string{"tracks.read", "tracks.stream", "library.read", "playlists.write", "history.read"}}
-	var scopes []string
+	u := &auth.User{ID: cid, Username: "integration", Permissions: []string{}}
 	_ = s.Pool.QueryRow(ctx, `SELECT scopes FROM api_clients WHERE id=$1`, cid).Scan(&scopes)
-	if len(scopes) > 0 {
-		u.Permissions = scopes
-		for _, sc := range scopes {
-			if sc == "admin" {
-				u.IsAdmin = true
-			}
+	if len(scopes) == 0 {
+		return nil, errString("api key has no scopes")
+	}
+	u.Permissions = scopes
+	for _, sc := range scopes {
+		if sc == "admin" {
+			u.IsAdmin = true
 		}
 	}
 	return u, nil
+}
+
+func applyPATScopes(u *auth.User, scopes []string) *auth.User {
+	if u == nil {
+		return nil
+	}
+	if len(scopes) == 0 {
+		u.IsAdmin = false
+		u.Permissions = []string{}
+		return u
+	}
+	allow := map[string]struct{}{}
+	for _, sc := range scopes {
+		allow[strings.TrimSpace(sc)] = struct{}{}
+	}
+	if _, ok := allow["admin"]; !ok {
+		u.IsAdmin = false
+	}
+	var out []string
+	for _, p := range u.Permissions {
+		if _, ok := allow[p]; ok {
+			out = append(out, p)
+		}
+	}
+	if _, ok := allow["admin"]; ok && u.IsAdmin {
+		out = u.Permissions
+	}
+	if out == nil {
+		out = []string{}
+	}
+	u.Permissions = out
+	return u
 }
 
 func decodeJSON(r *http.Request, v any) error {

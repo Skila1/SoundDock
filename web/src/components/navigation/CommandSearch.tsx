@@ -493,7 +493,10 @@ function Section({ label, loading }: { label: string; loading: boolean }) {
 }
 
 function highlight(text: string, q: string) {
-  if (!q) return text;
+  const esc = (v: string) =>
+    (v || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] || c));
+  const safe = esc(text);
+  if (!q) return safe;
   const re = new RegExp(`(${q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "ig");
-  return text.replace(re, "<mark class='bg-accent/30 text-inherit'>$1</mark>");
+  return safe.replace(re, "<mark class='bg-accent/30 text-inherit'>$1</mark>");
 }

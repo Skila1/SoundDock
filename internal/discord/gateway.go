@@ -45,14 +45,19 @@ func (b *Bot) gatewayLoop(ctx context.Context) {
 		sctx, cancel := context.WithCancel(ctx)
 		runCancel = cancel
 		current = token
+		gen := atomic.AddInt32(&b.gwGen, 1)
 		atomic.StoreInt32(&b.gwOn, 1)
-		go func(token string) {
-			defer atomic.StoreInt32(&b.gwOn, 0)
+		go func(token string, gen int32) {
+			defer func() {
+				if atomic.LoadInt32(&b.gwGen) == gen {
+					atomic.StoreInt32(&b.gwOn, 0)
+				}
+			}()
 			if err := b.runSession(sctx, token); err != nil && sctx.Err() == nil {
 				b.log.Warn("discord gateway", "err", err)
 				_, _ = b.pool.Exec(context.Background(), `UPDATE discord_settings SET last_gateway_status='error', last_error_redacted=$1 WHERE id=1`, redacted(err.Error()))
 			}
-		}(token)
+		}(token, gen)
 	}
 }
 

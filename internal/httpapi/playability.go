@@ -67,8 +67,12 @@ func classifyMediaState(p mediaProbe) Playability {
 		out.State = MediaStateRetrying
 		return out
 	}
-	if managedAcquisition(p.Acquisition) || p.OpenIntent {
+	if p.OpenIntent {
 		out.State = MediaStateRestoring
+		return out
+	}
+	if managedAcquisition(p.Acquisition) {
+		out.State = MediaStateMissingExternal
 		return out
 	}
 	return Playability{State: MediaStateMissingExternal}

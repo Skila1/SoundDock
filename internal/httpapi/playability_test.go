@@ -25,8 +25,8 @@ func TestClassifyMediaState(t *testing.T) {
 		hasID bool
 	}{
 		{name: "original file ready", probe: mediaProbe{Found: true, HasOriginal: true, Acquisition: "youtube"}, state: MediaStateReady},
-		{name: "youtube stub restoring", probe: mediaProbe{Found: true, Acquisition: "youtube"}, state: MediaStateRestoring},
-		{name: "scapex stub restoring", probe: mediaProbe{Found: true, Acquisition: "scapex"}, state: MediaStateRestoring},
+		{name: "youtube stub no intent", probe: mediaProbe{Found: true, Acquisition: "youtube"}, state: MediaStateMissingExternal},
+		{name: "scapex stub no intent", probe: mediaProbe{Found: true, Acquisition: "scapex"}, state: MediaStateMissingExternal},
 		{name: "open intent restoring", probe: mediaProbe{Found: true, Acquisition: "local", OpenIntent: true, IntentID: &intent}, state: MediaStateRestoring, hasID: true},
 		{name: "failed youtube stub", probe: mediaProbe{Found: true, Acquisition: "youtube", IntentStatus: "failed"}, state: MediaStateFailed},
 		{name: "retrying stub", probe: mediaProbe{Found: true, Acquisition: "youtube", IntentStatus: "retry"}, state: MediaStateRetrying},
