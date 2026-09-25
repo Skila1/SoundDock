@@ -127,10 +127,17 @@ func (l *Local) Write(_ context.Context, key string, r io.Reader, _ WriteInfo) e
 	if err != nil {
 		return err
 	}
+	if st, err := os.Lstat(p); err == nil && st.Mode()&os.ModeSymlink != 0 {
+		return ErrEscape
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	flags := os.O_CREATE | os.O_TRUNC | os.O_WRONLY
+	flags |= noFollowFlag()
+	f, err := os.OpenFile(p, flags, 0o644)
 	if err != nil {
 		return err
 	}

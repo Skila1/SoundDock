@@ -26,7 +26,7 @@ Unattended (no TUI):
 sudo env SD_UNATTENDED=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Skila1/SoundDock/main/install.sh)"
 ```
 
-You bring the files. SoundDock does not provide catalogues, rip YouTube or Spotify, or bypass DRM.
+You bring the files. SoundDock does not provide catalogues or bypass DRM.
 
 License: **GNU Affero General Public License v3.0 or later**.
 

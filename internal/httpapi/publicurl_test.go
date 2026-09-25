@@ -86,3 +86,38 @@ func TestSPADoesNotServeAPI(t *testing.T) {
 		t.Fatal("served spa html for api callback")
 	}
 }
+
+func TestCSRFMiddlewareRejectsMissingToken(t *testing.T) {
+	s := &Server{Cfg: config.Config{AllowedOrigins: []string{"https://app.example.com"}, PublicURL: "https://app.example.com"}}
+	h := s.csrfProtection(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "https://app.example.com/api/v1/me", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.AddCookie(&http.Cookie{Name: "sd_session", Value: "session-token"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected forbidden, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "csrf") {
+		t.Fatalf("expected CSRF error response, got %s", rec.Body.String())
+	}
+}
+
+func TestCSRFMiddlewareAcceptsSameOriginToken(t *testing.T) {
+	s := &Server{Cfg: config.Config{AllowedOrigins: []string{"https://app.example.com"}, PublicURL: "https://app.example.com"}}
+	h := s.csrfProtection(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "https://app.example.com/api/v1/me", nil)
+	req.Header.Set("Origin", "https://app.example.com")
+	req.Header.Set("X-CSRF-Token", "abc123")
+	req.AddCookie(&http.Cookie{Name: "sd_session", Value: "session-token"})
+	req.AddCookie(&http.Cookie{Name: "sd_csrf", Value: "abc123"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected ok, got %d: %s", rec.Code, rec.Body.String())
+	}
+}

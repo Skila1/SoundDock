@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,20 @@ func ResolveUnder(root, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if realRoot, err := filepath.EvalSymlinks(absRoot); err == nil {
+		absRoot = realRoot
+	}
 	target := filepath.Join(absRoot, filepath.FromSlash(clean))
+	for p := target; ; p = filepath.Dir(p) {
+		if st, err := os.Lstat(p); err == nil && st.Mode()&os.ModeSymlink != 0 {
+			return "", ErrEscape
+		} else if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+		if p == absRoot || filepath.Dir(p) == p {
+			break
+		}
+	}
 	rel, err := filepath.Rel(absRoot, target)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		return "", ErrEscape

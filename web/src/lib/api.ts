@@ -21,24 +21,30 @@ async function parse(r: Response) {
   return r.text();
 }
 
+async function csrfHeaders(headers?: HeadersInit) {
+  const response = await fetch("/api/v1/auth/csrf", { credentials: "include" });
+  const payload = await response.json() as { csrf: string };
+  return { ...(headers || {}), "X-CSRF-Token": payload.csrf };
+}
+
 export const api = {
   get: <T = any>(p: string) => fetch(p, { credentials: "include" }).then(parse) as Promise<T>,
-  post: <T = any>(p: string, body?: unknown) =>
+  post: async <T = any>(p: string, body?: unknown) =>
     fetch(p, {
       method: "POST",
       credentials: "include",
-      headers: body instanceof FormData || body instanceof Blob ? undefined : { "Content-Type": "application/json" },
+      headers: await csrfHeaders(body instanceof FormData || body instanceof Blob ? undefined : { "Content-Type": "application/json" }),
       body: body instanceof Blob || body instanceof FormData ? (body as BodyInit) : body ? JSON.stringify(body) : undefined
     }).then(parse) as Promise<T>,
-  put: <T = any>(p: string, body?: unknown) =>
-    fetch(p, { method: "PUT", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }).then(parse) as Promise<T>,
-  patch: <T = any>(p: string, body?: unknown, headers?: HeadersInit) =>
-    fetch(p, { method: "PATCH", credentials: "include", headers: { "Content-Type": "application/json", ...headers }, body: body instanceof Blob ? body : JSON.stringify(body) }).then(parse) as Promise<T>,
-  del: <T = any>(p: string, body?: unknown) =>
+  put: async <T = any>(p: string, body?: unknown) =>
+    fetch(p, { method: "PUT", credentials: "include", headers: await csrfHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body) }).then(parse) as Promise<T>,
+  patch: async <T = any>(p: string, body?: unknown, headers?: HeadersInit) =>
+    fetch(p, { method: "PATCH", credentials: "include", headers: await csrfHeaders({ "Content-Type": "application/json", ...headers }), body: body instanceof Blob ? body : JSON.stringify(body) }).then(parse) as Promise<T>,
+  del: async <T = any>(p: string, body?: unknown) =>
     fetch(p, {
       method: "DELETE",
       credentials: "include",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: await csrfHeaders(body ? { "Content-Type": "application/json" } : undefined),
       body: body ? JSON.stringify(body) : undefined
     }).then(parse) as Promise<T>
 };

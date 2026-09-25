@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -38,4 +39,25 @@ func (s *Server) cookieSecureFor(r *http.Request) bool {
 		return true
 	}
 	return strings.HasPrefix(strings.ToLower(s.absURL(r)), "https://")
+}
+
+func (s *Server) originAllowed(r *http.Request, origin string) bool {
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	allowedHost := strings.TrimSpace(strings.ToLower(u.Host))
+	if allowedHost == strings.TrimSpace(strings.ToLower(r.Host)) {
+		return true
+	}
+	for _, allowed := range s.Cfg.CORSAllowedOrigins() {
+		parsed, err := url.Parse(allowed)
+		if err == nil && parsed.Host != "" && strings.EqualFold(parsed.Host, allowedHost) {
+			return true
+		}
+	}
+	return false
 }

@@ -37,6 +37,20 @@ msg_info() { echo -e " ${YW}[*]${CL} $1"; }
 msg_ok() { echo -e " ${GN}[ok]${CL} $1"; }
 msg_err() { echo -e " ${RD}[err]${CL} $1" >&2; }
 
+CLOUDFLARED_VERSION="${CLOUDFLARED_VERSION:-2025.5.0}"
+CLOUDFLARED_SHA256_AMD64="${CLOUDFLARED_SHA256_AMD64:-A62266FD02041374F1FCA0D85694AAFDF7E26E171A314467356B471D4EBB2393}"
+YT_DLP_VERSION="${YT_DLP_VERSION:-2025.06.30}"
+YT_DLP_SHA256="${YT_DLP_SHA256:-95F52AA269BD48DE13AFFE0860BE6F47457C6F6AFF12421014100F57F621410E}"
+
+verify_sha256() {
+  local file="$1"
+  local want="$2"
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "${want}  ${file}" | sha256sum -c - >/dev/null 2>&1
+}
+
 header_info() {
   if [[ -e /dev/tty ]]; then
     clear >/dev/tty 2>/dev/null || true
@@ -173,17 +187,29 @@ install_cloudflared_pkg() {
   esac
   case "$os" in
     ubuntu|debian)
-      curl -fsSL -o /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/latest/download/${deb}"
+      curl -fsSL -o /tmp/cloudflared.deb "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${deb}"
+      verify_sha256 "/tmp/cloudflared.deb" "${CLOUDFLARED_SHA256_AMD64}" || {
+        msg_err "cloudflared package checksum mismatch"
+        exit 1
+      }
       dpkg -i /tmp/cloudflared.deb || apt-get install -y -f
       rm -f /tmp/cloudflared.deb
       ;;
     fedora|rhel|centos)
-      curl -fsSL -o /tmp/cloudflared.rpm "https://github.com/cloudflare/cloudflared/releases/latest/download/${rpm}"
+      curl -fsSL -o /tmp/cloudflared.rpm "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${rpm}"
+      verify_sha256 "/tmp/cloudflared.rpm" "${CLOUDFLARED_SHA256_AMD64}" || {
+        msg_err "cloudflared package checksum mismatch"
+        exit 1
+      }
       rpm -i /tmp/cloudflared.rpm || dnf install -y /tmp/cloudflared.rpm || yum install -y /tmp/cloudflared.rpm
       rm -f /tmp/cloudflared.rpm
       ;;
     *)
-      curl -fsSL -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/${bin}"
+      curl -fsSL -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/${bin}"
+      verify_sha256 "/usr/local/bin/cloudflared" "${CLOUDFLARED_SHA256_AMD64}" || {
+        msg_err "cloudflared binary checksum mismatch"
+        exit 1
+      }
       chmod 0755 /usr/local/bin/cloudflared
       ;;
   esac
@@ -192,6 +218,16 @@ install_cloudflared_pkg() {
     exit 1
   fi
   msg_ok "cloudflared installed"
+}
+
+install_yt_dlp() {
+  msg_info "Installing yt-dlp ${YT_DLP_VERSION}"
+  curl -fsSL -o /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp"
+  verify_sha256 "/usr/local/bin/yt-dlp" "${YT_DLP_SHA256}" || {
+    msg_err "yt-dlp checksum mismatch"
+    exit 1
+  }
+  chmod 0755 /usr/local/bin/yt-dlp
 }
 
 install_cloudflared_service() {

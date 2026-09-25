@@ -1,6 +1,9 @@
 package storage
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -30,5 +33,19 @@ func TestResolveUnder(t *testing.T) {
 	}
 	if _, err := ResolveUnder(root, "../outside"); err == nil {
 		t.Fatal("expected escape")
+	}
+	base := filepath.Join(root, "mount")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	external := t.TempDir()
+	if err := os.Symlink(external, filepath.Join(base, "escape")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink test requires Windows Developer Mode or elevated privileges: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if _, err := ResolveUnder(root, filepath.Join("mount", "escape", "secret.mp3")); err == nil {
+		t.Fatal("expected symlink escape rejection")
 	}
 }

@@ -2,6 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -90,14 +93,16 @@ func (s *Server) Router() http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(s.proxyHeaders)
 	r.Use(middleware.Recoverer)
+	allowedOrigins := s.Cfg.CORSAllowedOrigins()
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:5173", "http://127.0.0.1:5173"},
-		AllowOriginFunc:  s.corsOriginOK,
+		AllowedOrigins:   allowedOrigins,
+		AllowOriginFunc:  func(r *http.Request, origin string) bool { return s.originAllowed(r, origin) },
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Requested-With", "Upload-Offset", "Upload-Length", "Tus-Resumable"},
+		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-Requested-With", "X-CSRF-Token", "Upload-Offset", "Upload-Length", "Tus-Resumable"},
 		ExposedHeaders:   []string{"Upload-Offset", "Location"},
 		AllowCredentials: true,
 	}))
+	r.Use(s.csrfProtection)
 	r.Use(noStoreAPI)
 	r.Use(s.MaintenanceGuard)
 
@@ -620,6 +625,46 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, r *http.Request, token 
 	})
 }
 
+func (s *Server) setCSRFCookie(w http.ResponseWriter, r *http.Request, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: "sd_csrf", Value: token, Path: "/", HttpOnly: true,
+		Secure: s.cookieSecureFor(r), SameSite: http.SameSiteLaxMode,
+	})
+}
+
+func (s *Server) csrfProtection(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions || r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodTrace {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if isAPIToken(bearer(r)) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if _, err := r.Cookie("sd_session"); err != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		origin := strings.TrimSpace(r.Header.Get("Origin"))
+		if origin != "" && !s.originAllowed(r, origin) {
+			writeErr(w, http.StatusForbidden, "csrf_invalid_origin", "origin not allowed")
+			return
+		}
+		cookieTok, err := r.Cookie("sd_csrf")
+		if err != nil || cookieTok.Value == "" {
+			writeErr(w, http.StatusForbidden, "csrf_missing", "request token required")
+			return
+		}
+		token := strings.TrimSpace(r.Header.Get("X-CSRF-Token"))
+		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(cookieTok.Value)) != 1 {
+			writeErr(w, http.StatusForbidden, "csrf_invalid", "invalid request token")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 type ctxKey int
 
 const userKey ctxKey = 1
@@ -1130,7 +1175,14 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) csrf(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, 200, map[string]string{"csrf": "cookie"})
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		writeErr(w, http.StatusInternalServerError, "csrf", "token generation failed")
+		return
+	}
+	token := base64.RawURLEncoding.EncodeToString(buf)
+	s.setCSRFCookie(w, r, token)
+	writeJSON(w, 200, map[string]string{"csrf": token})
 }
 
 func absFile(p string) string { return filepath.Clean(p) }
