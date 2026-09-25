@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -917,6 +918,7 @@ func (s *Server) createUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) patchUpload(w http.ResponseWriter, r *http.Request) {
+	started := time.Now()
 	id, _ := uuid.Parse(chi.URLParam(r, "id"))
 	if s.Pool != nil && id != uuid.Nil {
 		var libID uuid.UUID
@@ -929,9 +931,19 @@ func (s *Server) patchUpload(w http.ResponseWriter, r *http.Request) {
 	off, _ := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
 	n, err := s.Ingest.PatchUpload(r.Context(), id, off, io.LimitReader(r.Body, 200<<20))
 	if err != nil {
+		logger := s.Log
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.WarnContext(r.Context(), "upload chunk failed", "upload_id", id, "offset", off, "duration", time.Since(started), "error", err)
 		writeErr(w, 400, "upload", err.Error())
 		return
 	}
+	logger := s.Log
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.DebugContext(r.Context(), "upload chunk accepted", "upload_id", id, "offset", off, "bytes_received", n-off, "duration", time.Since(started))
 	w.Header().Set("Upload-Offset", strconv.FormatInt(n, 10))
 	writeJSON(w, 200, map[string]int64{"offset": n})
 }

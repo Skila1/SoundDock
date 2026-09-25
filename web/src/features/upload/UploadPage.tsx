@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, CircleAlert, FileAudio, Upload as Up, X } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, getCSRFToken } from "@/lib/api";
 import { UPLOAD_ACCEPT, isBulkUploadFile, isZipFile } from "@/lib/audio";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/misc";
@@ -17,13 +17,15 @@ function fileLabel(file: File) {
   return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
 }
 
-function patchChunk(id: string, offset: number, blob: Blob, onByte: (n: number) => void) {
+async function patchChunk(id: string, offset: number, blob: Blob, onByte: (n: number) => void) {
+  const csrfToken = await getCSRFToken();
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("PATCH", `/api/v1/uploads/${id}`);
     xhr.withCredentials = true;
     xhr.setRequestHeader("Upload-Offset", String(offset));
     xhr.setRequestHeader("Content-Type", "application/offset+octet-stream");
+    xhr.setRequestHeader("X-CSRF-Token", csrfToken);
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onByte(e.loaded);
     };

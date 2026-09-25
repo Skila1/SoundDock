@@ -648,21 +648,35 @@ func (s *Server) csrfProtection(next http.Handler) http.Handler {
 		}
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin != "" && !s.originAllowed(r, origin) {
+			s.logUploadCSRFRejection(r, "invalid_origin")
 			writeErr(w, http.StatusForbidden, "csrf_invalid_origin", "origin not allowed")
 			return
 		}
 		cookieTok, err := r.Cookie("sd_csrf")
 		if err != nil || cookieTok.Value == "" {
+			s.logUploadCSRFRejection(r, "missing_cookie")
 			writeErr(w, http.StatusForbidden, "csrf_missing", "request token required")
 			return
 		}
 		token := strings.TrimSpace(r.Header.Get("X-CSRF-Token"))
 		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(cookieTok.Value)) != 1 {
+			s.logUploadCSRFRejection(r, "invalid_token")
 			writeErr(w, http.StatusForbidden, "csrf_invalid", "invalid request token")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) logUploadCSRFRejection(r *http.Request, reason string) {
+	if r.Method != http.MethodPatch || !strings.HasPrefix(r.URL.Path, "/api/v1/uploads/") {
+		return
+	}
+	logger := s.Log
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Warn("upload request rejected by CSRF protection", "path", r.URL.Path, "reason", reason)
 }
 
 type ctxKey int
@@ -1175,6 +1189,10 @@ func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) csrf(w http.ResponseWriter, r *http.Request) {
+	if cookie, err := r.Cookie("sd_csrf"); err == nil && cookie.Value != "" {
+		writeJSON(w, 200, map[string]string{"csrf": cookie.Value})
+		return
+	}
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {
 		writeErr(w, http.StatusInternalServerError, "csrf", "token generation failed")

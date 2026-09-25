@@ -121,3 +121,17 @@ func TestCSRFMiddlewareAcceptsSameOriginToken(t *testing.T) {
 		t.Fatalf("expected ok, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestCSRFEndpointKeepsExistingToken(t *testing.T) {
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/csrf", nil)
+	req.AddCookie(&http.Cookie{Name: "sd_csrf", Value: "existing-token"})
+	rec := httptest.NewRecorder()
+	s.csrf(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"csrf":"existing-token"`) {
+		t.Fatalf("expected existing token, got status %d body %s", rec.Code, rec.Body.String())
+	}
+	if len(rec.Result().Cookies()) != 0 {
+		t.Fatal("existing CSRF token should not be rotated")
+	}
+}

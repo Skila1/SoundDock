@@ -21,10 +21,26 @@ async function parse(r: Response) {
   return r.text();
 }
 
+let csrfTokenRequest: Promise<string> | undefined;
+
+export function getCSRFToken() {
+  if (!csrfTokenRequest) {
+    csrfTokenRequest = fetch("/api/v1/auth/csrf", { credentials: "include" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not obtain upload security token");
+        const payload = await response.json() as { csrf: string };
+        return payload.csrf;
+      })
+      .catch((error) => {
+        csrfTokenRequest = undefined;
+        throw error;
+      });
+  }
+  return csrfTokenRequest;
+}
+
 async function csrfHeaders(headers?: HeadersInit) {
-  const response = await fetch("/api/v1/auth/csrf", { credentials: "include" });
-  const payload = await response.json() as { csrf: string };
-  return { ...(headers || {}), "X-CSRF-Token": payload.csrf };
+  return { ...(headers || {}), "X-CSRF-Token": await getCSRFToken() };
 }
 
 export const api = {
