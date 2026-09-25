@@ -36,6 +36,15 @@ type Manager struct {
 	mu       sync.Mutex
 }
 
+const ffmpegProcessTimeout = 2 * time.Hour
+
+func ffmpegContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, ffmpegProcessTimeout)
+}
+
 func New(pool *pgxpool.Pool, cacheDir string, maxBytes int64, concurrency int) *Manager {
 	if concurrency < 1 {
 		concurrency = 2
@@ -77,15 +86,26 @@ func (m *Manager) TranscodeToCache(ctx context.Context, fileID uuid.UUID, srcPat
 	defer m.Release()
 	outName := fmt.Sprintf("%s.%s.mp3", fileID, profile)
 	out := filepath.Join(m.cacheDir, outName)
+	tmp := out + ".partial"
+	_ = os.Remove(tmp)
 	args := []string{"-y", "-i", srcPath, "-vn", "-c:a", pr.Codec, "-b:a", pr.Bitrate}
 	args = append(args, pr.Args...)
 	args = append(args, out)
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	procCtx, cancel := ffmpegContext(ctx)
+	defer cancel()
+	args[len(args)-1] = tmp
+	cmd := exec.CommandContext(procCtx, "ffmpeg", args...)
 	if err := cmd.Run(); err != nil {
+		_ = os.Remove(tmp)
 		return "", err
 	}
-	st, err := os.Stat(out)
+	st, err := os.Stat(tmp)
 	if err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	if err := os.Rename(tmp, out); err != nil {
+		_ = os.Remove(tmp)
 		return "", err
 	}
 	_, _ = m.pool.Exec(ctx, `INSERT INTO transcode_cache_entries (profile, track_file_id, storage_key, size_bytes)
@@ -111,7 +131,9 @@ func (m *Manager) Pipe(ctx context.Context, src string, profile string, w io.Wri
 	args := []string{"-i", src, "-vn", "-c:a", pr.Codec, "-b:a", pr.Bitrate}
 	args = append(args, pr.Args...)
 	args = append(args, "pipe:1")
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	procCtx, cancel := ffmpegContext(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(procCtx, "ffmpeg", args...)
 	cmd.Stdout = w
 	return cmd.Run()
 }

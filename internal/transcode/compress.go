@@ -116,7 +116,9 @@ func CompressToFLACPreset(ctx context.Context, src, preset string) (string, erro
 	dst := tmp.Name()
 	tmp.Close()
 	level := FLACCompressionLevel(preset)
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y", "-i", src, "-map", "0:a:0", "-map_metadata", "0", "-c:a", "flac", "-compression_level", level, dst)
+	procCtx, cancel := ffmpegContext(ctx)
+	defer cancel()
+	cmd := exec.CommandContext(procCtx, "ffmpeg", "-y", "-i", src, "-map", "0:a:0", "-map_metadata", "0", "-c:a", "flac", "-compression_level", level, dst)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {

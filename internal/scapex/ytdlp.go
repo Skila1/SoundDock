@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type ytDLP struct {
@@ -18,6 +19,26 @@ type ytDLP struct {
 	cookies string
 	browser string
 }
+
+const (
+	maxYTDLPOutputBytes   = 8 << 20
+	maxYTDLPDownloadBytes = 2 << 30
+	ytdlpProcessTimeout   = 30 * time.Minute
+)
+
+type boundedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if len(p) > b.limit-b.buf.Len() {
+		return 0, fmt.Errorf("output exceeded %d bytes", b.limit)
+	}
+	return b.buf.Write(p)
+}
+
+func (b *boundedBuffer) Bytes() []byte { return b.buf.Bytes() }
 
 type ytdlpFlat struct {
 	ID         string  `json:"id"`
@@ -80,14 +101,21 @@ func (y *ytDLP) run(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, err
 	}
 	all := append(y.extra(), args...)
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, ytdlpProcessTimeout)
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, bin, all...)
-	var stdout, stderr bytes.Buffer
+	var stdout, stderr boundedBuffer
+	stdout.limit = maxYTDLPOutputBytes
+	stderr.limit = maxYTDLPOutputBytes
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		msg := strings.TrimSpace(stderr.String())
+		msg := strings.TrimSpace(string(stderr.Bytes()))
 		if msg == "" {
-			msg = strings.TrimSpace(stdout.String())
+			msg = strings.TrimSpace(string(stdout.Bytes()))
 		}
 		if len(msg) > 1200 {
 			msg = msg[len(msg)-1200:]
@@ -320,6 +348,7 @@ func (y *ytDLP) FetchPolicy(ctx context.Context, mediaURL, destDir, policy strin
 	}
 	args = append(args, FormatArgs(policy)...)
 	args = append(args,
+		"--max-filesize", strconv.FormatInt(maxYTDLPDownloadBytes, 10),
 		"--embed-metadata",
 		"--write-info-json",
 		"--no-write-playlist-metafiles",

@@ -65,14 +65,32 @@ func (s *Service) CreateUpload(ctx context.Context, user, lib uuid.UUID, filenam
 	f.Close()
 	_, err = s.pool.Exec(ctx, `INSERT INTO upload_sessions (id, user_id, library_id, filename, size_bytes, staging_key) VALUES ($1,$2,$3,$4,$5,$6)`,
 		id, user, lib, filename, size, key)
+	if err != nil {
+		_ = os.Remove(key)
+	}
 	return id, id.String(), err
 }
 
 func (s *Service) PatchUpload(ctx context.Context, id uuid.UUID, offset int64, r io.Reader) (int64, error) {
-	var staging string
-	var size int64
-	if err := s.pool.QueryRow(ctx, `SELECT staging_key, size_bytes FROM upload_sessions WHERE id=$1`, id).Scan(&staging, &size); err != nil {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
 		return 0, err
+	}
+	defer tx.Rollback(ctx)
+	var staging string
+	var size, current int64
+	var state string
+	if err := tx.QueryRow(ctx, `SELECT staging_key, size_bytes, offset_bytes, state FROM upload_sessions WHERE id=$1 FOR UPDATE`, id).Scan(&staging, &size, &current, &state); err != nil {
+		return 0, err
+	}
+	if state != "in_progress" {
+		return current, fmt.Errorf("upload is not in progress")
+	}
+	if offset != current {
+		return current, fmt.Errorf("upload offset mismatch: expected %d, got %d", current, offset)
+	}
+	if offset < 0 || offset > size {
+		return current, fmt.Errorf("invalid upload offset")
 	}
 	f, err := os.OpenFile(staging, os.O_WRONLY, 0o644)
 	if err != nil {
@@ -84,15 +102,33 @@ func (s *Service) PatchUpload(ctx context.Context, id uuid.UUID, offset int64, r
 	}
 	n, err := io.Copy(f, r)
 	newOff := offset + n
-	_, _ = s.pool.Exec(ctx, `UPDATE upload_sessions SET offset_bytes=$2, updated_at=now() WHERE id=$1`, id, newOff)
+	if newOff > size {
+		return current, fmt.Errorf("upload exceeds declared size")
+	}
+	if err != nil {
+		return current, err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE upload_sessions SET offset_bytes=$2, updated_at=now() WHERE id=$1`, id, newOff); err != nil {
+		return current, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return current, err
+	}
 	return newOff, err
 }
 
 func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error), doScan bool) error {
-	var staging, filename string
+	var staging, filename, state string
 	var lib uuid.UUID
-	if err := s.pool.QueryRow(ctx, `SELECT staging_key, filename, library_id FROM upload_sessions WHERE id=$1`, id).Scan(&staging, &filename, &lib); err != nil {
+	var expected, offset int64
+	if err := s.pool.QueryRow(ctx, `SELECT staging_key, filename, library_id, size_bytes, offset_bytes, state FROM upload_sessions WHERE id=$1`, id).Scan(&staging, &filename, &lib, &expected, &offset, &state); err != nil {
 		return err
+	}
+	if state != "in_progress" {
+		return fmt.Errorf("upload is not in progress")
+	}
+	if offset != expected {
+		return fmt.Errorf("upload incomplete: %d of %d bytes received", offset, expected)
 	}
 	if scan.IsZipName(filename) {
 		if s.pool != nil {
@@ -108,6 +144,10 @@ func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(c
 	if _, err := io.Copy(hw, f); err != nil {
 		f.Close()
 		return err
+	}
+	if st, err := f.Stat(); err != nil || st.Size() != expected {
+		f.Close()
+		return fmt.Errorf("upload size does not match declared size")
 	}
 	hash := hex.EncodeToString(hw.Sum(nil))
 	f.Seek(0, io.SeekStart)
@@ -130,8 +170,15 @@ func (s *Service) FinishUpload(ctx context.Context, id uuid.UUID, getProv func(c
 	if err != nil {
 		return err
 	}
-	os.Remove(staging)
-	_, _ = s.pool.Exec(ctx, `UPDATE upload_sessions SET state='complete', content_hash=$2 WHERE id=$1`, id, hash)
+	tag, err := s.pool.Exec(ctx, `UPDATE upload_sessions SET state='complete', content_hash=$2 WHERE id=$1 AND state='in_progress'`, id, hash)
+	if err != nil || tag.RowsAffected() != 1 {
+		_ = prov.Delete(ctx, key)
+		if err == nil {
+			err = fmt.Errorf("upload was finalized concurrently")
+		}
+		return err
+	}
+	_ = os.Remove(staging)
 	_ = doScan
 	if s.scanner == nil {
 		return nil
@@ -155,13 +202,13 @@ func (s *Service) ScanUploads(ctx context.Context, lib uuid.UUID, getProv func(c
 }
 
 type MigratePayload struct {
-	Source         uuid.UUID `json:"source_library_id"`
-	Dest           uuid.UUID `json:"dest_library_id"`
-	Mode           string    `json:"mode"` // requested copy|move
-	RequestedMode  string    `json:"requested_mode,omitempty"`
-	EffectiveMode  string    `json:"effective_mode,omitempty"`
-	Reason         string    `json:"reason,omitempty"`
-	Dedupe         bool      `json:"dedupe"`
+	Source        uuid.UUID `json:"source_library_id"`
+	Dest          uuid.UUID `json:"dest_library_id"`
+	Mode          string    `json:"mode"` // requested copy|move
+	RequestedMode string    `json:"requested_mode,omitempty"`
+	EffectiveMode string    `json:"effective_mode,omitempty"`
+	Reason        string    `json:"reason,omitempty"`
+	Dedupe        bool      `json:"dedupe"`
 }
 
 func (s *Service) libraryStorageType(ctx context.Context, libID uuid.UUID) string {

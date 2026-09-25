@@ -625,6 +625,14 @@ wait:
 		case err = <-done:
 			break wait
 		case <-tick.C:
+			if cfg.MaxRSSMB > 0 {
+				if rss := currentRSSMB(); rss > cfg.MaxRSSMB {
+					cancel()
+					err = fmt.Errorf("worker memory limit exceeded: %dMB > %dMB", rss, cfg.MaxRSSMB)
+					<-done
+					break wait
+				}
+			}
 			if r.Cancelled(parent, job.ID) {
 				cancel()
 				err = <-done
@@ -670,6 +678,10 @@ func (r *Runner) fail(ctx context.Context, job Job, err error, cfg PoolConfig) {
 	if status == "failed" {
 		writeJobLog(ctx, r.db, job, msg)
 	}
+}
+
+func currentRSSMB() int {
+	return processRSSMB()
 }
 
 func writeJobLog(ctx context.Context, pool *pgxpool.Pool, job Job, msg string) {

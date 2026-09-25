@@ -257,6 +257,10 @@ func (s *Server) storagePublic(ctx context.Context, id uuid.UUID, name, typ stri
 		item["access_key_set"] = sc.AccessKey != ""
 		if used, err := s3Used(ctx, sc); err == nil {
 			item["used_bytes"] = used
+			item["health"] = "ok"
+		} else {
+			item["health"] = "fail"
+			item["health_error"] = "storage provider is unavailable"
 		}
 	}
 	return item

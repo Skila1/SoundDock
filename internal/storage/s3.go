@@ -33,6 +33,12 @@ func NewS3(id string, cfg S3Config) (*S3, error) {
 		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
 		Secure: cfg.UseSSL,
 		Region: cfg.Region,
+		BucketLookup: func() minio.BucketLookupType {
+			if cfg.PathStyle {
+				return minio.BucketLookupPath
+			}
+			return minio.BucketLookupAuto
+		}(),
 	})
 	if err != nil {
 		return nil, err
@@ -66,7 +72,10 @@ func (s *S3) Open(ctx context.Context, key string) (ReadSeekCloser, *ObjectInfo,
 	st, err := o.Stat()
 	if err != nil {
 		o.Close()
-		return nil, nil, ErrNotFound
+		if isMissingObject(err) {
+			return nil, nil, ErrNotFound
+		}
+		return nil, nil, err
 	}
 	info := &ObjectInfo{Key: key, Size: st.Size, ModTime: st.LastModified, ETag: st.ETag, ContentType: st.ContentType}
 	return wrapMinio(o), info, nil
@@ -79,9 +88,17 @@ func (s *S3) Stat(ctx context.Context, key string) (*ObjectInfo, error) {
 	}
 	st, err := s.client.StatObject(ctx, s.cfg.Bucket, obj, minio.StatObjectOptions{})
 	if err != nil {
-		return nil, ErrNotFound
+		if isMissingObject(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
 	}
 	return &ObjectInfo{Key: key, Size: st.Size, ModTime: st.LastModified, ETag: st.ETag, ContentType: st.ContentType}, nil
+}
+
+func isMissingObject(err error) bool {
+	code := minio.ToErrorResponse(err).Code
+	return code == "NoSuchKey" || code == "NoSuchObject" || code == "NotFound"
 }
 
 func (s *S3) List(ctx context.Context, prefix string) (Iterator, error) {

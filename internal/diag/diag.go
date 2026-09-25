@@ -116,6 +116,35 @@ func Run(ctx context.Context, d Deps) Report {
 			}
 			add(Check{ID: id, Name: p.Name + " pool", Status: Pass, Detail: fmt.Sprintf("%s: %d workers, %d busy, queue %d", p.Name, p.Live.ActiveWorkers, p.Live.Busy, p.Live.QueueDepth)})
 		}
+		var retries, failedImports, resourceViolations int
+		for _, j := range d.Jobs.RecentJobs(ctx, 100) {
+			if j.Status == "retry" {
+				retries++
+			}
+			if strings.HasPrefix(j.Type, "ingest.") || strings.HasPrefix(j.Type, "scapex.") {
+				if j.Status == "failed" {
+					failedImports++
+				}
+			}
+			if j.LastError != nil && strings.Contains(strings.ToLower(*j.LastError), "worker memory limit exceeded") {
+				resourceViolations++
+			}
+		}
+		if resourceViolations > 0 {
+			add(Check{ID: "worker-resources", Name: "Worker resource limits", Status: Fail, Detail: fmt.Sprintf("%d jobs exceeded their configured RSS limit.", resourceViolations)})
+		} else {
+			add(Check{ID: "worker-resources", Name: "Worker resource limits", Status: Pass, Detail: "No recent worker RSS violations."})
+		}
+		if retries >= 10 {
+			add(Check{ID: "job-retries", Name: "Job retry pressure", Status: Warn, Detail: fmt.Sprintf("%d jobs are retrying; inspect worker and storage failures.", retries)})
+		} else {
+			add(Check{ID: "job-retries", Name: "Job retry pressure", Status: Pass, Detail: fmt.Sprintf("%d jobs are retrying.", retries)})
+		}
+		if failedImports > 0 {
+			add(Check{ID: "failed-imports", Name: "Import failures", Status: Warn, Detail: fmt.Sprintf("%d recent acquisition or ingest jobs failed.", failedImports)})
+		} else {
+			add(Check{ID: "failed-imports", Name: "Import failures", Status: Pass, Detail: "No recent acquisition or ingest failures."})
+		}
 	}
 
 	for _, dir := range []struct{ id, name, path string }{

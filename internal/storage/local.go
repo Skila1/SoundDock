@@ -135,15 +135,32 @@ func (l *Local) Write(_ context.Context, key string, r io.Reader, _ WriteInfo) e
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	flags := os.O_CREATE | os.O_TRUNC | os.O_WRONLY
-	flags |= noFollowFlag()
-	f, err := os.OpenFile(p, flags, 0o644)
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".sounddock-write-*")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, r)
-	return err
+	tmpName := tmp.Name()
+	cleanup := true
+	defer func() {
+		_ = tmp.Close()
+		if cleanup {
+			_ = os.Remove(tmpName)
+		}
+	}()
+	if _, err = io.Copy(tmp, r); err != nil {
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+	if err = os.Rename(tmpName, p); err != nil {
+		return err
+	}
+	cleanup = false
+	return nil
 }
 
 func (l *Local) Delete(_ context.Context, key string) error {
