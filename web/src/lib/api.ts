@@ -44,7 +44,7 @@ async function csrfHeaders(headers?: HeadersInit) {
 }
 
 export const api = {
-  get: <T = any>(p: string) => fetch(p, { credentials: "include" }).then(parse) as Promise<T>,
+  get: <T = any>(p: string, init?: Pick<RequestInit, "signal">) => fetch(p, { credentials: "include", ...init }).then(parse) as Promise<T>,
   post: async <T = any>(p: string, body?: unknown) =>
     fetch(p, {
       method: "POST",

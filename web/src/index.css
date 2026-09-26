@@ -71,6 +71,12 @@ html, body, #root {
   overflow: hidden;
 }
 
+@supports (height: 100dvh) {
+  html, body, #root {
+    height: 100dvh;
+  }
+}
+
 * {
   scrollbar-width: none;
   -ms-overflow-style: none;

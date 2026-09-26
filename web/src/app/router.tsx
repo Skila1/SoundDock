@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { api } from "@/lib/api";
 import { AppShell } from "@/app/layout/AppShell";
-import { BootScreen, ForbiddenPage, NotFoundPage } from "@/app/errors";
+import { BootError, BootScreen, ForbiddenPage, NotFoundPage } from "@/app/errors";
 import { DiscordCallbackCatch, isDiscordOAuthCallbackPath, LoginPage, SetupPage } from "@/features/auth/AuthPages";
 import { resetClientSession } from "@/features/auth/sessionReset";
 import { HomePage } from "@/features/home/HomePage";
@@ -70,6 +70,24 @@ const AdminLogs = lazy(() => import("@/features/admin/AdminPages").then((m) => (
 const AdminInspect = lazy(() => import("@/features/admin/AdminInspect").then((m) => ({ default: m.AdminInspect })));
 const AdminUpdates = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminUpdates })));
 
+const BOOT_REQUEST_TIMEOUT_MS = 12_000;
+
+function bootRequest<T>(path: string, signal: AbortSignal) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal.aborted) abort();
+  else signal.addEventListener("abort", abort, { once: true });
+  const timeout = window.setTimeout(() => controller.abort(), BOOT_REQUEST_TIMEOUT_MS);
+  return api.get<T>(path, { signal: controller.signal }).finally(() => {
+    window.clearTimeout(timeout);
+    signal.removeEventListener("abort", abort);
+  });
+}
+
+function errorStatus(error: unknown) {
+  return typeof error === "object" && error !== null && "status" in error ? Number(error.status) : undefined;
+}
+
 function Fallback() {
   return (
     <div className="space-y-3">
@@ -82,12 +100,12 @@ function Fallback() {
 export function AppRouter() {
   const setup = useQuery({
     queryKey: ["setup"],
-    queryFn: () => api.get<{ needed: boolean; discord_enabled?: boolean; discord_configured?: boolean }>("/api/v1/setup/status"),
+    queryFn: ({ signal }) => bootRequest<{ needed: boolean; discord_enabled?: boolean; discord_configured?: boolean }>("/api/v1/setup/status", signal),
     retry: false
   });
   const me = useQuery({
     queryKey: ["me"],
-    queryFn: () => api.get<User>("/api/v1/me"),
+    queryFn: ({ signal }) => bootRequest<User>("/api/v1/me", signal),
     retry: false
   });
 
@@ -193,6 +211,16 @@ export function AppRouter() {
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
     </Suspense>
+    );
+  }
+  if (me.isError && errorStatus(me.error) !== 401) {
+    return (
+      <BootError
+        onRetry={() => {
+          void setup.refetch();
+          void me.refetch();
+        }}
+      />
     );
   }
   if (me.isError || me.isFetched || setup.isError) {

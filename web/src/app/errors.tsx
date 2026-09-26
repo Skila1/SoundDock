@@ -49,7 +49,7 @@ export function RouteError() {
 
 export function BootScreen() {
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center bg-background">
+    <div className="flex min-h-screen min-h-dvh flex-col items-center justify-center bg-background">
       <div className="mb-4 rounded-xl bg-black p-3">
         <Logo className="h-24 w-auto" />
       </div>
@@ -57,6 +57,19 @@ export function BootScreen() {
         <div className="h-full w-1/2 animate-pulse bg-accent" />
       </div>
       <p className="mt-4 text-sm text-muted">Starting SoundDock</p>
+    </div>
+  );
+}
+
+export function BootError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex min-h-screen min-h-dvh flex-col items-center justify-center bg-background p-6 text-center">
+      <div className="mb-4 rounded-xl bg-black p-3">
+        <Logo className="h-24 w-auto" />
+      </div>
+      <h1 className="text-lg font-semibold">SoundDock could not connect</h1>
+      <p className="mt-2 max-w-sm text-sm text-muted">Check your connection to the server and try again.</p>
+      <Button className="mt-5" onClick={onRetry}>Retry</Button>
     </div>
   );
 }
