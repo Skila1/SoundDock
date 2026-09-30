@@ -7,8 +7,9 @@ import { api } from "@/lib/api";
 import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
 
 const errCopy: Record<string, string> = {
-  not_in_server: "You must be in the required Discord server to register.",
-  missing_role: "You must have the required Discord role to register.",
+  not_in_server: "You must be in one of this instance's allowed Discord servers to register.",
+  missing_role: "You need one of the required Discord roles in an allowed server to register.",
+  registration_check: "Could not check your Discord servers. Try again in a moment.",
   oauth_denied: "Discord sign-in was cancelled.",
   disabled: "Discord sign-in is turned off on this instance.",
   token_exchange: "Could not complete Discord sign-in.",

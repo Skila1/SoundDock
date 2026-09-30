@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -45,20 +46,141 @@ func TestDiscordLoginScope(t *testing.T) {
 	if got := DiscordLoginScope(DiscordRegistration{}); got != "identify" {
 		t.Fatalf("got %q", got)
 	}
-	if got := DiscordLoginScope(DiscordRegistration{GuildEnabled: true}); got != "identify guilds" {
+	servers := []DiscordRegistrationGuild{{GuildID: "1"}, {GuildID: "2"}}
+	if got := DiscordLoginScope(DiscordRegistration{Enabled: true, Guilds: servers}); got != "identify guilds" {
 		t.Fatalf("got %q", got)
 	}
-	if got := DiscordLoginScope(DiscordRegistration{RoleEnabled: true}); got != "identify guilds guilds.members.read" {
+	servers[1].RoleIDs = []string{"20"}
+	if got := DiscordLoginScope(DiscordRegistration{Enabled: true, Guilds: servers}); got != "identify guilds guilds.members.read" {
 		t.Fatalf("got %q", got)
 	}
+	if got := DiscordLoginScope(DiscordRegistration{Guilds: servers}); got != "identify" {
+		t.Fatalf("whitelist off still asked for guild scopes: %q", got)
+	}
+}
+
+type fakeMembership struct {
+	guilds  []string
+	roles   map[string][]string
+	roleErr map[string]error
+	asked   []string
+}
+
+func (f *fakeMembership) GuildIDs(context.Context) ([]string, error) { return f.guilds, nil }
+
+func (f *fakeMembership) MemberRoles(_ context.Context, guildID string) ([]string, error) {
+	f.asked = append(f.asked, guildID)
+	if err := f.roleErr[guildID]; err != nil {
+		return nil, err
+	}
+	return f.roles[guildID], nil
 }
 
 func TestCheckDiscordRegistrationOff(t *testing.T) {
 	if err := CheckDiscordRegistration(context.Background(), "", DiscordRegistration{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckDiscordRegistration(context.Background(), "", DiscordRegistration{GuildEnabled: true}); err == nil {
-		t.Fatal("empty guild id should fail")
+	if err := CheckDiscordRegistration(context.Background(), "", DiscordRegistration{Enabled: true}); !errors.Is(err, ErrNotInServer) {
+		t.Fatalf("empty whitelist should deny, got %v", err)
+	}
+}
+
+func TestCheckDiscordRegistrationMultipleServers(t *testing.T) {
+	ctx := context.Background()
+	reg := DiscordRegistration{Enabled: true, Guilds: []DiscordRegistrationGuild{
+		{GuildID: "100", RoleIDs: []string{"101", "102"}},
+		{GuildID: "200"},
+		{GuildID: "300", RoleIDs: []string{"301"}},
+	}}
+	cases := []struct {
+		name string
+		m    *fakeMembership
+		want error
+	}{
+		{"in no listed server", &fakeMembership{guilds: []string{"999"}}, ErrNotInServer},
+		{"open server needs no role", &fakeMembership{guilds: []string{"200"}}, nil},
+		{"any of the server roles", &fakeMembership{guilds: []string{"100"}, roles: map[string][]string{"100": {"5", "102"}}}, nil},
+		{"role from another server does not count", &fakeMembership{guilds: []string{"100"}, roles: map[string][]string{"100": {"301"}}}, ErrMissingRole},
+		{"second role server passes", &fakeMembership{guilds: []string{"100", "300"}, roles: map[string][]string{"100": {"7"}, "300": {"301"}}}, nil},
+		{"member lookup 404 counts as missing role", &fakeMembership{guilds: []string{"300"}, roleErr: map[string]error{"300": ErrMissingRole}}, ErrMissingRole},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := checkRegistration(ctx, reg, tc.m); !errors.Is(err, tc.want) {
+				t.Fatalf("got %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestCheckDiscordRegistrationLookupFailureIsNotADenial(t *testing.T) {
+	reg := DiscordRegistration{Enabled: true, Guilds: []DiscordRegistrationGuild{{GuildID: "100", RoleIDs: []string{"101"}}}}
+	boom := errors.New("discord member: 502 Bad Gateway")
+	err := checkRegistration(context.Background(), reg, &fakeMembership{guilds: []string{"100"}, roleErr: map[string]error{"100": boom}})
+	if !errors.Is(err, boom) {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestCheckDiscordRegistrationSkipsRoleLookupWhenOpenServerMatches(t *testing.T) {
+	reg := DiscordRegistration{Enabled: true, Guilds: []DiscordRegistrationGuild{{GuildID: "200"}, {GuildID: "100", RoleIDs: []string{"101"}}}}
+	m := &fakeMembership{guilds: []string{"100", "200"}}
+	if err := checkRegistration(context.Background(), reg, m); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.asked) != 0 {
+		t.Fatalf("asked Discord for roles in %v", m.asked)
+	}
+}
+
+func TestNormalizeDiscordRegistrationGuilds(t *testing.T) {
+	got, err := NormalizeDiscordRegistrationGuilds([]DiscordRegistrationGuild{
+		{GuildID: " 100 ", Label: "  Main  ", RoleIDs: []string{" 1 ", "", "1", "2"}},
+		{GuildID: "200"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].GuildID != "100" || got[0].Label != "Main" || len(got[0].RoleIDs) != 2 {
+		t.Fatalf("got %#v", got)
+	}
+	if got[1].RoleIDs == nil {
+		t.Fatal("role IDs must be an empty slice so the column stays NOT NULL")
+	}
+	bad := [][]DiscordRegistrationGuild{
+		{{GuildID: "abc"}},
+		{{GuildID: ""}},
+		{{GuildID: "100"}, {GuildID: "100"}},
+		{{GuildID: "100", RoleIDs: []string{"x1"}}},
+	}
+	for _, in := range bad {
+		if _, err := NormalizeDiscordRegistrationGuilds(in); err == nil {
+			t.Fatalf("expected error for %#v", in)
+		}
+	}
+}
+
+func TestDiscordRegistrationRoundTrip(t *testing.T) {
+	pool := testdb.Open(t)
+	ctx := context.Background()
+	prev, err := LoadDiscordRegistration(ctx, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = SaveDiscordRegistration(context.Background(), pool, prev) })
+	want := DiscordRegistration{Enabled: true, Guilds: []DiscordRegistrationGuild{
+		{GuildID: "300", Label: "Second", RoleIDs: []string{"301", "302"}},
+		{GuildID: "100", Label: "First", RoleIDs: []string{}},
+	}}
+	if err := SaveDiscordRegistration(ctx, pool, want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadDiscordRegistration(ctx, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Enabled || len(got.Guilds) != 2 || got.Guilds[0].GuildID != "300" || len(got.Guilds[0].RoleIDs) != 2 || got.Guilds[1].Label != "First" {
+		t.Fatalf("got %#v", got)
 	}
 }
 

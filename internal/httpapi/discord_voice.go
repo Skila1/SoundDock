@@ -193,6 +193,13 @@ func (s *Server) ensureDiscordJoin(r *http.Request, guildID, channelID string, s
 		}
 	}
 	res, err := s.Play.BindGuildSession(ctx, guildID, sid, channelID, expectedBindingRevision)
+	if errors.Is(err, playback.ErrBindConflict) {
+		// The caller is in this voice channel right now and asked to play here, so
+		// their intent wins. binding_revision is per guild and the bot bumps it on
+		// disconnects and unbinds; a client revision that fell behind must not block
+		// the join.
+		res, err = s.Play.BindGuildSession(ctx, guildID, sid, channelID, 0)
+	}
 	if err != nil {
 		return playback.BindResult{}, err
 	}

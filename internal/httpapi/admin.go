@@ -771,10 +771,8 @@ func (s *Server) discordGet(w http.ResponseWriter, r *http.Request) {
 		"login_ready":                oauth.Ready(),
 		"oauth_redirect":             auth.DiscordCallbackURL(s.absURL(r)),
 		"admin_discord_ids":          auth.LoadAdminDiscordIDs(r.Context(), s.Pool),
-		"registration_guild_enabled": reg.GuildEnabled,
-		"registration_guild_id":      reg.GuildID,
-		"registration_role_enabled":  reg.RoleEnabled,
-		"registration_role_id":       reg.RoleID,
+		"registration_whitelist_enabled": reg.Enabled,
+		"registration_guilds":            reg.Guilds,
 	}
 	if commands != nil {
 		out["command_registration_status"] = *commands
@@ -787,24 +785,49 @@ func (s *Server) discordGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) discordPut(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Enabled                  bool      `json:"enabled"`
-		LoginEnabled             *bool     `json:"login_enabled"`
-		Token                    *string   `json:"token"`
-		ApplicationID            *string   `json:"application_id"`
-		ClientID                 *string   `json:"client_id"`
-		ClientSecret             *string   `json:"client_secret"`
-		RegistrationGuildEnabled *bool     `json:"registration_guild_enabled"`
-		RegistrationGuildID      *string   `json:"registration_guild_id"`
-		RegistrationRoleEnabled  *bool     `json:"registration_role_enabled"`
-		RegistrationRoleID       *string   `json:"registration_role_id"`
-		AdminDiscordIDs          *[]string `json:"admin_discord_ids"`
+		Enabled                      *bool                            `json:"enabled"`
+		LoginEnabled                 *bool                            `json:"login_enabled"`
+		Token                        *string                          `json:"token"`
+		ApplicationID                *string                          `json:"application_id"`
+		ClientID                     *string                          `json:"client_id"`
+		ClientSecret                 *string                          `json:"client_secret"`
+		RegistrationWhitelistEnabled *bool                            `json:"registration_whitelist_enabled"`
+		RegistrationGuilds           *[]auth.DiscordRegistrationGuild `json:"registration_guilds"`
+		AdminDiscordIDs              *[]string                        `json:"admin_discord_ids"`
 	}
 	_ = decodeJSON(r, &body)
+	// Validate the whitelist before writing anything so a bad entry cannot leave a half-saved form.
+	var reg *auth.DiscordRegistration
+	if body.RegistrationWhitelistEnabled != nil || body.RegistrationGuilds != nil {
+		cur, err := auth.LoadDiscordRegistration(r.Context(), s.Pool)
+		if err != nil {
+			writeErr(w, 500, "db", "could not load registration whitelist")
+			return
+		}
+		if body.RegistrationWhitelistEnabled != nil {
+			cur.Enabled = *body.RegistrationWhitelistEnabled
+		}
+		if body.RegistrationGuilds != nil {
+			cur.Guilds = *body.RegistrationGuilds
+		}
+		guilds, err := auth.NormalizeDiscordRegistrationGuilds(cur.Guilds)
+		if err != nil {
+			writeErr(w, 400, "invalid_whitelist", err.Error())
+			return
+		}
+		cur.Guilds = guilds
+		if cur.Enabled && len(cur.Guilds) == 0 {
+			writeErr(w, 400, "invalid_whitelist", "add at least one server or turn the whitelist off")
+			return
+		}
+		reg = &cur
+	}
+	// enabled is optional: forms that omit it must not switch the bot off.
 	if body.Token != nil && *body.Token != "" && s.Box != nil {
 		enc, _ := s.Box.Encrypt([]byte(*body.Token))
-		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET enabled=$1, bot_token_enc=$2, application_id=coalesce($3, application_id), client_id=coalesce($4, client_id), updated_at=now() WHERE id=1`, body.Enabled, enc, body.ApplicationID, body.ClientID)
+		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET enabled=coalesce($1, enabled), bot_token_enc=$2, application_id=coalesce($3, application_id), client_id=coalesce($4, client_id), updated_at=now() WHERE id=1`, body.Enabled, enc, body.ApplicationID, body.ClientID)
 	} else {
-		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET enabled=$1, application_id=coalesce($2, application_id), client_id=coalesce($3, client_id), updated_at=now() WHERE id=1`, body.Enabled, body.ApplicationID, body.ClientID)
+		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET enabled=coalesce($1, enabled), application_id=coalesce($2, application_id), client_id=coalesce($3, client_id), updated_at=now() WHERE id=1`, body.Enabled, body.ApplicationID, body.ClientID)
 	}
 	if body.ClientSecret != nil && *body.ClientSecret != "" && s.Box != nil {
 		enc, _ := s.Box.Encrypt([]byte(*body.ClientSecret))
@@ -813,22 +836,11 @@ func (s *Server) discordPut(w http.ResponseWriter, r *http.Request) {
 	if body.LoginEnabled != nil {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET login_enabled=$1, updated_at=now() WHERE id=1`, *body.LoginEnabled)
 	}
-	if body.RegistrationGuildEnabled != nil || body.RegistrationGuildID != nil || body.RegistrationRoleEnabled != nil || body.RegistrationRoleID != nil {
-		cur, _ := auth.LoadDiscordRegistration(r.Context(), s.Pool)
-		ge, gid, re, rid := cur.GuildEnabled, cur.GuildID, cur.RoleEnabled, cur.RoleID
-		if body.RegistrationGuildEnabled != nil {
-			ge = *body.RegistrationGuildEnabled
+	if reg != nil {
+		if err := auth.SaveDiscordRegistration(r.Context(), s.Pool, *reg); err != nil {
+			writeErr(w, 500, "db", "could not save registration whitelist")
+			return
 		}
-		if body.RegistrationGuildID != nil {
-			gid = strings.TrimSpace(*body.RegistrationGuildID)
-		}
-		if body.RegistrationRoleEnabled != nil {
-			re = *body.RegistrationRoleEnabled
-		}
-		if body.RegistrationRoleID != nil {
-			rid = strings.TrimSpace(*body.RegistrationRoleID)
-		}
-		_, _ = s.Pool.Exec(r.Context(), `UPDATE discord_settings SET registration_guild_enabled=$1, registration_guild_id=$2, registration_role_enabled=$3, registration_role_id=$4, updated_at=now() WHERE id=1`, ge, gid, re, rid)
 	}
 	if body.AdminDiscordIDs != nil {
 		ids, err := auth.NormalizeAdminDiscordIDs(*body.AdminDiscordIDs)

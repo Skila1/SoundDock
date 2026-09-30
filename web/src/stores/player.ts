@@ -439,7 +439,9 @@ function publishMediaPosition() {
 }
 
 async function joinDiscord() {
-  const expected = session.lastBindingRevision || session.queue.binding_revision;
+  // Only a revision seen for the guild we are joining means anything to the server.
+  const guild = guildIdOf();
+  const expected = guild ? session.lastBindingByGuild[guild] : undefined;
   return api.post<{ ok?: boolean; guild_id?: string; channel_id?: string; binding_revision?: number; state_revision?: number; session_id?: string }>(
     "/api/v1/me/discord/join",
     {

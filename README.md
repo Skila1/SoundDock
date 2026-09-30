@@ -37,7 +37,7 @@ SoundDock is built to be the system your library, players, and bots talk to. The
 - **Storage.** Libraries on local disk, NAS/NFS/SMB, Docker volumes, and S3-compatible object storage (Cloudflare R2, AWS S3, MinIO, B2). Scan in place, resumable uploads, Remote Import of direct HTTP(S) media URLs, migrate into managed storage.
 - **API.** REST `/api/v1`, OpenAPI at `/api/docs`, search for humans and bots, API keys (`sd_…`), signed webhooks. Stream URLs only. Never filesystem paths. OpenSubsonic is a stub (`SD_OPENSUBSONIC=false`); leave it off.
 - **Web/PWA.** Queue, ReplayGain, optional crossfade. Artists, albums, tracks, playlists, favourites.
-- **Discord.** Optional OAuth sign-in (server/role registration whitelist). Optional native voice worker that plays **your** library. No Lavalink, YouTube, or Spotify. `/link` in Discord completes in the web UI.
+- **Discord.** Optional OAuth sign-in (registration whitelist across multiple servers, with optional roles per server). Optional native voice worker that plays **your** library. No Lavalink, YouTube, or Spotify. `/link` in Discord completes in the web UI.
 - **Playlist matching.** Connect Spotify, YouTube, SoundCloud, or Apple Music and import playlist URLs. Titles are matched against **your** library. Provider audio is not downloaded.
 - **Operations.** PostgreSQL system of record. Optional Redis, Meilisearch, Prometheus `/metrics`, Cloudflare Tunnel. Admin for users, roles, jobs, backups, transcoding, retention.
 

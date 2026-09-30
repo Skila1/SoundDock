@@ -2,6 +2,10 @@
 
 ## 0.1.0
 
+- The Discord registration whitelist accepts any number of servers, each with optional role IDs. A new Discord account may register if it is in any listed server and, when that server lists roles, holds at least one of them there. Existing single server and role settings migrate automatically (migration 0026).
+- Saving Discord sign-in settings no longer switches the Discord bot off.
+- Joining or playing on Discord no longer fails with `bind_conflict` after the bot disconnected, was kicked, or you last used a different server. A join you start replaces a stale voice binding.
+- A signed-out visit no longer requests `/api/v1/me` twice.
 - Player keyboard shortcuts (space, arrows, n/p/m) are off until enabled. The flag is stored in browser `sd-prefs` and defaults to false. Ctrl+K / Cmd+K still opens header search.
 - Listen recap (Home, Stats, Wrapped) reads `listen_history` until an admin runs **Stats rebuild**, which rebuilds `play_counts` from `listen_events` and flips the reader. Recap minutes that fill null `listened_ms` from track duration are estimated. The two tables are not a merged listen total.
 - `SD_SCAPEX_URL` is deprecated. Leave it empty so YouTube search/fetch runs in-process. A leftover sidecar still works if the URL is set; Compose does not include one.

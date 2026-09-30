@@ -1,4 +1,19 @@
-async function parse(r: Response) {
+export const ME_PATH = "/api/v1/me";
+
+/**
+ * A 401 on some other request means the session expired mid-use: drop the cached
+ * user so the router falls back to the login page. A 401 on /me itself already
+ * lands the "me" query in an error state; removing it there would make its mounted
+ * observers refetch straight away and fire a duplicate 401.
+ */
+export async function handleUnauthorized(path: string) {
+  if (path.split("?")[0] === ME_PATH) return;
+  const { queryClient } = await import("@/app/providers");
+  if (queryClient.getQueryData(["me"]) === undefined) return;
+  queryClient.removeQueries({ queryKey: ["me"] });
+}
+
+async function parse(r: Response, path: string) {
   if (!r.ok) {
     let msg = r.statusText;
     try {
@@ -9,10 +24,7 @@ async function parse(r: Response) {
     }
     const err = new Error(msg) as Error & { status: number };
     err.status = r.status;
-    if (r.status === 401) {
-      const { queryClient } = await import("@/app/providers");
-      queryClient.removeQueries({ queryKey: ["me"] });
-    }
+    if (r.status === 401) await handleUnauthorized(path);
     throw err;
   }
   if (r.status === 204) return null;
@@ -44,25 +56,25 @@ async function csrfHeaders(headers?: HeadersInit) {
 }
 
 export const api = {
-  get: <T = any>(p: string, init?: Pick<RequestInit, "signal">) => fetch(p, { credentials: "include", ...init }).then(parse) as Promise<T>,
+  get: <T = any>(p: string, init?: Pick<RequestInit, "signal">) => fetch(p, { credentials: "include", ...init }).then((r) => parse(r, p)) as Promise<T>,
   post: async <T = any>(p: string, body?: unknown) =>
     fetch(p, {
       method: "POST",
       credentials: "include",
       headers: await csrfHeaders(body instanceof FormData || body instanceof Blob ? undefined : { "Content-Type": "application/json" }),
       body: body instanceof Blob || body instanceof FormData ? (body as BodyInit) : body ? JSON.stringify(body) : undefined
-    }).then(parse) as Promise<T>,
+    }).then((r) => parse(r, p)) as Promise<T>,
   put: async <T = any>(p: string, body?: unknown) =>
-    fetch(p, { method: "PUT", credentials: "include", headers: await csrfHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body) }).then(parse) as Promise<T>,
+    fetch(p, { method: "PUT", credentials: "include", headers: await csrfHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(body) }).then((r) => parse(r, p)) as Promise<T>,
   patch: async <T = any>(p: string, body?: unknown, headers?: HeadersInit) =>
-    fetch(p, { method: "PATCH", credentials: "include", headers: await csrfHeaders({ "Content-Type": "application/json", ...headers }), body: body instanceof Blob ? body : JSON.stringify(body) }).then(parse) as Promise<T>,
+    fetch(p, { method: "PATCH", credentials: "include", headers: await csrfHeaders({ "Content-Type": "application/json", ...headers }), body: body instanceof Blob ? body : JSON.stringify(body) }).then((r) => parse(r, p)) as Promise<T>,
   del: async <T = any>(p: string, body?: unknown) =>
     fetch(p, {
       method: "DELETE",
       credentials: "include",
       headers: await csrfHeaders(body ? { "Content-Type": "application/json" } : undefined),
       body: body ? JSON.stringify(body) : undefined
-    }).then(parse) as Promise<T>
+    }).then((r) => parse(r, p)) as Promise<T>
 };
 
 export const streamUrl = (id: string, quality = "original") => `/api/v1/tracks/${id}/stream?quality=${quality}`;

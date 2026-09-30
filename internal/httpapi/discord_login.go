@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"net/url"
 	"time"
@@ -147,7 +148,12 @@ func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
 			if s.Log != nil {
 				s.Log.Warn("discord oauth registration denied", "err", err, "discord_id", prof.ID)
 			}
-			fail(err.Error())
+			switch {
+			case errors.Is(err, auth.ErrNotInServer), errors.Is(err, auth.ErrMissingRole):
+				fail(err.Error())
+			default:
+				fail("registration_check")
+			}
 			return
 		}
 	}

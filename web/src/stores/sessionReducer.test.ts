@@ -123,6 +123,13 @@ describe("bind revision", () => {
     expect(stale.queue.output_pref).toBe("discord");
   });
 
+  it("accepts a first bind in another guild with a lower revision", () => {
+    const seeded = applyBindResult(initialSession(), { binding_revision: 40, guild_id: "g1" }, "g1");
+    const other = applyBindResult(seeded, { binding_revision: 3, guild_id: "g2", ok: true }, "g2");
+    expect(other.ignored).toBeNull();
+    expect(other.lastBindingByGuild.g2).toBe(3);
+  });
+
   it("keeps guild bind when switching Discord → Browser", () => {
     const bound = applyBindResult(initialSession(), { binding_revision: 6, guild_id: "g1" }, "g1");
     const browser = applySwitchToBrowser(

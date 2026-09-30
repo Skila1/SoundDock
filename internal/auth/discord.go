@@ -32,12 +32,31 @@ type DiscordOAuth struct {
 	AccessToken string
 }
 
-type DiscordRegistration struct {
-	GuildEnabled bool
-	GuildID      string
-	RoleEnabled  bool
-	RoleID       string
+// DiscordRegistrationGuild is one whitelisted server. With RoleIDs set, a new
+// user must hold at least one of those roles in that server.
+type DiscordRegistrationGuild struct {
+	GuildID string   `json:"guild_id"`
+	Label   string   `json:"label"`
+	RoleIDs []string `json:"role_ids"`
 }
+
+// DiscordRegistration gates new Discord accounts: when Enabled, the user must
+// pass at least one entry in Guilds.
+type DiscordRegistration struct {
+	Enabled bool
+	Guilds  []DiscordRegistrationGuild
+}
+
+var (
+	ErrNotInServer = errors.New("not_in_server")
+	ErrMissingRole = errors.New("missing_role")
+)
+
+const (
+	maxRegistrationGuilds = 50
+	maxRegistrationRoles  = 25
+	maxRegistrationLabel  = 100
+)
 
 func DiscordUserExists(ctx context.Context, pool *pgxpool.Pool, discordID string) (bool, error) {
 	var n int
@@ -47,24 +66,133 @@ func DiscordUserExists(ctx context.Context, pool *pgxpool.Pool, discordID string
 
 func LoadDiscordRegistration(ctx context.Context, pool *pgxpool.Pool) (DiscordRegistration, error) {
 	var r DiscordRegistration
-	err := pool.QueryRow(ctx, `
-		SELECT registration_guild_enabled, registration_guild_id, registration_role_enabled, registration_role_id
-		FROM discord_settings WHERE id=1`).Scan(&r.GuildEnabled, &r.GuildID, &r.RoleEnabled, &r.RoleID)
-	return r, err
+	if err := pool.QueryRow(ctx, `SELECT registration_guild_enabled FROM discord_settings WHERE id=1`).Scan(&r.Enabled); err != nil {
+		return r, err
+	}
+	rows, err := pool.Query(ctx, `SELECT guild_id, label, role_ids FROM discord_registration_guilds ORDER BY position, guild_id`)
+	if err != nil {
+		return r, err
+	}
+	defer rows.Close()
+	r.Guilds = []DiscordRegistrationGuild{}
+	for rows.Next() {
+		var g DiscordRegistrationGuild
+		if err := rows.Scan(&g.GuildID, &g.Label, &g.RoleIDs); err != nil {
+			return r, err
+		}
+		if g.RoleIDs == nil {
+			g.RoleIDs = []string{}
+		}
+		r.Guilds = append(r.Guilds, g)
+	}
+	return r, rows.Err()
+}
+
+// SaveDiscordRegistration replaces the whitelist. Pass guilds through
+// NormalizeDiscordRegistrationGuilds first.
+func SaveDiscordRegistration(ctx context.Context, pool *pgxpool.Pool, reg DiscordRegistration) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `UPDATE discord_settings SET registration_guild_enabled=$1, updated_at=now() WHERE id=1`, reg.Enabled); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM discord_registration_guilds`); err != nil {
+		return err
+	}
+	for i, g := range reg.Guilds {
+		roles := g.RoleIDs
+		if roles == nil {
+			roles = []string{}
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO discord_registration_guilds (guild_id, label, role_ids, position) VALUES ($1,$2,$3,$4)`, g.GuildID, g.Label, roles, i); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+// NormalizeDiscordRegistrationGuilds trims and validates whitelist entries and
+// drops duplicate role IDs. A server listed twice is an error.
+func NormalizeDiscordRegistrationGuilds(in []DiscordRegistrationGuild) ([]DiscordRegistrationGuild, error) {
+	if len(in) > maxRegistrationGuilds {
+		return nil, fmt.Errorf("at most %d servers", maxRegistrationGuilds)
+	}
+	seen := map[string]struct{}{}
+	out := make([]DiscordRegistrationGuild, 0, len(in))
+	for _, g := range in {
+		id := strings.TrimSpace(g.GuildID)
+		if !isSnowflake(id) {
+			return nil, fmt.Errorf("server ID %q must be a numeric Discord snowflake", g.GuildID)
+		}
+		if _, dup := seen[id]; dup {
+			return nil, fmt.Errorf("server %s is listed twice", id)
+		}
+		seen[id] = struct{}{}
+		label := strings.TrimSpace(g.Label)
+		if r := []rune(label); len(r) > maxRegistrationLabel {
+			label = string(r[:maxRegistrationLabel])
+		}
+		roles := []string{}
+		roleSeen := map[string]struct{}{}
+		for _, rid := range g.RoleIDs {
+			rid = strings.TrimSpace(rid)
+			if rid == "" {
+				continue
+			}
+			if !isSnowflake(rid) {
+				return nil, fmt.Errorf("role ID %q must be a numeric Discord snowflake", rid)
+			}
+			if _, dup := roleSeen[rid]; dup {
+				continue
+			}
+			roleSeen[rid] = struct{}{}
+			roles = append(roles, rid)
+		}
+		if len(roles) > maxRegistrationRoles {
+			return nil, fmt.Errorf("at most %d roles per server", maxRegistrationRoles)
+		}
+		out = append(out, DiscordRegistrationGuild{GuildID: id, Label: label, RoleIDs: roles})
+	}
+	return out, nil
+}
+
+func isSnowflake(s string) bool {
+	if s == "" || len(s) > 20 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (r DiscordRegistration) NeedGuildsScope() bool {
-	return r.GuildEnabled || r.RoleEnabled
+	return r.Enabled
 }
 
 func (r DiscordRegistration) NeedRoleScope() bool {
-	return r.RoleEnabled
+	if !r.Enabled {
+		return false
+	}
+	for _, g := range r.Guilds {
+		if len(g.RoleIDs) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
-func guildIDsContain(ids []string, want string) bool {
-	for _, id := range ids {
-		if id == want {
-			return true
+func idsIntersect(have, want []string) bool {
+	for _, w := range want {
+		for _, h := range have {
+			if h == w {
+				return true
+			}
 		}
 	}
 	return false
@@ -302,10 +430,8 @@ func NormalizeAdminDiscordIDs(raw []string) ([]string, error) {
 			if p == "" {
 				continue
 			}
-			for _, c := range p {
-				if c < '0' || c > '9' {
-					return nil, fmt.Errorf("invalid discord user id")
-				}
+			if !isSnowflake(p) {
+				return nil, fmt.Errorf("invalid discord user id")
 			}
 			if _, ok := seen[p]; ok {
 				continue
@@ -413,81 +539,132 @@ func ExchangeDiscordCode(ctx context.Context, clientID, secret, redirect, code, 
 	return out, nil
 }
 
-func CheckDiscordRegistration(ctx context.Context, accessToken string, reg DiscordRegistration) error {
-	if !reg.GuildEnabled && !reg.RoleEnabled {
-		return nil
-	}
-	cli := &http.Client{Timeout: 20 * time.Second}
-	if reg.GuildEnabled {
-		if strings.TrimSpace(reg.GuildID) == "" {
-			return fmt.Errorf("not_in_server")
-		}
-		ids, err := discordUserGuildIDs(ctx, cli, accessToken)
-		if err != nil {
-			return err
-		}
-		if !guildIDsContain(ids, strings.TrimSpace(reg.GuildID)) {
-			return fmt.Errorf("not_in_server")
-		}
-	}
-	if reg.RoleEnabled {
-		if strings.TrimSpace(reg.GuildID) == "" || strings.TrimSpace(reg.RoleID) == "" {
-			return fmt.Errorf("missing_role")
-		}
-		roles, err := discordMemberRoles(ctx, cli, accessToken, strings.TrimSpace(reg.GuildID))
-		if err != nil {
-			return err
-		}
-		if !guildIDsContain(roles, strings.TrimSpace(reg.RoleID)) {
-			return fmt.Errorf("missing_role")
-		}
-	}
-	return nil
+// discordMembership answers guild and role questions for the signing-in user.
+type discordMembership interface {
+	GuildIDs(ctx context.Context) ([]string, error)
+	MemberRoles(ctx context.Context, guildID string) ([]string, error)
 }
 
-func discordUserGuildIDs(ctx context.Context, cli *http.Client, token string) ([]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://discord.com/api/users/@me/guilds", nil)
+// CheckDiscordRegistration returns nil when the whitelist is off or the user
+// passes at least one listed server. It returns ErrNotInServer or
+// ErrMissingRole on a clean denial, and another error when Discord could not
+// be asked.
+func CheckDiscordRegistration(ctx context.Context, accessToken string, reg DiscordRegistration) error {
+	if !reg.Enabled {
+		return nil
+	}
+	return checkRegistration(ctx, reg, httpMembership{cli: &http.Client{Timeout: 20 * time.Second}, token: accessToken})
+}
+
+func checkRegistration(ctx context.Context, reg DiscordRegistration, m discordMembership) error {
+	if !reg.Enabled {
+		return nil
+	}
+	if len(reg.Guilds) == 0 {
+		return ErrNotInServer
+	}
+	ids, err := m.GuildIDs(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := cli.Do(req)
-	if err != nil {
-		return nil, err
+	member := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		member[id] = struct{}{}
 	}
-	defer resp.Body.Close()
-	b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("not_in_server")
+	inAny := false
+	var lookupErr error
+	for _, g := range reg.Guilds {
+		if _, ok := member[g.GuildID]; !ok {
+			continue
+		}
+		inAny = true
+		if len(g.RoleIDs) == 0 {
+			return nil
+		}
+		roles, err := m.MemberRoles(ctx, g.GuildID)
+		if err != nil {
+			if !errors.Is(err, ErrMissingRole) && lookupErr == nil {
+				lookupErr = err
+			}
+			continue
+		}
+		if idsIntersect(roles, g.RoleIDs) {
+			return nil
+		}
 	}
-	var guilds []struct {
-		ID string `json:"id"`
+	if !inAny {
+		return ErrNotInServer
 	}
-	if err := json.Unmarshal(b, &guilds); err != nil {
-		return nil, err
+	if lookupErr != nil {
+		return lookupErr
 	}
-	ids := make([]string, 0, len(guilds))
-	for _, g := range guilds {
-		ids = append(ids, g.ID)
+	return ErrMissingRole
+}
+
+type httpMembership struct {
+	cli   *http.Client
+	token string
+}
+
+// GuildIDs pages through /users/@me/guilds; Discord caps each page at 200.
+func (h httpMembership) GuildIDs(ctx context.Context) ([]string, error) {
+	var ids []string
+	after := ""
+	for page := 0; page < 10; page++ {
+		u := "https://discord.com/api/users/@me/guilds?limit=200"
+		if after != "" {
+			u += "&after=" + url.QueryEscape(after)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+h.token)
+		resp, err := h.cli.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		resp.Body.Close()
+		if resp.StatusCode >= 400 {
+			return nil, fmt.Errorf("discord guilds: %s", resp.Status)
+		}
+		var guilds []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(b, &guilds); err != nil {
+			return nil, err
+		}
+		for _, g := range guilds {
+			ids = append(ids, g.ID)
+		}
+		if len(guilds) < 200 {
+			break
+		}
+		after = guilds[len(guilds)-1].ID
 	}
 	return ids, nil
 }
 
-func discordMemberRoles(ctx context.Context, cli *http.Client, token, guildID string) ([]string, error) {
+// MemberRoles returns ErrMissingRole when Discord says the user is not a member.
+func (h httpMembership) MemberRoles(ctx context.Context, guildID string) ([]string, error) {
 	u := "https://discord.com/api/users/@me/guilds/" + url.PathEscape(guildID) + "/member"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := cli.Do(req)
+	req.Header.Set("Authorization", "Bearer "+h.token)
+	resp, err := h.cli.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusForbidden {
+		return nil, ErrMissingRole
+	}
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("missing_role")
+		return nil, fmt.Errorf("discord member: %s", resp.Status)
 	}
 	var mem struct {
 		Roles []string `json:"roles"`

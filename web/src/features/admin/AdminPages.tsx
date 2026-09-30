@@ -13,6 +13,7 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { User } from "@/types/api";
 import { DiscordServerButton, HelpButton } from "@/components/community/CommunityLinks";
+import { Plus, Trash2 } from "lucide-react";
 
 type AdminUserRow = {
   id: string;
@@ -697,6 +698,17 @@ export function AdminDatabase() {
   );
 }
 
+type RegistrationGuild = { guild_id: string; label: string; role_ids: string[] };
+type RegistrationGuildDraft = { key: number; guild_id: string; label: string; roles: string };
+
+let registrationDraftKey = 0;
+const toRegistrationDraft = (g?: RegistrationGuild): RegistrationGuildDraft => ({
+  key: ++registrationDraftKey,
+  guild_id: g?.guild_id || "",
+  label: g?.label || "",
+  roles: (g?.role_ids || []).join(", ")
+});
+
 export function AdminDiscord() {
   const qc = useQueryClient();
   const d = useQuery({ queryKey: ["discord"], queryFn: () => api.get<any>("/api/v1/admin/integrations/discord") });
@@ -708,17 +720,13 @@ export function AdminDiscord() {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [loginOn, setLoginOn] = useState(false);
-  const [guildOn, setGuildOn] = useState(false);
-  const [guildId, setGuildId] = useState("");
-  const [roleOn, setRoleOn] = useState(false);
-  const [roleId, setRoleId] = useState("");
+  const [whitelistOn, setWhitelistOn] = useState(false);
+  const [regGuilds, setRegGuilds] = useState<RegistrationGuildDraft[]>([]);
   const [adminIds, setAdminIds] = useState("");
   useEffect(() => {
     if (!d.data) return;
-    setGuildOn(!!d.data.registration_guild_enabled);
-    setGuildId(d.data.registration_guild_id || "");
-    setRoleOn(!!d.data.registration_role_enabled);
-    setRoleId(d.data.registration_role_id || "");
+    setWhitelistOn(!!d.data.registration_whitelist_enabled);
+    setRegGuilds(((d.data.registration_guilds || []) as RegistrationGuild[]).map(toRegistrationDraft));
     setLoginOn(!!d.data.login_enabled);
     setClientId(d.data.client_id || "");
     setAdminIds((d.data.admin_discord_ids || []).join(", "));
@@ -807,41 +815,80 @@ export function AdminDiscord() {
           <Button type="button" variant="ghost" onClick={() => api.post("/api/v1/admin/integrations/discord/commands/sync").then(() => toast.success("Command sync requested"))}>Sync commands</Button>
         </div>
       </form>
-      <form className="mb-6 max-w-lg space-y-4 rounded-xl border border-border bg-surface-1 p-4" onSubmit={async (e) => {
+      <form className="mb-6 max-w-2xl space-y-4 rounded-xl border border-border bg-surface-1 p-4" onSubmit={async (e) => {
         e.preventDefault();
-        await api.put("/api/v1/admin/integrations/discord", {
-          enabled: d.data?.enabled ?? true,
-          registration_guild_enabled: guildOn,
-          registration_guild_id: guildId,
-          registration_role_enabled: roleOn,
-          registration_role_id: roleId
-        });
-        toast.success("Registration whitelist saved");
-        qc.invalidateQueries({ queryKey: ["discord"] });
+        try {
+          await api.put("/api/v1/admin/integrations/discord", {
+            registration_whitelist_enabled: whitelistOn,
+            registration_guilds: regGuilds
+              .filter((g) => g.guild_id.trim() || g.roles.trim())
+              .map((g) => ({
+                guild_id: g.guild_id.trim(),
+                label: g.label.trim(),
+                role_ids: g.roles.split(/[\s,]+/).map((r) => r.trim()).filter(Boolean)
+              }))
+          });
+          toast.success("Registration whitelist saved");
+          qc.invalidateQueries({ queryKey: ["discord"] });
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Could not save whitelist");
+        }
       }}>
         <h3 className="font-semibold">Registration whitelist</h3>
-        <p className="text-sm text-muted">Applies to new Discord accounts only. Existing users and Discord IDs listed under Administrators can always sign in. Role checks need the bot invited.</p>
+        <p className="text-sm text-muted">Applies to new Discord accounts only. Existing users and Discord IDs listed under Administrators can always sign in. A new user may register if they pass any one server below: they must be a member, and if that server lists roles, hold at least one of them there.</p>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="text-sm font-medium">Require Discord server</div>
-            <p className="text-xs text-subtle">New users must be in this server.</p>
+            <div className="text-sm font-medium">Require an allowed Discord server</div>
+            <p className="text-xs text-subtle">Off lets any Discord account register.</p>
           </div>
-          <Switch checked={guildOn} onCheckedChange={setGuildOn} />
+          <Switch checked={whitelistOn} onCheckedChange={setWhitelistOn} />
         </div>
-        <Field label="Server ID">
-          <Input value={guildId} onChange={(e) => setGuildId(e.target.value)} placeholder="Discord server snowflake" disabled={!guildOn && !roleOn} />
-        </Field>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium">Require Discord role</div>
-            <p className="text-xs text-subtle">New users must also have this role in that server.</p>
-          </div>
-          <Switch checked={roleOn} onCheckedChange={setRoleOn} />
+        <datalist id="discord-known-guilds">
+          {(guilds.data || []).map((g) => <option key={g.id} value={g.id}>{g.name || g.id}</option>)}
+        </datalist>
+        {!regGuilds.length && <p className="text-sm text-subtle">No servers yet. Add one to start the whitelist.</p>}
+        <ul className="space-y-3">
+          {regGuilds.map((g) => {
+            const set = (patch: Partial<RegistrationGuildDraft>) => setRegGuilds((cur) => cur.map((x) => (x.key === g.key ? { ...x, ...patch } : x)));
+            const known = (guilds.data || []).find((k) => k.id === g.guild_id.trim());
+            return (
+              <li key={g.key} className="space-y-3 rounded-lg border border-border p-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Server ID" hint={known ? `Bot sees: ${known.name || known.id}` : undefined}>
+                    <Input
+                      value={g.guild_id}
+                      list="discord-known-guilds"
+                      inputMode="numeric"
+                      onChange={(e) => {
+                        const id = e.target.value;
+                        const match = (guilds.data || []).find((k) => k.id === id.trim());
+                        set({ guild_id: id, ...(match && !g.label ? { label: match.name || "" } : {}) });
+                      }}
+                      placeholder="Discord server snowflake"
+                    />
+                  </Field>
+                  <Field label="Label" hint="Optional, for your reference.">
+                    <Input value={g.label} onChange={(e) => set({ label: e.target.value })} placeholder="Main community" />
+                  </Field>
+                </div>
+                <Field label="Required role IDs" hint="Optional. Comma separated; any one of them is enough. Leave blank to allow every member of this server.">
+                  <Input value={g.roles} onChange={(e) => set({ roles: e.target.value })} placeholder="Discord role snowflakes" />
+                </Field>
+                <div className="flex justify-end">
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setRegGuilds((cur) => cur.filter((x) => x.key !== g.key))}>
+                    <Trash2 /> Remove server
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" variant="secondary" onClick={() => setRegGuilds((cur) => [...cur, toRegistrationDraft()])}>
+            <Plus /> Add server
+          </Button>
+          <Button type="submit">Save whitelist</Button>
         </div>
-        <Field label="Role ID">
-          <Input value={roleId} onChange={(e) => setRoleId(e.target.value)} placeholder="Discord role snowflake" disabled={!roleOn} />
-        </Field>
-        <Button type="submit">Save whitelist</Button>
       </form>
       <h3 className="mb-2 font-semibold">Servers</h3>
       <p className="mb-3 text-sm text-muted">One bot token covers every invited server. Disable a server to ignore slash commands and web play there.</p>

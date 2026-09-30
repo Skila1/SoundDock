@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getCSRFToken } from "./api";
+import { getCSRFToken, handleUnauthorized } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -17,5 +17,23 @@ describe("getCSRFToken", () => {
 
     expect(tokens).toEqual(["stable-token", "stable-token", "stable-token"]);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("handleUnauthorized", () => {
+  it("keeps the me query when /me itself returns 401 so observers do not refetch", async () => {
+    const { queryClient } = await import("@/app/providers");
+    queryClient.setQueryData(["me"], { id: "u1" });
+    await handleUnauthorized("/api/v1/me");
+    expect(queryClient.getQueryData(["me"])).toEqual({ id: "u1" });
+    queryClient.clear();
+  });
+
+  it("drops the cached user when another request returns 401", async () => {
+    const { queryClient } = await import("@/app/providers");
+    queryClient.setQueryData(["me"], { id: "u1" });
+    await handleUnauthorized("/api/v1/tracks?page=1");
+    expect(queryClient.getQueryData(["me"])).toBeUndefined();
+    queryClient.clear();
   });
 });

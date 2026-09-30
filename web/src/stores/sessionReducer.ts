@@ -190,7 +190,8 @@ function playheadFromSnap(snap: QueueSnapshot, offsetMs: number, nowMs: number, 
 export function applyBindResult(view: SessionView, result: BindResult, guildId?: string | null): SessionView {
   const rev = num(result.binding_revision, -1);
   const guild = guildId || result.guild_id || "";
-  const last = guild ? view.lastBindingByGuild[guild] ?? view.lastBindingRevision : view.lastBindingRevision;
+  // binding_revision counts per guild, so never compare one guild against another's.
+  const last = guild ? view.lastBindingByGuild[guild] ?? 0 : view.lastBindingRevision;
   if (rev >= 0 && rev < last) {
     return { ...view, ignored: "stale_bind", stateApplied: false, playheadApplied: false, stopAudio: false };
   }
@@ -253,7 +254,7 @@ export function applySnapshot(view: SessionView, snap: QueueSnapshot, opts: Appl
   if (kind === "bind") {
     const rev = num(snap.binding_revision, -1);
     const guild = opts.guildId || "";
-    const last = guild ? lastBindingByGuild[guild] ?? lastBindingRevision : lastBindingRevision;
+    const last = guild ? lastBindingByGuild[guild] ?? 0 : lastBindingRevision;
     if (rev >= 0 && rev < last) {
       return { ...view, ignored: "stale_bind", stateApplied: false, playheadApplied: false, stopAudio: false };
     }

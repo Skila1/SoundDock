@@ -220,13 +220,23 @@ func TestDiscordJoinBindsAttachedSession(t *testing.T) {
 		t.Fatalf("join must not grant a renderer, renderer_id=%v", rendererID)
 	}
 
-	stale := httptest.NewRecorder()
-	s.discordJoin(stale, authedJSON(u, http.MethodPost, "/api/v1/me/discord/join", map[string]any{"expected_binding_revision": 99}))
-	if stale.Code != 409 {
-		t.Fatalf("stale bind %d %s", stale.Code, stale.Body.String())
+	// The bot bumps binding_revision on disconnects and unbinds, so a user who is in
+	// the channel must not be blocked by a revision their tab saw earlier.
+	if _, err := s.Play.UnbindDiscordRenderer(context.Background(), guild, 0, "", 0); err != nil {
+		t.Fatal(err)
 	}
-	if !bytes.Contains(stale.Body.Bytes(), []byte("bind_conflict")) {
-		t.Fatalf("want bind_conflict %s", stale.Body.String())
+	prevRev := int64(join["binding_revision"].(float64))
+	stale := httptest.NewRecorder()
+	s.discordJoin(stale, authedJSON(u, http.MethodPost, "/api/v1/me/discord/join", map[string]any{"expected_binding_revision": prevRev}))
+	if stale.Code != 200 {
+		t.Fatalf("stale revision should still join, got %d %s", stale.Code, stale.Body.String())
+	}
+	rejoin := decodeMap(t, stale)
+	if rejoin["session_id"].(string) != sid {
+		t.Fatalf("rejoin bound %v, want %s", rejoin["session_id"], sid)
+	}
+	if got := int64(rejoin["binding_revision"].(float64)); got <= prevRev {
+		t.Fatalf("rejoin revision %d, want above %d", got, prevRev)
 	}
 }
 

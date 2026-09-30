@@ -175,8 +175,8 @@ func TestMigrateUpEmpty(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `SELECT version FROM schema_migrations`).Scan(&v); err != nil {
 		t.Fatal(err)
 	}
-	if v != 25 {
-		t.Fatalf("version %d", v)
+	if int64(v) != migrations.Head() {
+		t.Fatalf("version %d, want head %d", v, migrations.Head())
 	}
 }
 
@@ -352,5 +352,47 @@ func TestUpgrade0022MediaHoldsThen0023Logs(t *testing.T) {
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.tables WHERE table_name='operational_logs'`).Scan(&n); err != nil || n != 1 {
 		t.Fatalf("operational_logs %v %d", err, n)
+	}
+}
+
+func TestUpgrade0026DiscordRegistrationGuilds(t *testing.T) {
+	dsn := testDSN(t)
+	pool := openPool(t, dsn)
+	defer pool.Close()
+	resetDB(t, pool)
+	m := migrator(t, dsn)
+	if err := m.Migrate(25); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate to 25: %v", err)
+	}
+	ctx := context.Background()
+	// Legacy shape: role check on with the server switch off still meant "must be in the server".
+	if _, err := pool.Exec(ctx, `
+		UPDATE discord_settings SET registration_guild_enabled=false, registration_guild_id=' 111 ',
+			registration_role_enabled=true, registration_role_id='222' WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Migrate(26); err != nil {
+		t.Fatalf("migrate to 26: %v", err)
+	}
+	var enabled bool
+	if err := pool.QueryRow(ctx, `SELECT registration_guild_enabled FROM discord_settings WHERE id=1`).Scan(&enabled); err != nil {
+		t.Fatal(err)
+	}
+	if !enabled {
+		t.Fatal("whitelist switch should be on after migrating a role-only config")
+	}
+	var guildID string
+	var roles []string
+	if err := pool.QueryRow(ctx, `SELECT guild_id, role_ids FROM discord_registration_guilds`).Scan(&guildID, &roles); err != nil {
+		t.Fatal(err)
+	}
+	if guildID != "111" || len(roles) != 1 || roles[0] != "222" {
+		t.Fatalf("got guild %q roles %v", guildID, roles)
+	}
+	if err := m.Migrate(25); err != nil {
+		t.Fatalf("down to 25: %v", err)
+	}
+	if err := m.Migrate(26); err != nil {
+		t.Fatalf("up to 26 again: %v", err)
 	}
 }
