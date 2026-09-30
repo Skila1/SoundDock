@@ -5,8 +5,15 @@ import type { QueueSnapshot } from "@/stores/sessionReducer";
 /** Same-origin EventSource paths. W3-http may register either. */
 export const QUEUE_SSE_PATHS = ["/api/v1/me/queue/sse", "/api/v1/me/queue/events"] as const;
 
-/** Client presence ping. Independent of SSE `: ping` comments. */
+/** Client presence ping. Independent of the server's SSE `ping` event. */
 export const HEARTBEAT_INTERVAL_MS = 15_000;
+
+/**
+ * The server sends a named `ping` every 15s. A stream that stays silent past this
+ * was dropped by a proxy, sleep or network change without an error event, so
+ * reconnect and resync instead of showing stale state until a manual refresh.
+ */
+export const STREAM_STALE_MS = 45_000;
 
 export type PresenceSource = "web" | "discord" | "both";
 
@@ -246,6 +253,27 @@ export function createQueueSseClient(handlers: QueueSseHandlers): QueueSseClient
   let heartbeatTimer: number | undefined;
   let backoffMs = 0;
   let started = false;
+  let lastEventAt = 0;
+  let watchdogTimer: number | undefined;
+
+  function markAlive() {
+    lastEventAt = Date.now();
+  }
+
+  function stopWatchdog() {
+    if (watchdogTimer !== undefined) {
+      window.clearInterval(watchdogTimer);
+      watchdogTimer = undefined;
+    }
+  }
+
+  function startWatchdog() {
+    stopWatchdog();
+    watchdogTimer = window.setInterval(() => {
+      if (stopped || !opened) return;
+      if (Date.now() - lastEventAt > STREAM_STALE_MS) void resyncAndSubscribe();
+    }, 5_000);
+  }
 
   function clearReconnect() {
     if (reconnectTimer !== undefined) {
@@ -304,7 +332,10 @@ export function createQueueSseClient(handlers: QueueSseHandlers): QueueSseClient
   }
 
   function bindEvent(source: EventSource, name: string, fn: (ev: MessageEvent) => void) {
-    source.addEventListener(name, fn as EventListener);
+    source.addEventListener(name, ((ev: MessageEvent) => {
+      markAlive();
+      fn(ev);
+    }) as EventListener);
   }
 
   function connect() {
@@ -325,6 +356,7 @@ export function createQueueSseClient(handlers: QueueSseHandlers): QueueSseClient
     source.onopen = () => {
       opened = true;
       backoffMs = 0;
+      markAlive();
     };
 
     bindEvent(source, "session.state", (ev) => {
@@ -355,7 +387,7 @@ export function createQueueSseClient(handlers: QueueSseHandlers): QueueSseClient
       const data = parseJson(ev.data);
       if (isRecord(data)) handlers.onJobProgress?.(data as JobProgressEvent);
     });
-    // Named ping if the server uses it; comment `: ping` is not visible to EventSource.
+    // Keepalive only; bindEvent already marked the stream alive.
     bindEvent(source, "ping", () => undefined);
 
     source.onerror = () => {
@@ -395,8 +427,14 @@ export function createQueueSseClient(handlers: QueueSseHandlers): QueueSseClient
     if (stopped) return;
     if (document.visibilityState === "visible") {
       void postHeartbeat();
-      if (!es || es.readyState === EventSource.CLOSED) void resyncAndSubscribe();
+      // A backgrounded tab can miss events without the stream closing; resync
+      // whenever it is closed or has gone quiet.
+      if (!es || es.readyState === EventSource.CLOSED || Date.now() - lastEventAt > STREAM_STALE_MS) void resyncAndSubscribe();
     }
+  }
+
+  function onOnline() {
+    if (!stopped) void resyncAndSubscribe();
   }
 
   function start(opts?: { resync?: boolean }) {
@@ -405,8 +443,10 @@ export function createQueueSseClient(handlers: QueueSseHandlers): QueueSseClient
       started = true;
       document.addEventListener("visibilitychange", onVisibility);
       window.addEventListener("pagehide", onPageHide);
+      window.addEventListener("online", onOnline);
     }
     startHeartbeat();
+    startWatchdog();
     if (es && (es.readyState === EventSource.OPEN || es.readyState === EventSource.CONNECTING)) return;
     if (opts?.resync === false) {
       connect();
@@ -425,11 +465,13 @@ export function createQueueSseClient(handlers: QueueSseHandlers): QueueSseClient
     opened = false;
     clearReconnect();
     stopHeartbeat();
+    stopWatchdog();
     closeEs();
     if (started) {
       started = false;
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("online", onOnline);
     }
   }
 

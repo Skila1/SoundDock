@@ -1,9 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { Download, Heart, ListPlus, Pencil, Play, SkipForward } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { api } from "@/lib/api";
 import { Artwork } from "@/components/media/Artwork";
+import { CoverEditor } from "@/components/media/CoverEditor";
+import { hasPerm } from "@/lib/perms";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
@@ -14,7 +16,7 @@ import { artworkUrl, formatDuration, formatBytes } from "@/lib/utils";
 import { usePlayer } from "@/stores/player";
 import type { Favourite, Track, User } from "@/types/api";
 import { toast } from "sonner";
-import { callWriteBack, downloadTrack, saveTrackMeta, uploadArtwork } from "@/components/media/TrackList";
+import { callWriteBack, downloadTrack, saveTrackMeta } from "@/components/media/TrackList";
 import { refreshCatalogue } from "@/lib/catalogue";
 
 export type TrackMeta = Track & {
@@ -55,7 +57,6 @@ export function TrackPage() {
   const qc = useQueryClient();
   const play = usePlayer((s) => s.playTracks);
   const add = usePlayer((s) => s.add);
-  const fileRef = useRef<HTMLInputElement>(null);
   const q = useQuery({ queryKey: ["track-meta", id], queryFn: () => loadTrack(id!), enabled: !!id });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const favs = useQuery({ queryKey: ["favourites"], queryFn: () => api.get<Favourite[]>("/api/v1/favourites") });
@@ -64,6 +65,7 @@ export function TrackPage() {
   if (!t) return <div className="h-64 animate-pulse rounded-xl bg-surface-2" />;
   const fav = !!t.favourite || !!(favs.data || []).some((f) => f.type === "track" && f.id === t.id);
   const admin = !!me.data?.is_admin;
+  const canEditCover = admin || hasPerm(me.data, "library.upload");
   const artist = t.artists?.map((a) => a.name).join(", ") || t.artist || "";
   const hires = (t.bit_depth || 0) >= 24 && (t.sample_rate || 0) >= 48000;
 
@@ -77,27 +79,9 @@ export function TrackPage() {
   return (
     <div>
       <div className="mb-8 flex flex-col gap-6 md:flex-row">
-        <button type="button" className="h-52 w-52 overflow-hidden rounded-xl shadow-card" onClick={() => admin && fileRef.current?.click()} aria-label="Track artwork">
+        <CoverEditor kind="track" id={t.id} canEdit={canEditCover} className="h-52 w-52 overflow-hidden rounded-xl shadow-card">
           <Artwork src={artworkUrl("track", t.id, "page")} id={t.id} name={t.title} kind="track" />
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (!file || !id) return;
-            try {
-              await uploadArtwork("track", id, file);
-              toast.success("Artwork saved");
-              qc.invalidateQueries({ queryKey: ["track-meta", id] });
-            } catch {
-              toast.error("Artwork upload is not available yet");
-            }
-          }}
-        />
+        </CoverEditor>
         <div className="flex flex-col justify-end">
           <p className="text-xs uppercase tracking-widest text-subtle">Track</p>
           <h1 className="text-4xl font-semibold md:text-5xl">{t.title}</h1>

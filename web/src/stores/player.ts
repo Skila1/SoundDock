@@ -22,6 +22,7 @@ import {
 import { useUi } from "@/stores/ui";
 import { usePrefs } from "@/stores/prefs";
 import { createCommandClient, newCommandId } from "@/stores/commandClient";
+import { useArtworkVersion } from "@/stores/artwork";
 import { attachMediaRemote, bindMediaSession, updateMediaPosition } from "@/stores/mediaSession";
 import { interpolatePosition, parseTimeMs, sampleClock, type ClockSample } from "@/stores/playhead";
 import {
@@ -119,6 +120,8 @@ export type PendingUndo = {
 type ListenScratch = { id: string; counted: boolean; skipped: boolean };
 
 let seeking = false;
+/** Only the latest seek may clear `seeking`; an older one finishing late must not. */
+let seekSeq = 0;
 let persistPosAt = 0;
 let listen: ListenScratch | null = null;
 let xfTimer: number | undefined;
@@ -139,7 +142,16 @@ let session: SessionView = initialSession();
 let lastClock: ClockSample | null = null;
 let queueSse: QueueSseClient | null = null;
 
-const commands = createCommandClient((body) => api.post<PlayerQueue>("/api/v1/me/queue/control", body));
+/** A control that has not answered by now is treated as failed so seek/skip state cannot wedge. */
+const CONTROL_TIMEOUT_MS = 10_000;
+
+const commands = createCommandClient((body) => {
+  const ctl = new AbortController();
+  const timer = window.setTimeout(() => ctl.abort(), CONTROL_TIMEOUT_MS);
+  return api
+    .post<PlayerQueue>("/api/v1/me/queue/control", body, { signal: ctl.signal })
+    .finally(() => window.clearTimeout(timer));
+});
 
 function enqueueQueueOp<T>(fn: () => Promise<T>): Promise<T> {
   const next = queueGate.then(fn, fn);
@@ -629,6 +641,10 @@ function ensureQueueSse(): QueueSseClient {
     },
     onInvalidate: (event) => {
       for (const key of event.keys || []) {
+        if (key === "artwork") {
+          useArtworkVersion.getState().bump();
+          continue;
+        }
         void queryClient.invalidateQueries({ queryKey: [key] });
       }
     },
@@ -1296,6 +1312,12 @@ export const usePlayer = create<PlayerStore>()(
       seek: (ms) => {
         const positionMs = Math.max(0, Math.round(ms));
         seeking = true;
+        const seekToken = ++seekSeq;
+        // Failsafe: live playhead updates are paused while seeking, so never let
+        // the flag outlive the request (or a request that never settles).
+        window.setTimeout(() => {
+          if (seekSeq === seekToken) seeking = false;
+        }, CONTROL_TIMEOUT_MS + 1_000);
         clearCrossfadeTimer();
         if (!usingDiscord()) seekActive(positionMs);
         applyLocalSeek(positionMs);
@@ -1307,6 +1329,7 @@ export const usePlayer = create<PlayerStore>()(
           .control("seek", { position_ms: positionMs })
           .catch(() => undefined)
           .finally(() => {
+            if (seekSeq !== seekToken) return;
             seeking = false;
             set({ position: interpolatedNow() });
             publishMediaPosition();

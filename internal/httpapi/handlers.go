@@ -471,6 +471,13 @@ func (s *Server) serveArtwork(w http.ResponseWriter, r *http.Request, ownerType 
 }
 
 func (s *Server) writeArtwork(w http.ResponseWriter, r *http.Request, ownerType string, ownerID uuid.UUID) bool {
+	return s.writeArtworkFrom(w, r, ownerType, ownerID, false)
+}
+
+// writeArtworkFrom serves the owner's cover. A user upload always wins over
+// embedded or fetched art, so a later rescan cannot silently replace it.
+// userOnly limits the lookup to uploads.
+func (s *Server) writeArtworkFrom(w http.ResponseWriter, r *http.Request, ownerType string, ownerID uuid.UUID, userOnly bool) bool {
 	if s.Art == nil || ownerID == uuid.Nil {
 		return false
 	}
@@ -482,8 +489,8 @@ func (s *Server) writeArtwork(w http.ResponseWriter, r *http.Request, ownerType 
 	err := s.Pool.QueryRow(r.Context(), `
 		SELECT coalesce(d.storage_key, a.storage_key) FROM artwork_assets a
 		LEFT JOIN artwork_derivatives d ON d.artwork_id=a.id AND d.size_name=$3
-		WHERE a.owner_type=$1 AND a.owner_id=$2
-		ORDER BY a.created_at DESC LIMIT 1`, ownerType, ownerID, size).Scan(&key)
+		WHERE a.owner_type=$1 AND a.owner_id=$2 AND (NOT $4 OR a.source='user')
+		ORDER BY (a.source='user') DESC, a.created_at DESC LIMIT 1`, ownerType, ownerID, size, userOnly).Scan(&key)
 	if err != nil {
 		return false
 	}
@@ -509,6 +516,13 @@ func (s *Server) trackArtwork(w http.ResponseWriter, r *http.Request) {
 		SELECT album_id, coalesce(acquisition,''), coalesce(acquisition_ref,'')
 		FROM tracks WHERE id=$1`, id).Scan(&albumID, &acq, &acqRef); err != nil {
 		http.NotFound(w, r)
+		return
+	}
+	// A cover someone uploaded for the album beats art embedded in one file.
+	if s.writeArtworkFrom(w, r, "track", id, true) {
+		return
+	}
+	if albumID != nil && s.writeArtworkFrom(w, r, "album", *albumID, true) {
 		return
 	}
 	if s.writeArtwork(w, r, "track", id) {

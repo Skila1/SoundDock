@@ -1,11 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { Heart, Pencil, Play, Shuffle } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { api } from "@/lib/api";
 import { Artwork } from "@/components/media/Artwork";
+import { CoverEditor } from "@/components/media/CoverEditor";
+import { hasPerm } from "@/lib/perms";
 import { MediaCard } from "@/components/media/MediaCard";
-import { TrackList, uploadArtwork } from "@/components/media/TrackList";
+import { TrackList } from "@/components/media/TrackList";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
@@ -20,7 +22,6 @@ export function ArtistPage() {
   const qc = useQueryClient();
   const play = usePlayer((s) => s.playTracks);
   const add = usePlayer((s) => s.add);
-  const fileRef = useRef<HTMLInputElement>(null);
   const q = useQuery({ queryKey: ["artist", id], queryFn: () => api.get<Artist>(`/api/v1/artists/${id}`) });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const favs = useQuery({ queryKey: ["favourites"], queryFn: () => api.get<Favourite[]>("/api/v1/favourites") });
@@ -32,6 +33,7 @@ export function ArtistPage() {
   const ids = (a.tracks || []).map((t) => t.id);
   const fav = !!(favs.data || []).some((f) => f.type === "artist" && f.id === a.id);
   const admin = !!me.data?.is_admin;
+  const canEditCover = admin || hasPerm(me.data, "library.upload");
 
   const toggleFav = async () => {
     await api.post("/api/v1/favourites", { type: "artist", id: a.id, on: !fav });
@@ -42,27 +44,9 @@ export function ArtistPage() {
   return (
     <div>
       <div className="mb-8 flex flex-col gap-6 md:flex-row md:items-end">
-        <button type="button" className="h-40 w-40 overflow-hidden rounded-full shadow-card md:h-52 md:w-52" onClick={() => admin && fileRef.current?.click()} aria-label="Artist image">
+        <CoverEditor kind="artist" id={a.id} canEdit={canEditCover} className="h-40 w-40 rounded-full shadow-card md:h-52 md:w-52">
           <Artwork src={artworkUrl("artist", a.id, "page")} id={a.id} name={a.name} kind="artist" />
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (!file || !id) return;
-            try {
-              await uploadArtwork("artist", id, file);
-              toast.success("Artist image saved");
-              qc.invalidateQueries({ queryKey: ["artist", id] });
-            } catch {
-              toast.error("Image upload is not available yet");
-            }
-          }}
-        />
+        </CoverEditor>
         <div>
           <p className="text-xs uppercase tracking-widest text-subtle">Artist</p>
           <h1 className="text-4xl font-semibold md:text-6xl">{a.name}</h1>

@@ -57,8 +57,9 @@ async function csrfHeaders(headers?: HeadersInit) {
 
 export const api = {
   get: <T = any>(p: string, init?: Pick<RequestInit, "signal">) => fetch(p, { credentials: "include", ...init }).then((r) => parse(r, p)) as Promise<T>,
-  post: async <T = any>(p: string, body?: unknown) =>
+  post: async <T = any>(p: string, body?: unknown, init?: Pick<RequestInit, "signal">) =>
     fetch(p, {
+      ...init,
       method: "POST",
       credentials: "include",
       headers: await csrfHeaders(body instanceof FormData || body instanceof Blob ? undefined : { "Content-Type": "application/json" }),

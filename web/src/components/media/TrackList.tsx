@@ -12,7 +12,7 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/misc";
-import { formatDuration, artworkUrl, cn } from "@/lib/utils";
+import { formatDuration, artworkUrl, cn, isLibraryTrackId } from "@/lib/utils";
 import { patchTracksInCaches, refreshCatalogue, removeTracksFromCaches } from "@/lib/catalogue";
 import { api } from "@/lib/api";
 import type { Favourite, Playlist, Track, User } from "@/types/api";
@@ -85,6 +85,8 @@ export async function uploadArtwork(kind: "track" | "album" | "artist", id: stri
   await api.post(`/api/v1/${kind}s/${id}/artwork`, fd);
 }
 
+const songCount = (n: number) => (n === 1 ? "1 song" : `${n} songs`);
+
 export function TrackList({
   tracks,
   onPlay,
@@ -125,6 +127,7 @@ export function TrackList({
   const [bulkWriteBack, setBulkWriteBack] = useState(false);
   const [delOpen, setDelOpen] = useState(false);
   const [delFiles, setDelFiles] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   const favs = useQuery({ queryKey: ["favourites"], queryFn: () => api.get<Favourite[]>("/api/v1/favourites") });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
@@ -152,6 +155,31 @@ export function TrackList({
   }, [selected, onSelectionChange]);
 
   const targetIds = (t: Track) => (selected.has(t.id) && selected.size > 1 ? [...selected] : [t.id]);
+
+  // Only real catalogue tracks can be deleted; YouTube search hits have no row yet.
+  const deletableIds = (ids: Iterable<string>) => [...ids].filter((id) => isLibraryTrackId(id));
+
+  const toggleOne = (t: Track, i: number) => {
+    anchor.current = i;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(t.id)) next.delete(t.id);
+      else next.add(t.id);
+      return next;
+    });
+  };
+
+  const allSelected = tracks.length > 0 && tracks.every((t) => selected.has(t.id));
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(tracks.map((t) => t.id)));
+
+  useEffect(() => {
+    if (!selected.size) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setSelected(new Set());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected.size]);
 
   const doFav = async (t: Track) => {
     if (t.source === "youtube") {
@@ -248,7 +276,7 @@ export function TrackList({
           onDragStart={(e) => onDragStart(e, t)}
           className={cn(
             "group grid cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface-2",
-            showAlbum ? "grid-cols-[32px_minmax(0,1fr)_auto_auto] md:grid-cols-[32px_minmax(0,1fr)_minmax(0,1fr)_auto_auto]" : "grid-cols-[32px_minmax(0,1fr)_auto_auto]",
+            showAlbum ? "grid-cols-[20px_32px_minmax(0,1fr)_auto_auto] md:grid-cols-[20px_32px_minmax(0,1fr)_minmax(0,1fr)_auto_auto]" : "grid-cols-[20px_32px_minmax(0,1fr)_auto_auto]",
             currentId === t.id && "text-accent",
             selected.has(t.id) && "bg-surface-2"
           )}
@@ -261,6 +289,17 @@ export function TrackList({
             onPlay(i);
           }}
         >
+          <input
+            type="checkbox"
+            aria-label={`Select ${t.title}`}
+            className={cn(
+              "h-4 w-4 cursor-pointer accent-accent transition-opacity",
+              selected.size ? "opacity-100" : "opacity-100 md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100"
+            )}
+            checked={selected.has(t.id)}
+            onClick={stopRow}
+            onChange={() => toggleOne(t, i)}
+          />
           <div className="relative text-center text-xs text-subtle">
             <span className="pointer-events-none group-hover:invisible">{t.track_number || i + 1}</span>
             <button
@@ -416,9 +455,21 @@ export function TrackList({
 
   return (
     <div>
-      {selected.size > 1 && (
-        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-sm">
-          <span className="text-muted">{selected.size} selected</span>
+      {tracks.length > 1 && !selected.size && (
+        <label className="mb-1 flex w-fit cursor-pointer items-center gap-2 px-2 text-xs text-subtle hover:text-foreground">
+          <input type="checkbox" className="h-4 w-4 accent-accent" checked={false} onChange={toggleAll} />
+          Select all {tracks.length}
+        </label>
+      )}
+      {selected.size > 0 && (
+        <div className="sticky top-0 z-10 mb-2 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-sm shadow-card">
+          <label className="flex cursor-pointer items-center gap-2">
+            <input type="checkbox" className="h-4 w-4 accent-accent" checked={allSelected} onChange={toggleAll} aria-label="Select all" />
+            <span className="text-muted">{selected.size} selected</span>
+          </label>
+          {!allSelected && (
+            <Button size="sm" variant="ghost" onClick={toggleAll}>Select all {tracks.length}</Button>
+          )}
           <Button size="sm" variant="secondary" onClick={() => { setPendingIds([...selected]); setPlOpen(true); }}>
             Add to playlist
           </Button>
@@ -433,8 +484,8 @@ export function TrackList({
               <Button size="sm" variant="secondary" onClick={() => setBulkOpen(true)}>
                 Edit metadata
               </Button>
-              <Button size="sm" variant="destructive" onClick={() => setDelOpen(true)}>
-                Delete selected
+              <Button size="sm" variant="destructive" disabled={!deletableIds(selected).length} onClick={() => setDelOpen(true)}>
+                Delete {songCount(deletableIds(selected).length)}
               </Button>
             </>
           )}
@@ -491,9 +542,9 @@ export function TrackList({
         </DialogContent>
       </Dialog>
       <Dialog open={delOpen} onOpenChange={setDelOpen}>
-        <DialogContent title={`Remove ${selected.size} tracks`}>
+        <DialogContent title={`Delete ${songCount(deletableIds(selected).length)}`}>
           <div className="space-y-3">
-            <p className="text-sm text-muted">This removes them from SoundDock. NAS, local, and external source files are not deleted.</p>
+            <p className="text-sm text-muted">This removes them from SoundDock for everyone, including playlists and personal libraries. NAS, local, and external source files are not deleted.</p>
             <label className="flex items-center justify-between gap-3 text-sm">
               Also delete SoundDock-managed files
               <Switch checked={delFiles} onCheckedChange={setDelFiles} />
@@ -503,21 +554,28 @@ export function TrackList({
               <Button
                 type="button"
                 variant="destructive"
+                disabled={deleting}
                 onClick={async () => {
-                  const ids = [...selected];
+                  const ids = deletableIds(selected);
+                  if (!ids.length) return;
+                  setDeleting(true);
                   try {
-                    await api.post("/api/v1/tracks/bulk", { ids, delete: true, delete_files: delFiles });
+                    const res = await api.post<{ deleted?: number; skipped?: unknown[] }>("/api/v1/tracks/bulk", { ids, delete: true, delete_files: delFiles });
+                    const deleted = res?.deleted ?? ids.length;
+                    const skipped = Array.isArray(res?.skipped) ? res.skipped.length : 0;
                     removeTracksFromCaches(qc, ids);
-                    toast.success(ids.length === 1 ? "Removed" : `Removed ${ids.length} tracks`);
+                    toast.success(`Deleted ${songCount(deleted)}` + (skipped ? `. ${skipped} could not be deleted (in use or locked).` : ""));
                     setDelOpen(false);
                     setSelected(new Set());
                     refreshCatalogue(qc);
-                  } catch {
-                    toast.error("Could not remove tracks");
+                  } catch (err) {
+                    toast.error(err instanceof Error ? `Could not delete: ${err.message}` : "Could not delete songs");
+                  } finally {
+                    setDeleting(false);
                   }
                 }}
               >
-                Remove
+                {deleting ? "Deleting…" : "Delete"}
               </Button>
             </div>
           </div>

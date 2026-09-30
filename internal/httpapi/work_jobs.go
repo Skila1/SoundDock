@@ -174,14 +174,48 @@ func (s *Server) deleteTrackIDs(ctx context.Context, ids []uuid.UUID, all bool, 
 	if deleteFiles {
 		files = s.collectManagedFiles(ctx, ids)
 	}
+	albums, artists := s.trackParents(ctx, ids)
 	tag, err := s.Pool.Exec(ctx, `DELETE FROM tracks WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return 0, skipped, err
 	}
+	s.pruneEmptyParents(ctx, albums, artists)
 	if deleteFiles {
 		s.deleteManagedFiles(ctx, files)
 	}
 	return tag.RowsAffected(), skipped, nil
+}
+
+// trackParents returns the albums and artists the given tracks belong to, so
+// they can be pruned once the tracks are gone.
+func (s *Server) trackParents(ctx context.Context, ids []uuid.UUID) (albums, artists []uuid.UUID) {
+	_ = s.Pool.QueryRow(ctx, `
+		SELECT coalesce(array_agg(DISTINCT album_id) FILTER (WHERE album_id IS NOT NULL), '{}')
+		FROM tracks WHERE id = ANY($1)`, ids).Scan(&albums)
+	_ = s.Pool.QueryRow(ctx, `
+		SELECT coalesce(array_agg(DISTINCT artist_id), '{}') FROM (
+			SELECT artist_id FROM track_artists WHERE track_id = ANY($1)
+			UNION
+			SELECT aa.artist_id FROM album_artists aa JOIN tracks t ON t.album_id = aa.album_id WHERE t.id = ANY($1)
+		) x`, ids).Scan(&artists)
+	return albums, artists
+}
+
+// pruneEmptyParents removes albums and artists that deleting tracks left with
+// nothing in them, so they stop showing up as empty entries. Only the parents
+// of the deleted tracks are considered.
+func (s *Server) pruneEmptyParents(ctx context.Context, albums, artists []uuid.UUID) {
+	if len(albums) > 0 {
+		_, _ = s.Pool.Exec(ctx, `
+			DELETE FROM albums a WHERE a.id = ANY($1)
+			  AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.album_id = a.id)`, albums)
+	}
+	if len(artists) > 0 {
+		_, _ = s.Pool.Exec(ctx, `
+			DELETE FROM artists ar WHERE ar.id = ANY($1)
+			  AND NOT EXISTS (SELECT 1 FROM track_artists ta WHERE ta.artist_id = ar.id)
+			  AND NOT EXISTS (SELECT 1 FROM album_artists aa WHERE aa.artist_id = ar.id)`, artists)
+	}
 }
 
 func (s *Server) collectDeleteIDs(ctx context.Context, lib uuid.UUID) ([]uuid.UUID, error) {

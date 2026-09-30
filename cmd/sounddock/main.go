@@ -96,6 +96,9 @@ func main() {
 	auth.SyncDiscordEnv(ctx, pool, box, os.Getenv("SD_DISCORD_CLIENT_ID"), os.Getenv("SD_DISCORD_CLIENT_SECRET"), os.Getenv("SD_DISCORD_BOT_TOKEN"))
 
 	runner := jobs.New(pool, log)
+	runner.OnCompleted = func(ctx context.Context, job jobs.Job) {
+		playback.NotifyLibrary(ctx, pool, playback.JobInvalidateKeys(job.Type))
+	}
 	art := artwork.New(pool, cfg.CacheDir)
 	hooks := webhooks.New(pool, box, log)
 	sc := scan.New(pool, art, log, hooks)

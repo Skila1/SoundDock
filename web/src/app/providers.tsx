@@ -7,7 +7,9 @@ import { useTheme } from "@/stores/theme";
 import { PrefsSync } from "@/stores/prefs";
 
 export const queryClient = new QueryClient({
-  defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: false } }
+  // Returning to the tab refetches anything older than staleTime, so changes made
+  // elsewhere show up without a manual reload.
+  defaultOptions: { queries: { staleTime: 30_000, retry: 1, refetchOnWindowFocus: true } }
 });
 
 export function Providers({ children }: { children: ReactNode }) {

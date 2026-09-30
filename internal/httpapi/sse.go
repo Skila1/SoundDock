@@ -440,6 +440,7 @@ func sessionStatePayload(q map[string]any) map[string]any {
 			out[k] = v
 		}
 	}
+	out["server_time"] = serverTimeNow()
 	return out
 }
 
@@ -455,6 +456,7 @@ func sessionPlayheadPayload(q map[string]any) map[string]any {
 		"playhead_sequence":      q["playhead_sequence"],
 		"playback_rate":          q["playback_rate"],
 		"duration_ms":            q["duration_ms"],
+		"server_time":            serverTimeNow(),
 	}
 }
 
@@ -690,6 +692,15 @@ func (s *Server) queueSSE(w http.ResponseWriter, r *http.Request) {
 		h.publishPresence(sid)
 	}
 
+	// Send current state right away: anything that changed between the client's
+	// snapshot GET and this subscribe would otherwise be lost until the next change.
+	if s.Play != nil {
+		if q, err := s.Play.Get(r.Context(), sid); err == nil && q != nil {
+			s.attachQueueMediaState(r.Context(), q)
+			writeSSEJSON(w, sseEventState, sessionStatePayload(q))
+			writeSSEJSON(w, sseEventPlayhead, sessionPlayheadPayload(q))
+		}
+	}
 	writeSSEJSON(w, sseEventPresence, map[string]any{"listeners": s.snapshotListeners(r, sid)})
 	writeSSEJSON(w, sseEventAcquisition, emptyAcquisitionStatus)
 
@@ -701,7 +712,9 @@ func (s *Server) queueSSE(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-ping.C:
 			h.expireAndPublish(nowFn())
-			writeSSEComment(w, "ping")
+			// A named event (not a comment) so the browser can tell a live stream
+			// from one a proxy silently dropped.
+			writeSSEJSON(w, "ping", map[string]any{"server_time": serverTimeNow()})
 		case ev, ok := <-sub.ch:
 			if !ok {
 				return

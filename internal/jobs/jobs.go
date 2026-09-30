@@ -67,6 +67,9 @@ type Runner struct {
 	started  atomic.Bool
 	mu       sync.RWMutex
 	runtimes map[ID]*poolRuntime
+
+	// OnCompleted runs after a job is marked completed. Set it before Start.
+	OnCompleted func(ctx context.Context, job Job)
 }
 
 func New(pool *pgxpool.Pool, log *slog.Logger) *Runner {
@@ -641,9 +644,12 @@ wait:
 		}
 	}
 	if err == nil {
-		_, _ = r.db.Exec(parent, `
+		tag, _ := r.db.Exec(parent, `
 			UPDATE jobs SET status='completed', progress=100, finished_at=now(), locked_until=NULL, updated_at=now()
 			WHERE id=$1 AND status='running'`, job.ID)
+		if r.OnCompleted != nil && tag.RowsAffected() > 0 {
+			r.OnCompleted(parent, job)
+		}
 		return
 	}
 	if errors.Is(err, ErrCancelled) || errors.Is(err, context.Canceled) {

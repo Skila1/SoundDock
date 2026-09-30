@@ -19,6 +19,23 @@ import (
 type requesterCtxKey struct{}
 type originCtxKey struct{}
 
+type skipLibraryCtxKey struct{}
+
+// withBulkQueue marks queue inserts that come from playing or adding a whole
+// album, playlist or station. Those are not explicit song requests and must not
+// land in the requester's personal library.
+func withBulkQueue(ctx context.Context, n int) context.Context {
+	if n <= 1 {
+		return ctx
+	}
+	return context.WithValue(ctx, skipLibraryCtxKey{}, true)
+}
+
+func bulkQueue(ctx context.Context) bool {
+	v, _ := ctx.Value(skipLibraryCtxKey{}).(bool)
+	return v
+}
+
 // Requester is the user (and optional Discord id) attributed on queue INSERTs.
 type Requester struct {
 	UserID        uuid.UUID
@@ -84,6 +101,9 @@ func insertQueueTrack(ctx context.Context, tx db, sid uuid.UUID, position int, t
 	did := ""
 	if s, ok := discordID.(string); ok {
 		did = s
+	}
+	if bulkQueue(ctx) {
+		return nil
 	}
 	return minilib.Record(ctx, tx, origin, uid, did, []uuid.UUID{trackID})
 }
@@ -300,8 +320,9 @@ func replaceQueueTx(ctx context.Context, tx db, sid uuid.UUID, tracks []uuid.UUI
 	if _, err := tx.Exec(ctx, `DELETE FROM playback_queue_items WHERE session_id=$1`, sid); err != nil {
 		return err
 	}
+	ictx := withBulkQueue(ctx, len(tracks))
 	for i, t := range tracks {
-		if err := insertQueueTrack(ctx, tx, sid, i, t); err != nil {
+		if err := insertQueueTrack(ictx, tx, sid, i, t); err != nil {
 			return err
 		}
 	}
@@ -363,6 +384,7 @@ func addTracksTx(ctx context.Context, tx db, sid uuid.UUID, tracks []uuid.UUID, 
 	if len(tracks) == 0 {
 		return nil
 	}
+	ctx = withBulkQueue(ctx, len(tracks))
 	if next {
 		var cur int
 		if err := tx.QueryRow(ctx, `SELECT current_index FROM playback_sessions WHERE id=$1`, sid).Scan(&cur); err != nil {

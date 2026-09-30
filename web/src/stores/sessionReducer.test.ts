@@ -233,3 +233,32 @@ describe("output switch helpers", () => {
     expect(shouldStopHtmlAudio(view.queue, "tab-a")).toBe(true);
   });
 });
+
+describe("state events from another process", () => {
+  it("accepts the new track's first playhead after a state-only track change", () => {
+    const now = 1_000_000;
+    const playing = applySnapshot(
+      initialSession(),
+      snap({ playback_instance_id: "i1", playhead_sequence: 40, duration_ms: 200_000, position_ms: 170_000, checkpoint_at: new Date(now - 1_000).toISOString(), status: "playing", state_revision: 5 }),
+      { nowMs: now }
+    );
+    expect(playing.playhead.positionMs).toBeGreaterThan(170_000);
+
+    // session.state from a Discord skip: new instance, no playhead fields.
+    const state = { ...snap({ playback_instance_id: "i2", status: "playing", state_revision: 6, current_track_id: "t2" }) } as Record<string, unknown>;
+    delete state.position_ms;
+    delete state.checkpoint_at;
+    delete state.playhead_sequence;
+    const afterState = applySnapshot(playing, state as QueueSnapshot, { nowMs: now + 100 });
+    expect(afterState.playhead.positionMs).toBeLessThan(1_000);
+
+    // The worker's first checkpoint for the new track has sequence 1.
+    const tick = applySnapshot(
+      afterState,
+      { playback_instance_id: "i2", playhead_sequence: 1, position_ms: 900, checkpoint_at: new Date(now + 1_000).toISOString(), status: "playing" } as QueueSnapshot,
+      { nowMs: now + 1_000, kind: "playhead" }
+    );
+    expect(tick.ignored).not.toBe("stale_playhead");
+    expect(tick.playhead.checkpointPositionMs).toBe(900);
+  });
+});

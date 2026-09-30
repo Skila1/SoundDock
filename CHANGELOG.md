@@ -2,6 +2,14 @@
 
 ## 0.1.0
 
+- The progress bar keeps up when playing through Discord. A track change from the Discord worker no longer leaves the bar on the previous track's position, and the new track's position updates are no longer discarded as stale for its first minute or so.
+- Live updates reach every web client across processes: skip, pause, seek, Discord bind and unbind, renderer switches and party changes all publish, and a newly connected tab gets current state immediately.
+- The web client reconnects a live stream that went quiet without an error (proxy, sleep, network change) and resyncs when the network comes back. Returning to the tab refetches stale data.
+- Uploads, imports, scans, YouTube fetches, metadata edits, deletes and playlist changes refresh open pages for everyone without a reload.
+- A seek that never gets an answer no longer freezes the progress bar. Playback controls time out after 10 seconds.
+- My Library only lists songs you picked yourself: a single song played or queued, Discord `/play` for one song, or a YouTube request. Playing or queueing a whole album, playlist or radio station no longer adds every song, and autoplay never does. Select songs to remove them, or clear My Library.
+- Album, artist and track pages have a Change cover button to upload your own image or go back to the embedded one. Anyone with write access to the library can change covers. An uploaded cover now wins over embedded art, including after a rescan and in track lists and the player, and new covers show without a reload.
+- Track lists have checkboxes and Select all. Administrators can bulk delete any selection, see how many songs were skipped, and delete a whole album from its page. Albums and artists left empty by a delete are removed.
 - The Discord registration whitelist accepts any number of servers, each with optional role IDs. A new Discord account may register if it is in any listed server and, when that server lists roles, holds at least one of them there. Existing single server and role settings migrate automatically (migration 0026).
 - Saving Discord sign-in settings no longer switches the Discord bot off.
 - Joining or playing on Discord no longer fails with `bind_conflict` after the bot disconnected, was kicked, or you last used a different server. A join you start replaces a stale voice binding.

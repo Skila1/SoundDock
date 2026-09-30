@@ -1,12 +1,13 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Library } from "lucide-react";
 import { api } from "@/lib/api";
 import { TrackList } from "@/components/media/TrackList";
 import { MediaCard } from "@/components/media/MediaCard";
 import { LayoutToggle } from "@/components/media/LayoutToggle";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { EmptyState, PageHeader, QueryError } from "@/components/ui/empty";
 import { Badge } from "@/components/ui/misc";
 import { usePlayer } from "@/stores/player";
@@ -19,6 +20,9 @@ export function PersonalLibraryPage({ mine, admin, adminDiscord }: { mine?: bool
   const play = usePlayer((s) => s.playTracks);
   const add = usePlayer((s) => s.add);
   const layout = useUi((s) => s.libraryLayout);
+  const qc = useQueryClient();
+  const [selected, setSelected] = useState<string[]>([]);
+  const [clearOpen, setClearOpen] = useState(false);
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const path = mine
     ? "/api/v1/me/library?limit=200"
@@ -43,13 +47,25 @@ export function PersonalLibraryPage({ mine, admin, adminDiscord }: { mine?: bool
     : q.data?.owner.display_name || profile.data?.display_name || "Personal library";
   const visibility = q.data?.owner.visibility || profile.data?.personal_library_visibility || "private";
 
+  const removeFromLibrary = async (body: { track_ids?: string[]; all?: boolean }) => {
+    try {
+      const res = await api.del<{ removed?: number }>("/api/v1/me/library", body);
+      const n = res?.removed ?? 0;
+      toast.success(n === 1 ? "Removed 1 song from My Library" : `Removed ${n} songs from My Library`);
+      setSelected([]);
+      void qc.invalidateQueries({ queryKey: ["personal-library"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not update My Library");
+    }
+  };
+
   return (
     <div>
       <PageHeader
         title={title}
         description={
           mine
-            ? "Songs you have requested in SoundDock or through Discord. The shared catalogue stays under Catalogue."
+            ? "Songs you picked yourself, in SoundDock or with /play in Discord. Playing a whole album, playlist or radio station does not add its songs. Select songs to remove them."
             : "Requested songs for this listener."
         }
         actions={
@@ -66,6 +82,16 @@ export function PersonalLibraryPage({ mine, admin, adminDiscord }: { mine?: bool
             {items.length > 0 && (
               <Button size="sm" variant="secondary" onClick={() => add(ids).then(() => toast.success("Queued library"))}>
                 Queue all
+              </Button>
+            )}
+            {mine && selected.length > 0 && (
+              <Button size="sm" variant="secondary" onClick={() => void removeFromLibrary({ track_ids: selected })}>
+                Remove {selected.length === 1 ? "1 song" : `${selected.length} songs`}
+              </Button>
+            )}
+            {mine && items.length > 0 && (
+              <Button size="sm" variant="ghost" onClick={() => setClearOpen(true)}>
+                Clear My Library
               </Button>
             )}
             <LayoutToggle />
@@ -117,8 +143,18 @@ export function PersonalLibraryPage({ mine, admin, adminDiscord }: { mine?: bool
           onPlay={(i) => play([ids[i]])}
           onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
           onNext={(t) => add([t.id], true).then(() => toast.success("Playing next"))}
+          onSelectionChange={mine ? setSelected : undefined}
         />
       )}
+      <ConfirmDialog
+        open={clearOpen}
+        onOpenChange={setClearOpen}
+        title="Clear My Library?"
+        description="This removes every song from your personal library. The songs stay in the shared catalogue and your playlists."
+        confirmLabel="Clear"
+        destructive
+        onConfirm={() => void removeFromLibrary({ all: true })}
+      />
       {mine && me.data && (
         <p className="mt-6 text-xs text-subtle">
           The shared catalogue is still at <Link className="underline" to="/library">Catalogue</Link>.

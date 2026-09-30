@@ -290,3 +290,20 @@ func LinkedUserID(ctx context.Context, db DB, discordID string) uuid.UUID {
 	_ = db.QueryRow(ctx, `SELECT user_id FROM user_identities WHERE provider='discord' AND provider_user_id=$1`, discordID).Scan(&id)
 	return id
 }
+
+// Remove deletes entries from one owner's personal library. With all set it
+// clears the library; otherwise only trackIDs are removed.
+func Remove(ctx context.Context, db DB, ownerID uuid.UUID, trackIDs []uuid.UUID, all bool) (int64, error) {
+	if db == nil || ownerID == uuid.Nil {
+		return 0, nil
+	}
+	if all {
+		tag, err := db.Exec(ctx, `DELETE FROM personal_library_entries WHERE owner_id=$1`, ownerID)
+		return tag.RowsAffected(), err
+	}
+	if len(trackIDs) == 0 {
+		return 0, nil
+	}
+	tag, err := db.Exec(ctx, `DELETE FROM personal_library_entries WHERE owner_id=$1 AND track_id = ANY($2)`, ownerID, trackIDs)
+	return tag.RowsAffected(), err
+}

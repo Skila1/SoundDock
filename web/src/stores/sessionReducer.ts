@@ -290,8 +290,13 @@ export function applySnapshot(view: SessionView, snap: QueueSnapshot, opts: Appl
     if (stalePlayhead) {
       if (!ignored) ignored = "stale_playhead";
     } else {
+      // A state event (no checkpoint fields) that starts a new track still carries
+      // the previous track's position in the merged queue. New instances always
+      // start at 0 on the server, so start there until a playhead event lands.
+      const stateOnlyNewTrack = instanceChanged && snap.position_ms == null && snap.checkpoint_at == null;
+      const base = stateApplied ? queue : { ...view.queue, ...snap, items: view.queue.items };
       const nextPlayhead = playheadFromSnap(
-        stateApplied ? queue : { ...view.queue, ...snap, items: view.queue.items },
+        stateOnlyNewTrack ? { ...base, position_ms: 0, checkpoint_at: new Date(nowMs - offsetMs).toISOString(), playhead_sequence: 0 } : base,
         offsetMs,
         nowMs,
         view.playhead
@@ -322,7 +327,10 @@ export function applySnapshot(view: SessionView, snap: QueueSnapshot, opts: Appl
         playhead = nextPlayhead;
         playheadApplied = true;
         if (instanceId != null) lastInstanceId = instanceId;
+        // Sequences restart at 1 for every new instance. Keeping the previous
+        // track's sequence would reject the new track's playhead events as stale.
         if (hasSeq) lastPlayheadSequence = seq;
+        else if (instanceChanged) lastPlayheadSequence = 0;
         if (!stateApplied) {
           queue = {
             ...queue,

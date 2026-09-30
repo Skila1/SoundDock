@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/sounddock/sounddock/internal/playback"
@@ -68,13 +70,19 @@ func (s *Server) handleLivePayload(ctx context.Context, raw string) {
 		}
 		s.attachQueueMediaState(ctx, q)
 		switch sig.T {
-		case "session.playhead":
-			s.publishQueueSSE(sid, q, true)
 		case "party.state":
 			s.sessionHub().publish(sid, "party.state", map[string]any{"sid": sig.SID, "rev": sig.Rev, "resync": sig.Resync})
 		default:
-			s.publishQueueSSE(sid, q, false)
+			// Skip, pause, seek and track changes made in another process (the
+			// Discord worker) move the playhead too. Publishing state alone left
+			// web clients extrapolating from the previous track's checkpoint.
+			s.publishQueueSSE(sid, q, true)
 		}
+	case "library":
+		// Everyone gets this, so it carries query keys only. Item IDs could name
+		// tracks in libraries a subscriber cannot see.
+		sig.IDs = nil
+		s.publishInvalidate(sig)
 	case "user":
 		uid, err := uuid.Parse(sig.Actor)
 		if err != nil || uid == uuid.Nil {
@@ -167,3 +175,32 @@ func (h *sessionHub) publishUser(userID uuid.UUID, name string, payload any) {
 
 // WaitForNotification is satisfied by pgx connections.
 var _ = pgx.ErrNoRows
+
+var (
+	catalogInvalidateKeys  = []string{"tracks", "albums", "artists", "album", "artist", "track", "track-meta", "home", "search", "personal-library", "favourites"}
+	playlistInvalidateKeys = []string{"playlists", "playlist", "playlist-folders", "playlist-snaps", "playlist-collabs"}
+	artworkInvalidateKeys  = []string{"artwork"}
+)
+
+// notifyOnSuccess wraps a mutating handler: after a 2xx response it tells every
+// connected web client, in every process, to refetch keys.
+func (s *Server) notifyOnSuccess(next http.HandlerFunc, keys ...[]string) http.HandlerFunc {
+	var all []string
+	seen := map[string]struct{}{}
+	for _, group := range keys {
+		for _, k := range group {
+			if _, ok := seen[k]; !ok {
+				seen[k] = struct{}{}
+				all = append(all, k)
+			}
+		}
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		ww := middleware.NewWrapResponseWriter(w, r.ProtoMajor)
+		next(ww, r)
+		if st := ww.Status(); st < 200 || st >= 300 || s.Pool == nil {
+			return
+		}
+		playback.NotifyLibrary(context.WithoutCancel(r.Context()), s.Pool, all)
+	}
+}

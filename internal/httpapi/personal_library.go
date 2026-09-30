@@ -20,6 +20,44 @@ func (s *Server) myPersonalLibrary(w http.ResponseWriter, r *http.Request) {
 	s.writePersonalLibrary(w, r, o, viewerID(u), false)
 }
 
+// removeFromMyLibrary drops songs from the caller's personal library. It does
+// not touch the shared catalogue or anyone else's library.
+func (s *Server) removeFromMyLibrary(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TrackIDs []string `json:"track_ids"`
+		All      bool     `json:"all"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(body.TrackIDs))
+	for _, raw := range body.TrackIDs {
+		id, err := uuid.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			writeErr(w, 400, "invalid", "track_ids must be track UUIDs")
+			return
+		}
+		ids = append(ids, id)
+	}
+	if !body.All && len(ids) == 0 {
+		writeErr(w, 400, "invalid", "track_ids or all required")
+		return
+	}
+	u := currentUser(r)
+	o, err := minilib.EnsureOwner(r.Context(), s.Pool, u.ID, s.discordUserID(r))
+	if err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	n, err := minilib.Remove(r.Context(), s.Pool, o.ID, ids, body.All)
+	if err != nil {
+		writeErr(w, 500, "db", "could not update your library")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "removed": n})
+}
+
 func viewerID(u *auth.User) uuid.UUID {
 	if u == nil {
 		return uuid.Nil

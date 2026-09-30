@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Disc3, Mic2, ListMusic, Music } from "lucide-react";
 import { cn, colorFromId, initials } from "@/lib/utils";
+import { useArtworkVersion, withArtworkVersion } from "@/stores/artwork";
 
 const icons = { album: Disc3, artist: Mic2, playlist: ListMusic, track: Music };
 
@@ -23,11 +24,15 @@ export function Artwork({
   className?: string;
   rounded?: "square" | "full";
 }) {
-  const [failed, setFailed] = useState(false);
+  const version = useArtworkVersion((s) => s.version);
+  const url = withArtworkVersion(src, version);
+  // Remember which URL failed, so a new cover (new URL) gets a fresh attempt.
+  const [failedUrl, setFailedUrl] = useState<string | undefined>();
+  const failed = !!url && failedUrl === url;
   const dims = { sm: "h-10 w-10", md: "h-full w-full", lg: "h-40 w-40", hero: "h-full w-full" };
   const Icon = icons[kind];
   const round = rounded === "full" || kind === "artist" ? "rounded-full" : "rounded-md";
-  if (!src || failed) {
+  if (!url || failed) {
     return (
       <div
         className={cn("flex items-center justify-center text-white/80", dims[size], round, className)}
@@ -43,10 +48,10 @@ export function Artwork({
   }
   return (
     <img
-      src={src}
+      src={url}
       alt={alt || name}
       loading="lazy"
-      onError={() => setFailed(true)}
+      onError={() => setFailedUrl(url)}
       className={cn("object-cover", dims[size], round, className)}
     />
   );

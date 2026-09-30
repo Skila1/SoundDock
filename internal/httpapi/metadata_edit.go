@@ -476,10 +476,9 @@ func (s *Server) postArtistArtwork(w http.ResponseWriter, r *http.Request) {
 	s.saveUploadedArtwork(w, r, "artist", id)
 }
 
+// saveUploadedArtwork stores a user-supplied cover. Callers have already checked
+// write access to the owning library, which is what lets someone set a cover.
 func (s *Server) saveUploadedArtwork(w http.ResponseWriter, r *http.Request, ownerType string, ownerID uuid.UUID) {
-	if !s.requireMetaEditor(w, r) {
-		return
-	}
 	if s.Art == nil {
 		writeErr(w, 503, "artwork", "artwork store unavailable")
 		return
@@ -506,4 +505,61 @@ func (s *Server) saveUploadedArtwork(w http.ResponseWriter, r *http.Request, own
 		return
 	}
 	writeJSON(w, 200, map[string]any{"ok": true, "artwork_id": aid, "owner_type": ownerType, "owner_id": ownerID})
+}
+
+func (s *Server) deleteTrackArtwork(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "id")
+		return
+	}
+	var albumID *uuid.UUID
+	if err := s.Pool.QueryRow(r.Context(), `SELECT album_id FROM tracks WHERE id=$1`, id).Scan(&albumID); err != nil {
+		writeErr(w, 404, "not_found", "track not found")
+		return
+	}
+	if !s.requireTrackLibraryWrite(w, r, id) {
+		return
+	}
+	if albumID != nil {
+		s.removeUploadedArtwork(w, r, "album", *albumID)
+		return
+	}
+	s.removeUploadedArtwork(w, r, "track", id)
+}
+
+func (s *Server) deleteAlbumArtwork(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "id")
+		return
+	}
+	if !s.requireAlbumLibrary(w, r, id, "write") {
+		return
+	}
+	s.removeUploadedArtwork(w, r, "album", id)
+}
+
+func (s *Server) deleteArtistArtwork(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		writeErr(w, 400, "invalid", "id")
+		return
+	}
+	if !s.requireArtistLibrary(w, r, id, "write") {
+		return
+	}
+	s.removeUploadedArtwork(w, r, "artist", id)
+}
+
+// removeUploadedArtwork drops user-supplied covers so the embedded or fetched
+// artwork shows again. Files stay on disk; they are keyed by content hash and
+// may be shared with other owners.
+func (s *Server) removeUploadedArtwork(w http.ResponseWriter, r *http.Request, ownerType string, ownerID uuid.UUID) {
+	tag, err := s.Pool.Exec(r.Context(), `DELETE FROM artwork_assets WHERE owner_type=$1 AND owner_id=$2 AND source='user'`, ownerType, ownerID)
+	if err != nil {
+		writeErr(w, 500, "db", "could not remove artwork")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"ok": true, "removed": tag.RowsAffected(), "owner_type": ownerType, "owner_id": ownerID})
 }

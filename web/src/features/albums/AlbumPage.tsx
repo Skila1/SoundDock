@@ -1,11 +1,15 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
-import { Heart, ListPlus, Pencil, Play, Shuffle } from "lucide-react";
-import { useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import { Heart, ListPlus, Pencil, Play, Shuffle, Trash2 } from "lucide-react";
+import { useState } from "react";
 import { api } from "@/lib/api";
 import { Artwork } from "@/components/media/Artwork";
-import { TrackList, callWriteBack, uploadArtwork } from "@/components/media/TrackList";
+import { CoverEditor } from "@/components/media/CoverEditor";
+import { hasPerm } from "@/lib/perms";
+import { TrackList, callWriteBack } from "@/components/media/TrackList";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/alert-dialog";
+import { refreshCatalogue, removeTracksFromCaches } from "@/lib/catalogue";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
@@ -20,11 +24,12 @@ export function AlbumPage() {
   const qc = useQueryClient();
   const play = usePlayer((s) => s.playTracks);
   const add = usePlayer((s) => s.add);
-  const fileRef = useRef<HTMLInputElement>(null);
   const q = useQuery({ queryKey: ["album", id], queryFn: () => api.get<Album>(`/api/v1/albums/${id}`) });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const favs = useQuery({ queryKey: ["favourites"], queryFn: () => api.get<Favourite[]>("/api/v1/favourites") });
   const [edit, setEdit] = useState(false);
+  const [delOpen, setDelOpen] = useState(false);
+  const navigate = useNavigate();
   const a = q.data;
   if (!a) return <div className="h-64 animate-pulse rounded-xl bg-surface-2" />;
   const tracks = a.tracks || [];
@@ -37,6 +42,7 @@ export function AlbumPage() {
   });
   const fav = !!(favs.data || []).some((f) => f.type === "album" && f.id === a.id);
   const admin = !!me.data?.is_admin;
+  const canEditCover = admin || hasPerm(me.data, "library.upload");
 
   const toggleFav = async () => {
     await api.post("/api/v1/favourites", { type: "album", id: a.id, on: !fav });
@@ -47,27 +53,9 @@ export function AlbumPage() {
   return (
     <div>
       <div className="mb-8 flex flex-col gap-6 md:flex-row">
-        <button type="button" className="h-52 w-52 overflow-hidden rounded-xl shadow-card" onClick={() => admin && fileRef.current?.click()} aria-label="Album artwork">
+        <CoverEditor kind="album" id={a.id} canEdit={canEditCover} className="h-52 w-52 overflow-hidden rounded-xl shadow-card">
           <Artwork src={artworkUrl("album", a.id, "page")} id={a.id} name={a.title} kind="album" />
-        </button>
-        <input
-          ref={fileRef}
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={async (e) => {
-            const file = e.target.files?.[0];
-            e.target.value = "";
-            if (!file || !id) return;
-            try {
-              await uploadArtwork("album", id, file);
-              toast.success("Artwork saved");
-              qc.invalidateQueries({ queryKey: ["album", id] });
-            } catch {
-              toast.error("Artwork upload is not available yet");
-            }
-          }}
-        />
+        </CoverEditor>
         <div className="flex flex-col justify-end">
           <p className="text-xs uppercase tracking-widest text-subtle">{a.is_compilation ? "Compilation" : "Album"}</p>
           <h1 className="text-4xl font-semibold md:text-5xl">{a.title}</h1>
@@ -79,6 +67,9 @@ export function AlbumPage() {
             <Button variant="ghost" onClick={toggleFav} aria-label="Favourite"><Heart className={fav ? "fill-current" : ""} /></Button>
             <Button variant="ghost" onClick={() => add(ids).then(() => toast.success("Added to queue"))}><ListPlus /> Add to queue</Button>
             {admin && <Button variant="ghost" onClick={() => setEdit(true)}><Pencil /> Edit</Button>}
+            {admin && ids.length > 0 && (
+              <Button variant="ghost" className="text-destructive" onClick={() => setDelOpen(true)}><Trash2 /> Delete album</Button>
+            )}
           </div>
         </div>
       </div>
@@ -94,6 +85,26 @@ export function AlbumPage() {
           />
         </section>
       ))}
+      <ConfirmDialog
+        open={delOpen}
+        onOpenChange={setDelOpen}
+        title={`Delete "${a.title}"?`}
+        description={`This deletes all ${tracks.length} songs on this album from SoundDock for everyone. Source files on NAS or local libraries are not deleted.`}
+        confirmLabel="Delete album"
+        destructive
+        onConfirm={async () => {
+          try {
+            const res = await api.post<{ deleted?: number; skipped?: unknown[] }>("/api/v1/tracks/bulk", { ids, delete: true });
+            removeTracksFromCaches(qc, ids);
+            refreshCatalogue(qc);
+            const skipped = Array.isArray(res?.skipped) ? res.skipped.length : 0;
+            toast.success(skipped ? `Album deleted. ${skipped} songs could not be deleted.` : "Album deleted");
+            navigate("/library/albums");
+          } catch (err) {
+            toast.error(err instanceof Error ? `Could not delete: ${err.message}` : "Could not delete album");
+          }
+        }}
+      />
       {edit && <AlbumEditDialog album={a} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); qc.invalidateQueries({ queryKey: ["album", id] }); }} />}
     </div>
   );

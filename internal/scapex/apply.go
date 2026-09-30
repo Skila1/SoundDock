@@ -6,6 +6,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sounddock/sounddock/internal/minilib"
+	"github.com/sounddock/sounddock/internal/playback"
 )
 
 // Player is the playback.Engine surface apply needs. Do not import httpapi.
@@ -184,6 +186,8 @@ func ApplyReadyIntents(ctx context.Context, pool *pgxpool.Pool, play Player, job
 			continue
 		}
 		if in.SessionID == uuid.Nil || play == nil {
+			// Nothing to queue, but the user did ask for this song.
+			_ = minilib.Record(ctx, pool, playback.OriginUser, in.UserID, "", []uuid.UUID{in.TrackID})
 			setIntent(ctx, pool, in.ID, StatusApplied, "")
 			continue
 		}
@@ -202,7 +206,8 @@ func ApplyReadyIntents(ctx context.Context, pool *pgxpool.Pool, play Player, job
 		if appliedPlay && action == ApplyPlay {
 			action = ApplyAppend
 		}
-		if err := applyAction(ctx, play, in.SessionID, trackID, action); err != nil {
+		reqCtx := playback.WithOrigin(playback.WithRequester(ctx, in.UserID, ""), playback.OriginUser)
+		if err := applyAction(reqCtx, play, in.SessionID, trackID, action); err != nil {
 			setIntent(ctx, pool, in.ID, StatusFailed, err.Error())
 			continue
 		}

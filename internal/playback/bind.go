@@ -101,7 +101,7 @@ func (e *Engine) BindGuildSession(ctx context.Context, guildID string, sessionID
 	}
 
 	stateRev := sessionStateRevision(ctx, tx, sessionID)
-	if err := tx.Commit(ctx); err != nil {
+	if err := e.commitNotify(ctx, tx, sessionID, oldID); err != nil {
 		return BindResult{}, err
 	}
 	e.ReapOrphanPlaying(ctx, sessionID)
@@ -181,7 +181,7 @@ func (e *Engine) BindDiscordRenderer(ctx context.Context, guildID string, sessio
 	if err := tx.QueryRow(ctx, `SELECT state_revision FROM playback_sessions WHERE id=$1`, sessionID).Scan(&stateRev); err != nil {
 		return BindResult{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := e.commitNotify(ctx, tx, sessionID, oldID); err != nil {
 		return BindResult{}, err
 	}
 	e.ReapOrphanPlaying(ctx, sessionID)
@@ -271,7 +271,7 @@ func (e *Engine) UnbindDiscordRenderer(ctx context.Context, guildID string, expe
 		_ = tx.QueryRow(ctx, `SELECT state_revision FROM playback_sessions WHERE id=$1`, sid).Scan(&stateRev)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
+	if err := e.commitNotify(ctx, tx, sid); err != nil {
 		return BindResult{}, err
 	}
 	return BindResult{BindingRevision: newRev, SessionID: sid, StateRevision: stateRev}, nil
@@ -315,7 +315,7 @@ func (e *Engine) SwitchRendererToBrowser(ctx context.Context, sessionID uuid.UUI
 	if err := bumpRevision(ctx, tx, sessionID); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return e.commitNotify(ctx, tx, sessionID)
 }
 
 func lockSessionRows(ctx context.Context, q db, ids ...uuid.UUID) error {

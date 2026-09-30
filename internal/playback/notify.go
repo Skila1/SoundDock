@@ -73,6 +73,29 @@ func (e *Engine) commitSession(ctx context.Context, tx interface {
 	return nil
 }
 
+// commitNotify commits and then signals each touched session, so web clients in
+// every process hear about bind, lease and party changes, not just the process
+// that made them.
+func (e *Engine) commitNotify(ctx context.Context, tx interface {
+	Commit(context.Context) error
+}, sids ...uuid.UUID) error {
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	seen := map[uuid.UUID]struct{}{}
+	for _, sid := range sids {
+		if sid == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[sid]; ok {
+			continue
+		}
+		seen[sid] = struct{}{}
+		e.notifySession(ctx, sid, "session.state")
+	}
+	return nil
+}
+
 func (e *Engine) notifyPersonalLibrary(ctx context.Context) {
 	if e == nil || e.pool == nil || originFrom(ctx) != OriginUser {
 		return
@@ -88,4 +111,34 @@ func (e *Engine) notifyPersonalLibrary(ctx context.Context) {
 		Actor: uid.String(),
 		Keys:  []string{"personal-library", "home"},
 	})
+}
+
+// catalogKeys are the web query roots that show shared catalogue data.
+var catalogKeys = []string{"tracks", "albums", "artists", "album", "artist", "track", "track-meta", "home", "search", "personal-library", "libraries", "favourites"}
+
+var playlistKeys = []string{"playlists", "playlist"}
+
+// JobInvalidateKeys returns the web query roots a completed job type changes,
+// or nil when the job does not touch data users browse.
+func JobInvalidateKeys(jobType string) []string {
+	switch jobType {
+	case "ingest.url", "ingest.zip", "library.scan", "library.delete", "library.merge", "library.migrate",
+		"library.cleanup_files", "metadata.refresh", "tracks.metadata", "tracks.bulk_delete", "scapex.fetch":
+		return catalogKeys
+	case "external.playlist.import", "smart_playlist.refresh":
+		return playlistKeys
+	case "radio.refresh":
+		return []string{"radio-seeds"}
+	default:
+		return nil
+	}
+}
+
+// NotifyLibrary tells every connected web client to refetch the given query
+// roots. It is broadcast to all users, so it never names individual items.
+func NotifyLibrary(ctx context.Context, pool *pgxpool.Pool, keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	_ = Notify(ctx, pool, Signal{T: "resource.invalidate", Scope: "library", Keys: keys})
 }

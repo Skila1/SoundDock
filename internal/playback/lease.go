@@ -29,7 +29,7 @@ func (e *Engine) AcquireBrowserRenderer(ctx context.Context, sessionID uuid.UUID
 	if err := bumpRevision(ctx, tx, sessionID); err != nil {
 		return 0, err
 	}
-	return gen, tx.Commit(ctx)
+	return gen, e.commitNotify(ctx, tx, sessionID)
 }
 
 // ReleaseStaleBrowserRenderer drops a browser lease whose tab stopped heartbeating.
@@ -52,7 +52,11 @@ func (e *Engine) ReleaseStaleBrowserRenderer(ctx context.Context, sessionID uuid
 	if err != nil {
 		return false, err
 	}
-	return tag.RowsAffected() > 0, nil
+	released := tag.RowsAffected() > 0
+	if released {
+		e.notifySession(ctx, sessionID, "session.state")
+	}
+	return released, nil
 }
 
 // HeartbeatRenderer updates renderer_heartbeat_at only if the CAS identity matches.
@@ -94,7 +98,7 @@ func (e *Engine) ReleaseRenderer(ctx context.Context, sessionID uuid.UUID, kind,
 	if err := bumpRevision(ctx, tx, sessionID); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return e.commitNotify(ctx, tx, sessionID)
 }
 
 func casAcquireBrowser(ctx context.Context, q db, sessionID uuid.UUID, clientRendererID string, expectedGeneration int64, stealDiscord bool) (int64, error) {
@@ -175,7 +179,7 @@ func (e *Engine) ClaimDiscordRenderer(ctx context.Context, sessionID uuid.UUID, 
 		if err != nil {
 			return err
 		}
-		return tx.Commit(ctx)
+		return e.commitNotify(ctx, tx, sessionID)
 	}
 
 	kinds := `'none','discord'`
@@ -197,7 +201,7 @@ func (e *Engine) ClaimDiscordRenderer(ctx context.Context, sessionID uuid.UUID, 
 	if err := bumpRevision(ctx, tx, sessionID); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return e.commitNotify(ctx, tx, sessionID)
 }
 
 func casReleaseBrowserIfHeld(ctx context.Context, q db, sessionID uuid.UUID) (bool, error) {

@@ -125,7 +125,7 @@ func (e *Engine) EnableParty(ctx context.Context, sid, host uuid.UUID, expiresIn
 		ON CONFLICT (session_id, user_id) DO UPDATE SET role='host'`, sid, host); err != nil {
 		return time.Time{}, err
 	}
-	return exp, tx.Commit(ctx)
+	return exp, e.commitNotify(ctx, tx, sid)
 }
 
 func (e *Engine) DisableParty(ctx context.Context, sid, actor uuid.UUID) error {
@@ -270,5 +270,5 @@ func (e *Engine) clearParty(ctx context.Context, sid uuid.UUID) error {
 		WHERE id=$1`, sid); err != nil {
 		return err
 	}
-	return tx.Commit(ctx)
+	return e.commitNotify(ctx, tx, sid)
 }
