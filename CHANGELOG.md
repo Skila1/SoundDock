@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- The site is installable as a phone app (Add to Home Screen on iOS, Install on Android) with proper icons and standalone display.
+- The mobile player no longer paints through queues, lyrics, or dialogs.
+- Lock screen and CarPlay keep playing after you lock the phone, and the ±10 second buttons are replaced with previous and next track.
+
 ## 0.1.0
 
 - The progress bar keeps up when playing through Discord. A track change from the Discord worker no longer leaves the bar on the previous track's position, and the new track's position updates are no longer discarded as stale for its first minute or so.
