@@ -27,8 +27,8 @@ export function SheetContent({
         : "inset-y-0 right-0 w-[min(420px,92vw)]";
   return (
     <SheetPrimitive.Portal>
-      <SheetPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50" />
-      <SheetPrimitive.Content className={cn("fixed z-50 border-border bg-surface-1 p-4 shadow-card", pos, className)}>
+      <SheetPrimitive.Overlay className="fixed inset-0 z-[80] bg-black/50" />
+      <SheetPrimitive.Content className={cn("fixed z-[80] border-border bg-surface-1 p-4 shadow-card", pos, className)}>
         {title ? (
           <SheetPrimitive.Title className="mb-3 text-base font-semibold">{title}</SheetPrimitive.Title>
         ) : (

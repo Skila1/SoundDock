@@ -11,8 +11,16 @@ export default defineConfig({
     VitePWA({
       registerType: "prompt",
       injectRegister: false,
-      includeAssets: ["logo.png", "favicon.svg", "manifest.webmanifest"],
+      includeAssets: [
+        "favicon.svg",
+        "manifest.webmanifest",
+        "icons/icon-192.png",
+        "icons/icon-512.png",
+        "icons/icon-512-maskable.png",
+        "icons/apple-touch-icon.png"
+      ],
       workbox: {
+        globPatterns: ["**/*.{js,css,html,svg,png,webmanifest,woff2}"],
         navigateFallback: "index.html",
         navigateFallbackDenylist: [
           /^\/api\//,
@@ -21,6 +29,10 @@ export default defineConfig({
           /^\/readyz/,
           /^\/metrics/,
           /^\/openapi/
+        ],
+        runtimeCaching: [
+          { urlPattern: /\/api\//, handler: "NetworkOnly" },
+          { urlPattern: /\/rest\//, handler: "NetworkOnly" }
         ]
       },
       manifest: false

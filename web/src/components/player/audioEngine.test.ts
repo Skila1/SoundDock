@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { bindTrack, isMediaReady, preloadTrack } from "@/components/player/audioEngine";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bindTrack, isMediaReady, prefersNativeMediaElement, preloadTrack } from "@/components/player/audioEngine";
 
 vi.mock("@/lib/api", () => ({
   streamUrl: (id: string) => `/api/v1/tracks/${id}/stream?quality=original`
@@ -62,6 +62,22 @@ describe("bindTrack media_state gate", () => {
     await bindTrack(el, "t1", "restoring");
     expect(el.getAttribute("src")).toBeFalsy();
     expect(el.dataset.trackId).toBeFalsy();
+  });
+});
+
+describe("prefersNativeMediaElement", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("is true on iPhone", () => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)", platform: "iPhone", maxTouchPoints: 5 });
+    expect(prefersNativeMediaElement()).toBe(true);
+  });
+
+  it("is false on desktop Chrome", () => {
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120", platform: "Win32", maxTouchPoints: 0 });
+    expect(prefersNativeMediaElement()).toBe(false);
   });
 });
 

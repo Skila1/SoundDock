@@ -38,10 +38,43 @@ let fadeA = 1;
 let fadeB = 1;
 let playbackRate = 1;
 
-function makeElement() {
-  const a = new Audio();
+/** iOS routes MediaElementSource through AudioContext, which dies when the screen locks. */
+export function prefersNativeMediaElement() {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent || "";
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  return navigator.platform === "MacIntel" && (navigator.maxTouchPoints || 0) > 1;
+}
+
+function prepareMediaElement(a: HTMLAudioElement) {
   a.preload = "auto";
   a.crossOrigin = "anonymous";
+  (a as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
+  a.setAttribute("playsinline", "");
+  a.setAttribute("webkit-playsinline", "");
+  a.controls = false;
+  try {
+    a.disableRemotePlayback = false;
+  } catch {
+    /* optional */
+  }
+  return a;
+}
+
+function mountMediaElement(a: HTMLAudioElement) {
+  if (typeof document === "undefined" || a.isConnected) return;
+  a.setAttribute("aria-hidden", "true");
+  a.style.cssText = "position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px";
+  const attach = () => {
+    if (!a.isConnected) document.body.appendChild(a);
+  };
+  if (document.body) attach();
+  else document.addEventListener("DOMContentLoaded", attach, { once: true });
+}
+
+function makeElement() {
+  const a = prepareMediaElement(new Audio());
+  mountMediaElement(a);
   return a;
 }
 
@@ -102,6 +135,7 @@ function getShared(): SharedGraph | null {
 
 /** Non-fatal. If this throws, the HTMLAudioElement must keep playing. */
 export function ensureGraph(el: HTMLAudioElement): SlotGraph | null {
+  if (prefersNativeMediaElement()) return null;
   const hit = graphs.get(el);
   if (hit) return hit;
   const sh = getShared();
@@ -363,8 +397,10 @@ export function activeIndex() {
 
 export async function playActive() {
   const el = getAudio();
-  ensureGraph(el);
-  await resumeGraph();
+  if (!prefersNativeMediaElement()) {
+    ensureGraph(el);
+    await resumeGraph();
+  }
   applyRate(playbackRate);
   applyVolume(userVolume, userMuted);
   const sink = loadDevicePrefs().sinkId;

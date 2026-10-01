@@ -15,6 +15,7 @@ import { PrefsSync } from "@/stores/prefs";
 import { attachAudioListeners, usePlayer } from "@/stores/player";
 import { ensureDiscordPresence } from "@/features/settings/discordPresence";
 import { queueDocked, useUi } from "@/stores/ui";
+import { InstallHint } from "@/components/pwa/InstallHint";
 import { api } from "@/lib/api";
 import type { User } from "@/types/api";
 
@@ -50,6 +51,7 @@ export function AppShell({ user }: { user: User }) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden bg-background">
       <PrefsSync />
+      <InstallHint />
       <AnnouncementBanner />
       <div className="flex min-h-0 flex-1 overflow-hidden">
         <Sidebar user={user} collapsible />
@@ -69,8 +71,10 @@ export function AppShell({ user }: { user: User }) {
           </aside>
         )}
       </div>
-      <PlayerBar />
-      <MobileNav />
+      <div className="relative z-20 shrink-0 bg-surface-1">
+        <PlayerBar />
+        <MobileNav />
+      </div>
       <QueueSheet />
       <NowPlaying />
       <LyricsSheet />

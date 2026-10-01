@@ -10,10 +10,10 @@ export const DialogClose = DialogPrimitive.Close;
 export function DialogContent({ className, overlayClassName, children, title, hideClose }: { className?: string; overlayClassName?: string; children: ReactNode; title?: string; hideClose?: boolean }) {
   return (
     <DialogPrimitive.Portal>
-      <DialogPrimitive.Overlay className={cn("fixed inset-0 z-50 bg-black/60 backdrop-blur-sm", overlayClassName)} />
+      <DialogPrimitive.Overlay className={cn("fixed inset-0 z-[80] bg-black/60 backdrop-blur-sm", overlayClassName)} />
       <DialogPrimitive.Content
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface-1 p-5 shadow-card",
+          "fixed left-1/2 top-1/2 z-[80] w-[min(520px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-surface-1 p-5 shadow-card",
           className
         )}
       >

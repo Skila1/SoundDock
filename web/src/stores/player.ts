@@ -23,7 +23,7 @@ import { useUi } from "@/stores/ui";
 import { usePrefs } from "@/stores/prefs";
 import { createCommandClient, newCommandId } from "@/stores/commandClient";
 import { useArtworkVersion } from "@/stores/artwork";
-import { attachMediaRemote, bindMediaSession, updateMediaPosition } from "@/stores/mediaSession";
+import { attachMediaRemote, bindMediaSession, claimPlaybackSession, updateMediaPosition } from "@/stores/mediaSession";
 import { interpolatePosition, parseTimeMs, sampleClock, type ClockSample } from "@/stores/playhead";
 import {
   applyBindResult,
@@ -60,7 +60,9 @@ import {
   looksGapless,
   pauseAll,
   playActive,
+  prefersNativeMediaElement,
   positionMs,
+  resumeGraph,
   preloadTrack,
   rampFade,
   remainingMs,
@@ -132,6 +134,7 @@ let playheadTimer: number | undefined;
 let volTimer: number | undefined;
 let keysBound = false;
 let audioBound = false;
+let playbackHoldBound = false;
 let currentMeta: PlayerTrack | undefined;
 let nextMeta: PlayerTrack | undefined;
 let skipLocalStart = false;
@@ -1626,8 +1629,11 @@ export function attachAudioListeners() {
         if (el === getAudio()) usePlayer.setState({ playing: true });
       };
       el.onpause = () => {
-        if (usingDiscord()) return;
-        if (el === getAudio() && getIdleAudio()?.paused !== false) usePlayer.setState({ playing: false });
+        if (usingDiscord() || el !== getAudio()) return;
+        if (getIdleAudio()?.paused === false) return;
+        const want = usePlayer.getState().playing;
+        if (want && document.hidden) return;
+        usePlayer.setState({ playing: false });
       };
       el.onloadedmetadata = () => {
         if (el === getAudio()) usePlayer.setState({ duration: durationMs() || usePlayer.getState().duration });
@@ -1647,12 +1653,23 @@ export function attachAudioListeners() {
     pause: () => usePlayer.getState().control("pause"),
     next: () => usePlayer.getState().control("skip"),
     previous: () => usePlayer.getState().control("previous"),
-    seekTo: (ms) => usePlayer.getState().seek(ms),
-    seekBy: (deltaMs) => {
-      const p = usePlayer.getState();
-      p.seek(Math.max(0, p.position + deltaMs));
-    }
+    seekTo: (ms) => usePlayer.getState().seek(ms)
   });
+  if (!playbackHoldBound) {
+    playbackHoldBound = true;
+    claimPlaybackSession(() => {
+      if (usingDiscord() || !usePlayer.getState().playing) return;
+      playActive().catch(() => undefined);
+    });
+    const reclaim = () => {
+      if (usingDiscord() || !usePlayer.getState().playing) return;
+      if (!prefersNativeMediaElement()) {
+        resumeGraph().catch(() => undefined);
+      }
+    };
+    document.addEventListener("visibilitychange", reclaim);
+    window.addEventListener("pageshow", reclaim);
+  }
 
   if (!keysBound) {
     keysBound = true;

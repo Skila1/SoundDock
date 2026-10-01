@@ -57,4 +57,4 @@ Mint/revoke live in `stream_policy.go`. Tokens are HMAC (`offline-v1|user|device
 
 ## PWA / Workbox
 
-`vite.config.ts` keeps `NetworkOnly` for `/api` and `/rest`. `navigateFallbackDenylist` is unchanged. Stream bodies are **not** Workbox-cached; offline audio uses a separate Cache (`sounddock-offline-audio-v1`) keyed at `/__offline/tracks/{id}`. `main.tsx` registers `virtual:pwa-register` and `beforeinstallprompt` toasts.
+`vite.config.ts` keeps `NetworkOnly` for `/api` and `/rest`. `navigateFallbackDenylist` is unchanged. Stream bodies are **not** Workbox-cached; offline audio uses a separate Cache (`sounddock-offline-audio-v1`) keyed at `/__offline/tracks/{id}`. `main.tsx` registers `virtual:pwa-register` and `beforeinstallprompt` toasts. Install icons live in `public/icons/`.

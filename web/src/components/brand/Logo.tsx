@@ -7,5 +7,5 @@ export function Logo({
   className?: string;
   alt?: string;
 }) {
-  return <img src="/logo.png" alt={alt} className={cn("select-none object-contain", className)} />;
+  return <img src="/icons/icon-192.png" alt={alt} className={cn("select-none object-contain", className)} />;
 }
