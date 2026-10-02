@@ -1,6 +1,6 @@
 # Native Discord
 
-The `discord-worker` service is in the default Compose stack (same image, `sounddock discord`). Configure token and application ID under **Admin → Integrations → Discord**. Use **Invite SoundDock Bot** (do not hand-build OAuth URLs).
+The `discord-worker` service is in the default Compose stack (same image, `sounddock discord`). Configure token and application ID under **Admin → People → Discord** (Bot & servers tab). Use **Invite SoundDock Bot** (do not hand-build OAuth URLs).
 
 Playback uses SoundDock search and storage only. No Lavalink, YouTube, or Spotify.
 

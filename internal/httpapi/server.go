@@ -92,7 +92,7 @@ func (s *Server) Router() http.Handler {
 	r.Use(capturePeer)
 	r.Use(middleware.RealIP)
 	r.Use(s.proxyHeaders)
-	r.Use(middleware.Recoverer)
+	r.Use(s.activityLog)
 	allowedOrigins := s.Cfg.CORSAllowedOrigins()
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins,
@@ -706,6 +706,7 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 				writeErr(w, 401, "unauthorized", "invalid token")
 				return
 			}
+			noteActor(r, u, apiTokenKind(tok))
 			if rejectIfDisabled(w, u) {
 				return
 			}
@@ -717,12 +718,32 @@ func (s *Server) requireAuth(next http.Handler) http.Handler {
 			writeErr(w, 401, "unauthorized", "invalid session")
 			return
 		}
+		noteActor(r, u, "session")
 		if u.Disabled {
 			writeErr(w, 403, "disabled", "account disabled")
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, u)))
 	})
+}
+
+// noteActor records the authenticated caller on the request's activity entry.
+func noteActor(r *http.Request, u *auth.User, method string) {
+	if u == nil {
+		return
+	}
+	name := u.Username
+	if u.DisplayName != "" && u.DisplayName != u.Username {
+		name = u.Username + " (" + u.DisplayName + ")"
+	}
+	oplog.RequestFrom(r.Context()).SetActor(u.ID, name, method)
+}
+
+func apiTokenKind(tok string) string {
+	if strings.HasPrefix(tok, patTokenPrefix) {
+		return "personal_token"
+	}
+	return "api_key"
 }
 
 func rejectIfDisabled(w http.ResponseWriter, u *auth.User) bool {
@@ -781,7 +802,11 @@ func (s *Server) apiKeyUser(ctx context.Context, tok string) (*auth.User, error)
 	}
 	_, _ = s.Pool.Exec(ctx, `UPDATE api_clients SET last_used_at=now() WHERE id=$1`, cid)
 	u := &auth.User{ID: cid, Username: "integration", Permissions: []string{}}
-	_ = s.Pool.QueryRow(ctx, `SELECT scopes FROM api_clients WHERE id=$1`, cid).Scan(&scopes)
+	var clientName string
+	_ = s.Pool.QueryRow(ctx, `SELECT scopes, name FROM api_clients WHERE id=$1`, cid).Scan(&scopes, &clientName)
+	if clientName != "" {
+		u.DisplayName = "API key " + clientName
+	}
 	if len(scopes) == 0 {
 		return nil, errString("api key has no scopes")
 	}

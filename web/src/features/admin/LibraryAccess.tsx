@@ -5,14 +5,14 @@ import { Button } from "@/components/ui/button";
 import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
 import { Badge } from "@/components/ui/misc";
-import { PageHeader, QueryError } from "@/components/ui/empty";
+import { QueryError } from "@/components/ui/empty";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { LibraryGrant, LibraryGrantsStrict } from "@/types/api";
 
 const ACTION_OPTS = ["read", "stream", "write"] as const;
 
-export function AdminGrants() {
+export function LibraryAccess({ initialLibrary = "" }: { initialLibrary?: string }) {
   const qc = useQueryClient();
   const libs = useQuery({ queryKey: ["libraries"], queryFn: () => api.get<any[]>("/api/v1/libraries") });
   const users = useQuery({ queryKey: ["admin-users"], queryFn: () => api.get<any[]>("/api/v1/admin/users") });
@@ -20,7 +20,7 @@ export function AdminGrants() {
     queryKey: ["library-grants-strict"],
     queryFn: () => api.get<LibraryGrantsStrict>("/api/v1/admin/library-grants-strict")
   });
-  const [lib, setLib] = useState("");
+  const [lib, setLib] = useState(initialLibrary);
   const [userId, setUserId] = useState("");
   const grants = useQuery({
     queryKey: ["admin-grants", lib],
@@ -37,23 +37,23 @@ export function AdminGrants() {
 
   return (
     <div>
-      <PageHeader
-        title="Library grants"
-        description="Scoped ACL per library: read (catalogue), stream (playback), write (mutations). Capabilities such as upload still use permissions. A User role grant on a library is why everyone sees it - do not remove that row unless you intend to hide the library from the group."
-      />
+      <p className="mb-4 text-sm text-muted">
+        Choose who can see, play, and change each library. Read lets people browse it, stream lets them play it, and write lets them change it.
+        The User group&apos;s grant is what makes a library visible to everyone.
+      </p>
       {libs.isError && <QueryError message={libs.error instanceof Error ? libs.error.message : undefined} onRetry={() => libs.refetch()} />}
       <article className="mb-6 max-w-lg rounded-xl border border-border bg-surface-1 p-4">
         <label className="flex items-center justify-between gap-3 text-sm">
           <span>
-            <span className="font-medium">Require listed actions</span>
-            <span className="mt-0.5 block text-xs text-muted">Off: empty grant rows still allow read and stream. On: only the actions you tick apply.</span>
+            <span className="font-medium">Strict permissions</span>
+            <span className="mt-0.5 block text-xs text-muted">Off: a grant with nothing ticked still allows read and stream. On: only ticked permissions apply.</span>
           </span>
           <Switch
             checked={!!strict.data?.library_grants_strict}
             onCheckedChange={async (v) => {
               try {
                 await api.put("/api/v1/admin/library-grants-strict", { library_grants_strict: v });
-                toast.success(v ? "Grants are strict" : "Grants use compatibility mode");
+                toast.success(v ? "Strict permissions on" : "Strict permissions off");
                 qc.invalidateQueries({ queryKey: ["library-grants-strict"] });
               } catch (err) {
                 toast.error(err instanceof Error ? err.message : "Could not update grants mode");
@@ -76,7 +76,7 @@ export function AdminGrants() {
             toast.success("User grant added");
             qc.invalidateQueries({ queryKey: ["admin-grants", lib] });
           }}>
-            <Field label="Add user grant">
+            <Field label="Give a person access">
               <Select value={userId} onValueChange={setUserId} options={userOptions} placeholder="Select user" />
             </Field>
             <Button type="submit">Add</Button>
@@ -104,9 +104,9 @@ export function AdminGrants() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
-                  <Badge tone={g.kind === "role" ? "neutral" : "accent"}>{g.kind}</Badge>
+                  <Badge tone={g.kind === "role" ? "neutral" : "accent"}>{g.kind === "role" ? "group" : "person"}</Badge>
                   <Button size="sm" variant="ghost" onClick={async () => {
-                    if (g.kind === "role" && !window.confirm("Remove this role grant? Everyone in the group loses this library until you add the grant back.")) {
+                    if (g.kind === "role" && !window.confirm("Remove this group's access? Everyone in the group loses this library until you add it back.")) {
                       return;
                     }
                     await api.del(`/api/v1/admin/libraries/${lib}/grants/${g.id}`);

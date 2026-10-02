@@ -78,7 +78,7 @@ func setLive(b *Bot) {
 func New(pool *pgxpool.Pool, box *cryptox.Box, se *search.Engine, play *playback.Engine, log *slog.Logger,
 	provider func(context.Context, uuid.UUID) (storage.StorageProvider, uuid.UUID, string, error)) *Bot {
 	b := &Bot{
-		pool: pool, box: box, search: se, play: play, log: log, provider: provider,
+		pool: pool, box: box, search: se, play: play, log: discordLogger(log), provider: provider,
 		scrobble:        scrobble.New(pool, box, se),
 		public:          strings.TrimRight(os.Getenv("SD_PUBLIC_URL"), "/"),
 		resumeOnRestart: initResumeOnRestart(),
@@ -487,4 +487,11 @@ func (b *Bot) guildEnabled(ctx context.Context, guildID string) bool {
 		return true
 	}
 	return en
+}
+
+func discordLogger(log *slog.Logger) *slog.Logger {
+	if log == nil {
+		log = slog.Default()
+	}
+	return log.With("category", "discord")
 }

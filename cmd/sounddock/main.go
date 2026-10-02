@@ -28,6 +28,7 @@ import (
 	"github.com/sounddock/sounddock/internal/integrity"
 	"github.com/sounddock/sounddock/internal/jobs"
 	"github.com/sounddock/sounddock/internal/mediabusy"
+	"github.com/sounddock/sounddock/internal/oplog"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/radio"
 	"github.com/sounddock/sounddock/internal/retention"
@@ -38,6 +39,7 @@ import (
 	"github.com/sounddock/sounddock/internal/storage"
 	"github.com/sounddock/sounddock/internal/transcode"
 	"github.com/sounddock/sounddock/internal/update"
+	"github.com/sounddock/sounddock/internal/version"
 	"github.com/sounddock/sounddock/internal/watch"
 	"github.com/sounddock/sounddock/internal/waveform"
 	"github.com/sounddock/sounddock/internal/webhooks"
@@ -59,7 +61,9 @@ func main() {
 		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
 		os.Exit(1)
 	}
-	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)}))
+	baseHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: parseLevel(cfg.LogLevel)})
+	baseLog := slog.New(baseHandler)
+	log := baseLog
 	slog.SetDefault(log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -83,6 +87,16 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+
+	// Activity log: warnings and errors from every component, plus the
+	// request and domain events recorded through oplog, land in
+	// operational_logs without blocking callers.
+	activity := oplog.NewWriter(pool, baseLog)
+	activity.Start(ctx)
+	defer activity.Close()
+	oplog.SetDefault(activity)
+	log = slog.New(oplog.NewTeeHandler(baseHandler, slog.LevelWarn))
+	slog.SetDefault(log)
 
 	if cryptox.WeakMasterKey(cfg.MasterKey) {
 		log.Error("master key", "err", "SD_MASTER_KEY is empty or the documented example value")
@@ -192,6 +206,8 @@ func main() {
 
 	role := resolveRole(cfg.Role)
 	log.Info("starting", "role", role, "addr", cfg.HTTPAddr)
+	oplog.Emit(ctx, oplog.Entry{Level: "info", Category: "system", Action: "system.start", Message: "SoundDock started",
+		Result: oplog.ResultSuccess, Details: map[string]any{"role": role, "version": version.Version}})
 
 	if role == config.RoleAll || role == config.RoleApp || role == config.RoleWorker {
 		runner.Start(ctx)

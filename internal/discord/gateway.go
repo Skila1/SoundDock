@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/sounddock/sounddock/internal/oplog"
 )
 
 var botLeavePending sync.Map
@@ -108,6 +109,8 @@ func (b *Bot) closeSession() {
 
 func (b *Bot) onReady(s *discordgo.Session, r *discordgo.Ready) {
 	b.log.Info("discord gateway ready", "user", r.User.Username)
+	oplog.Emit(context.Background(), oplog.Entry{Level: "info", Category: "discord", Action: "discord.gateway.ready",
+		Message: "Discord bot connected", Result: oplog.ResultSuccess, Details: map[string]any{"bot": r.User.Username, "guilds": len(r.Guilds)}})
 	_, _ = b.pool.Exec(context.Background(), `UPDATE discord_settings SET last_gateway_status='connected', last_error_redacted=NULL WHERE id=1`)
 	go func() {
 		ctx := context.Background()

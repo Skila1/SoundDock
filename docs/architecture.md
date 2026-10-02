@@ -25,15 +25,15 @@ Play and queue HTTP do not wait on yt-dlp. YouTube-shaped refs enqueue acquisiti
 
 ## Listen stats
 
-`listen_history` is the production recap source until an administrator runs **Admin → Media → Stats rebuild**. That job rebuilds `play_counts` from `listen_events` and flips the reader to `listen_events`. The two tables are not merged into one total. Recap minutes that coalesce null `listened_ms` to track duration are estimated.
+`listen_history` is the production recap source until an administrator runs **Admin → Dashboard → Open stats migration** (`/admin/stats-migration`). That job rebuilds `play_counts` from `listen_events` and flips the reader to `listen_events`. The two tables are not merged into one total. Recap minutes that coalesce null `listened_ms` to track duration are estimated.
 
 ## Workers
 
-**Admin → System → Workers** exposes job pools. `max_rss_mb` (UI: Memory cap, advisory) is a stored hint. It is not a cgroup or an enforced memory limit. Concurrency is capped by pool min/max workers.
+**Admin → Activity → Jobs & Workers** exposes job pools. `max_rss_mb` (UI: Memory guide, advisory) is a stored hint. It is not a cgroup or an enforced memory limit. Concurrency is capped by pool min/max workers.
 
 ## Metadata
 
-Scan-side MusicBrainz lookups (when **Admin → Media → Metadata** is on) fill missing tags, official genres, and artist/release MBIDs. Cover Art Archive runs when the file has a MusicBrainz release MBID and there is no embedded or folder art. This is not a Discord or playback path.
+Scan-side MusicBrainz lookups (when **Admin → Media Settings → Look up metadata online** is on) fill missing tags, official genres, and artist/release MBIDs. Cover Art Archive runs when the file has a MusicBrainz release MBID and there is no embedded or folder art. This is not a Discord or playback path.
 
 ## YouTube fetch
 
@@ -44,3 +44,14 @@ Query review notes: [`docs/query-baselines.md`](query-baselines.md). Manual devi
 OpenSubsonic (`SD_OPENSUBSONIC`) is a stub. Leave it off.
 
 See the repository `internal/` layout. Encrypted backups and wipe-and-restore: [backup.md](backup.md).
+
+## Activity log
+
+Every meaningful action lands in `operational_logs` and is browsable under **Admin → Activity**:
+
+- **Requests.** Middleware (`internal/httpapi/activity.go`) records every mutation, every server error, permission and rate-limit denials, and a few sensitive reads (exports, sign-in callbacks) with user, IP, route, status, duration, result, and the `X-Request-Id` correlation ID. Successful reads, static assets, health probes, media byte ranges, SSE, upload chunks, and playback heartbeats are skipped.
+- **Domain events.** Jobs (completed, retried, failed, cancelled), playback, playlist and provider events, webhook delivery failures, and Discord slash commands go through `oplog.Emit`, which inherits the request ID, IP, and user from the context.
+- **Warnings and errors.** Any `slog` record at warn or above is copied in by `oplog.TeeHandler`. Add `oplog.NoActivity` to a log call that is already recorded another way.
+- **Audit.** Explicit `audit.Event` calls, plus an automatic row for any successful admin change that did not write its own, go to `audit_events` with the same request ID.
+
+Writes are asynchronous and batched (`oplog.Writer`); if the buffer fills, entries are dropped and counted instead of blocking requests. Request bodies, cookies, and headers are never stored. Credential-like keys and query parameters are masked, and free text passes through `oplog.Redact`. Retention defaults are 90 days for logs and 730 days for audit events, and you can change both under **Admin → Retention**.

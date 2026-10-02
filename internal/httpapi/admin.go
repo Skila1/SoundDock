@@ -480,10 +480,104 @@ func (s *Server) adminBackup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"id": id})
 }
 
+// adminAudit lists administrative changes, newest first, with cursor
+// pagination and filters for text, actor, IP and request id.
 func (s *Server) adminAudit(w http.ResponseWriter, r *http.Request) {
-	rows, _ := s.Pool.Query(r.Context(), `SELECT id, actor_user_id, action, target, ip, created_at FROM audit_events ORDER BY created_at DESC LIMIT 200`)
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	args := []any{}
+	where := []string{"1=1"}
+	add := func(v any) string {
+		args = append(args, v)
+		return "$" + strconv.Itoa(len(args))
+	}
+	like := func(v string) string {
+		return "%" + strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(v) + "%"
+	}
+	if v := strings.TrimSpace(q.Get("q")); v != "" {
+		p := add(like(v))
+		where = append(where, "(a.action ILIKE "+p+" OR coalesce(a.target,'') ILIKE "+p+" OR a.meta::text ILIKE "+p+")")
+	}
+	if v := strings.TrimSpace(q.Get("actor")); v != "" {
+		if id, err := uuid.Parse(v); err == nil {
+			where = append(where, "a.actor_user_id = "+add(id))
+		} else {
+			p := add(like(v))
+			where = append(where, "(u.username ILIKE "+p+" OR coalesce(u.display_name,'') ILIKE "+p+")")
+		}
+	}
+	if v := strings.TrimSpace(q.Get("ip")); v != "" {
+		where = append(where, "coalesce(a.ip,'') LIKE "+add(strings.NewReplacer(`%`, `\%`, `_`, `\_`).Replace(v)+"%"))
+	}
+	if v := strings.TrimSpace(q.Get("request_id")); v != "" {
+		where = append(where, "a.request_id = "+add(v))
+	}
+	if t := parseTimeParam(q.Get("since")); !t.IsZero() {
+		where = append(where, "a.created_at >= "+add(t))
+	}
+	if t := parseTimeParam(q.Get("until")); !t.IsZero() {
+		where = append(where, "a.created_at < "+add(t))
+	}
+	if c := strings.TrimSpace(q.Get("cursor")); c != "" {
+		if i := strings.LastIndex(c, "|"); i > 0 {
+			ts, err1 := time.Parse(time.RFC3339Nano, c[:i])
+			id, err2 := uuid.Parse(c[i+1:])
+			if err1 == nil && err2 == nil {
+				a, b := add(ts), add(id)
+				where = append(where, "(a.created_at, a.id) < ("+a+","+b+")")
+			}
+		}
+	}
+	lim := add(limit + 1)
+	rows, err := s.Pool.Query(r.Context(), `
+		SELECT a.id, a.created_at, a.actor_user_id, coalesce(u.username,''), coalesce(u.display_name,''),
+			a.action, coalesce(a.target,''), coalesce(a.ip,''), a.meta, coalesce(a.request_id,'')
+		FROM audit_events a
+		LEFT JOIN users u ON u.id = a.actor_user_id
+		WHERE `+strings.Join(where, " AND ")+`
+		ORDER BY a.created_at DESC, a.id DESC
+		LIMIT `+lim, args...)
+	if err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
 	defer rows.Close()
-	writeJSON(w, 200, scanMaps(rows, "id", "actor_user_id", "action", "target", "ip", "created_at"))
+	type row struct {
+		ID          uuid.UUID      `json:"id"`
+		CreatedAt   time.Time      `json:"created_at"`
+		ActorID     *uuid.UUID     `json:"actor_user_id"`
+		Username    string         `json:"username"`
+		DisplayName string         `json:"display_name"`
+		Action      string         `json:"action"`
+		Target      string         `json:"target"`
+		IP          string         `json:"ip"`
+		Meta        map[string]any `json:"meta"`
+		RequestID   string         `json:"request_id"`
+	}
+	items := []row{}
+	for rows.Next() {
+		var it row
+		var meta []byte
+		if err := rows.Scan(&it.ID, &it.CreatedAt, &it.ActorID, &it.Username, &it.DisplayName, &it.Action, &it.Target, &it.IP, &meta, &it.RequestID); err != nil {
+			continue
+		}
+		_ = json.Unmarshal(meta, &it.Meta)
+		if it.Meta == nil {
+			it.Meta = map[string]any{}
+		}
+		it.Meta = oplog.RedactDetails(it.Meta)
+		items = append(items, it)
+	}
+	next := ""
+	if len(items) > limit {
+		last := items[limit-1]
+		next = last.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + last.ID.String()
+		items = items[:limit]
+	}
+	writeJSON(w, 200, map[string]any{"items": items, "next_cursor": next})
 }
 
 func (s *Server) adminWebhooks(w http.ResponseWriter, r *http.Request) {
@@ -688,13 +782,20 @@ func (s *Server) adminRefreshMetadata(w http.ResponseWriter, r *http.Request) {
 func (s *Server) adminLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	items, next, err := oplog.List(r.Context(), s.Pool, oplog.Filter{
-		Level:    q.Get("level"),
-		Category: q.Get("category"),
-		Q:        q.Get("q"),
-		Limit:    limit,
-		Cursor:   q.Get("cursor"),
-	})
+	f := oplog.Filter{
+		Level:     q.Get("level"),
+		Category:  q.Get("category"),
+		Q:         q.Get("q"),
+		Actor:     q.Get("actor"),
+		IP:        q.Get("ip"),
+		Result:    q.Get("result"),
+		RequestID: q.Get("request_id"),
+		Since:     parseTimeParam(q.Get("since")),
+		Until:     parseTimeParam(q.Get("until")),
+		Limit:     limit,
+		Cursor:    q.Get("cursor"),
+	}
+	items, next, err := oplog.List(r.Context(), s.Pool, f)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return
@@ -705,29 +806,68 @@ func (s *Server) adminLogs(w http.ResponseWriter, r *http.Request) {
 		if jobType == "" && e.Category == "job" {
 			jobType = e.Category
 		}
-		human := e.Message
-		if e.Category == "job" || jobType != "" {
-			human = explainJobError(jobType, e.Message)
+		human := e.Error
+		if human == "" && e.Level != "info" {
+			human = e.Message
+		}
+		if e.Category == "job" && e.Level == "error" {
+			human = explainJobError(jobType, firstNonEmpty(e.Error, e.Message))
+		}
+		summary := ""
+		if e.Category == "job" {
+			summary = jobTypeSummary(jobType)
 		}
 		out = append(out, map[string]any{
-			"id":         e.ID,
-			"type":       jobType,
-			"category":   e.Category,
-			"level":      e.Level,
-			"error":      human,
-			"detail":     e.Message,
-			"message":    e.Message,
-			"at":         e.CreatedAt,
-			"created_at": e.CreatedAt,
-			"summary":    jobTypeSummary(jobType),
-			"job_id":     e.JobID,
+			"id":          e.ID,
+			"type":        jobType,
+			"category":    e.Category,
+			"level":       e.Level,
+			"message":     e.Message,
+			"error":       human,
+			"summary":     summary,
+			"at":          e.CreatedAt,
+			"created_at":  e.CreatedAt,
+			"job_id":      e.JobID,
+			"library_id":  e.LibraryID,
+			"track_id":    e.TrackID,
+			"actor_id":    e.ActorID,
+			"actor_name":  e.ActorName,
+			"request_id":  e.RequestID,
+			"ip":          e.IP,
+			"action":      e.Action,
+			"method":      e.Method,
+			"route":       e.Route,
+			"status":      e.Status,
+			"duration_ms": e.DurationMs,
+			"result":      e.Result,
+			"details":     e.Details,
 		})
 	}
-	writeJSON(w, 200, map[string]any{
+	resp := map[string]any{
 		"items":       out,
 		"next_cursor": next,
 		"limit":       limit,
-	})
+	}
+	if f.Cursor == "" {
+		resp["categories"] = oplog.Categories(r.Context(), s.Pool)
+		if w := oplog.Default(); w != nil {
+			resp["dropped"] = w.Dropped()
+		}
+	}
+	writeJSON(w, 200, resp)
+}
+
+func parseTimeParam(v string) time.Time {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339, "2006-01-02T15:04", "2006-01-02"} {
+		if t, err := time.Parse(layout, v); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 func jobTypeSummary(typ string) string {

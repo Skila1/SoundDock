@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/auth"
 	"github.com/sounddock/sounddock/internal/listen"
+	"github.com/sounddock/sounddock/internal/oplog"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/scapex"
 	"github.com/sounddock/sounddock/internal/scrobble"
@@ -310,6 +311,7 @@ func (s *Server) queueControl(w http.ResponseWriter, r *http.Request) {
 		body.Extra["command_id"] = body.CommandID
 	}
 	body.Extra = bindExtra(body.Extra, body.ExpectedBindingRevision, firstNonEmpty(body.RendererID, extraStringMap(body.Extra, "renderer_id")), body.RendererGeneration)
+	describePlaybackControl(r, body.Action)
 	if body.Action == "switch_renderer" {
 		if controlOutputPref(body.Extra) == "" {
 			body.Extra["output_pref"] = playback.OutputBrowser
@@ -1131,4 +1133,22 @@ func isYouTubeVideoID(s string) bool {
 		return false
 	}
 	return true
+}
+
+// describePlaybackControl names the control on its Activity entry. Volume
+// nudges arrive in bursts and are only recorded when they fail.
+func describePlaybackControl(r *http.Request, action string) {
+	st := oplog.RequestFrom(r.Context())
+	if st == nil {
+		return
+	}
+	a := strings.TrimSpace(action)
+	if a == "" {
+		a = "unknown"
+	}
+	st.Describe("playback", "playback."+a, "Playback: "+strings.ReplaceAll(a, "_", " "))
+	switch a {
+	case "volume", "mute", "unmute":
+		st.Suppress()
+	}
 }

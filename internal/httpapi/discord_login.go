@@ -4,10 +4,12 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/sounddock/sounddock/internal/auth"
 	"github.com/sounddock/sounddock/internal/external"
+	"github.com/sounddock/sounddock/internal/oplog"
 )
 
 func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +66,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
+	oplog.RequestFrom(r.Context()).SetActorName(strings.TrimSpace(body.Username))
 	u, err := s.Auth.Authenticate(r.Context(), body.Username, body.Password)
 	if err != nil {
 		writeErr(w, 401, "auth", "invalid credentials")
@@ -75,6 +78,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, r, tok, sess.ExpiresAt)
+	noteActor(r, u, "password")
 	s.Audit.Event(r.Context(), &u.ID, "login", u.Username, r.RemoteAddr, nil)
 	writeJSON(w, 200, u)
 }
@@ -102,6 +106,7 @@ func (s *Server) discordLogin(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
 	fail := func(msg string) {
+		oplog.RequestFrom(r.Context()).Fail(msg)
 		http.Redirect(w, r, "/?error="+url.QueryEscape(msg), http.StatusFound)
 	}
 	oauth := auth.LoadDiscordOAuth(r.Context(), s.Pool, s.Box)
@@ -117,14 +122,14 @@ func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
 	ver, err := auth.TakeLoginState(r.Context(), s.Pool, s.Box, state)
 	if err != nil {
 		if s.Log != nil {
-			s.Log.Warn("discord oauth invalid state", "err", err)
+			s.Log.Warn("discord oauth invalid state", "category", "auth", "err", err)
 		}
 		fail("invalid_state")
 		return
 	}
 	if ver == "" {
 		if s.Log != nil {
-			s.Log.Warn("discord oauth missing pkce verifier")
+			s.Log.Warn("discord oauth missing pkce verifier", "category", "auth")
 		}
 		fail("invalid_state")
 		return
@@ -133,12 +138,14 @@ func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
 	ex, err := auth.ExchangeDiscordCode(r.Context(), oauth.ClientID, oauth.Secret, redir, r.URL.Query().Get("code"), ver)
 	if err != nil {
 		if s.Log != nil {
-			s.Log.Warn("discord oauth token exchange failed", "err", err, "redirect_uri", redir)
+			s.Log.Warn("discord oauth token exchange failed", "category", "auth", "err", err, "redirect_uri", redir)
 		}
 		fail("token_exchange")
 		return
 	}
 	prof := ex.Profile
+	oplog.RequestFrom(r.Context()).SetActorName("discord:" + prof.Username)
+	oplog.RequestFrom(r.Context()).Annotate("discord_id", prof.ID)
 	exists, _ := auth.DiscordUserExists(r.Context(), s.Pool, prof.ID)
 	admins, _ := s.Auth.AdministratorCount(r.Context())
 	stored := auth.LoadAdminDiscordIDs(r.Context(), s.Pool)
@@ -146,7 +153,7 @@ func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
 		reg, _ := auth.LoadDiscordRegistration(r.Context(), s.Pool)
 		if err := auth.CheckDiscordRegistration(r.Context(), ex.AccessToken, reg); err != nil {
 			if s.Log != nil {
-				s.Log.Warn("discord oauth registration denied", "err", err, "discord_id", prof.ID)
+				s.Log.Warn("discord oauth registration denied", "category", "auth", "err", err, "discord_id", prof.ID)
 			}
 			switch {
 			case errors.Is(err, auth.ErrNotInServer), errors.Is(err, auth.ErrMissingRole):
@@ -172,6 +179,7 @@ func (s *Server) discordLoginCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, r, tok, sess.ExpiresAt)
+	noteActor(r, u, "discord")
 	s.Audit.Event(r.Context(), &u.ID, "login.discord", prof.ID, r.RemoteAddr, nil)
 	http.Redirect(w, r, "/", http.StatusFound)
 }

@@ -4,7 +4,7 @@ import { Copy, GitMerge } from "lucide-react";
 import { api } from "@/lib/api";
 import { Badge } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
-import { PageHeader, EmptyState } from "@/components/ui/empty";
+import { EmptyState } from "@/components/ui/empty";
 import { formatDuration } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -29,7 +29,7 @@ function reasonLabel(reason?: string) {
   return reason || "Duplicate";
 }
 
-export function AdminDuplicateReview() {
+export function DuplicateReview() {
   const qc = useQueryClient();
   const [winnerByGroup, setWinnerByGroup] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -80,14 +80,12 @@ export function AdminDuplicateReview() {
 
   return (
     <div>
-      <PageHeader
-        title="Duplicate review"
-        description="Open groups from library scan (same content hash, or same artist and title within ±3 seconds). Keep one track; merge remaps history onto the winner. A 409 means the discarded copy is playing."
-      />
-
+      <p className="mb-4 text-sm text-muted">
+        Library scans flag files that are identical, or have the same artist and title and length. Keep one copy; its play history absorbs the others.
+      </p>
       {q.isLoading && <p className="text-sm text-muted">Loading groups…</p>}
       {!q.isLoading && groups.length === 0 && (
-        <EmptyState icon={Copy} title="No open duplicate groups" description="Scan a library to detect same-hash or matching artist/title copies. Groups with fewer than two tracks are not listed." />
+        <EmptyState icon={Copy} title="No open duplicate groups" description="Duplicates show up here after a library scan finds them." />
       )}
 
       <div className="space-y-4">

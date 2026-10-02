@@ -15,4 +15,4 @@ See `.env.example`. The installer only writes what is needed to boot. Discord cl
 
 CORS allows `http://localhost:5173`, `http://127.0.0.1:5173`, and the origin of `SD_PUBLIC_URL`. It does not allow arbitrary browser origins.
 
-Worker pool **Memory cap (MB, advisory)** in Admin → Workers is a stored hint. It is not a Docker or cgroup memory limit.
+Worker pool **Memory guide (MB)** in Admin → Activity → Jobs & Workers is a stored hint. It is not a Docker or cgroup memory limit.

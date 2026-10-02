@@ -396,3 +396,53 @@ func TestUpgrade0026DiscordRegistrationGuilds(t *testing.T) {
 		t.Fatalf("up to 26 again: %v", err)
 	}
 }
+
+func TestUpgrade0027ActivityLogKeepsExistingRows(t *testing.T) {
+	dsn := testDSN(t)
+	pool := openPool(t, dsn)
+	defer pool.Close()
+	resetDB(t, pool)
+	m := migrator(t, dsn)
+	if err := m.Migrate(26); err != nil && err != migrate.ErrNoChange {
+		t.Fatalf("migrate to 26: %v", err)
+	}
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `INSERT INTO operational_logs (level, category, message) VALUES ('error','job','legacy row')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO audit_events (action, target) VALUES ('legacy.audit','x')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Migrate(27); err != nil {
+		t.Fatalf("migrate to 27: %v", err)
+	}
+	var reqID, result string
+	var status *int
+	if err := pool.QueryRow(ctx, `SELECT request_id, result, status FROM operational_logs WHERE message='legacy row'`).Scan(&reqID, &result, &status); err != nil {
+		t.Fatal(err)
+	}
+	if reqID != "" || result != "" || status != nil {
+		t.Fatalf("legacy defaults: %q %q %v", reqID, result, status)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO operational_logs (level, category, message, result) VALUES ('info','x','y','maybe')`); err == nil {
+		t.Fatal("result check constraint should reject unknown values")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO operational_logs (level, category, message, request_id, ip, actor_name, action, method, route, status, duration_ms, result)
+		VALUES ('info','access','Create user','r1','203.0.113.1','alice','post /x','POST','/x',201,5,'success')`); err != nil {
+		t.Fatal(err)
+	}
+	var auditReq string
+	if err := pool.QueryRow(ctx, `SELECT request_id FROM audit_events WHERE action='legacy.audit'`).Scan(&auditReq); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Migrate(26); err != nil {
+		t.Fatalf("down to 26: %v", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM operational_logs`).Scan(&n); err != nil || n != 2 {
+		t.Fatalf("rows after down: %d %v", n, err)
+	}
+	if err := m.Migrate(27); err != nil {
+		t.Fatalf("up to 27 again: %v", err)
+	}
+}

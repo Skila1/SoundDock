@@ -23,6 +23,6 @@ Cloudflare Tunnel is installed by the installer as a **systemd** service (`cloud
 
 Health: `/healthz`, `/readyz`. The Discord worker's `/healthz` fails when the bot is enabled and the gateway is down. Stop grace period is 45s for FFmpeg and Discord drain.
 
-Worker pool **Memory cap (MB, advisory)** in Admin → Workers is not a Docker/cgroup memory limit.
+Worker pool **Memory guide (MB)** in Admin → Activity → Jobs & Workers is not a Docker/cgroup memory limit.
 
 After a backup restore, restart both `sounddock` and `discord-worker`. Restore only exits the app container.
