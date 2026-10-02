@@ -9,6 +9,7 @@ import { resetClientSession } from "@/features/auth/sessionReset";
 import { HomePage } from "@/features/home/HomePage";
 import { Skeleton } from "@/components/ui/misc";
 import type { User } from "@/types/api";
+import { legacyAdminRedirects } from "@/features/admin/adminNav";
 
 const SearchPage = lazy(() => import("@/features/search/SearchPage").then((m) => ({ default: m.SearchPage })));
 const ArtistsPage = lazy(() => import("@/features/artists/ArtistsPage").then((m) => ({ default: m.ArtistsPage })));
@@ -28,11 +29,21 @@ const RediscoveryPage = lazy(() => import("@/features/history/RediscoveryPage").
 const StatsPage = lazy(() => import("@/features/stats/StatsPage").then((m) => ({ default: m.StatsPage })));
 const WrappedPage = lazy(() => import("@/features/wrapped/WrappedPage").then((m) => ({ default: m.WrappedPage })));
 const DevicesPage = lazy(() => import("@/features/devices/DevicesPage").then((m) => ({ default: m.DevicesPage })));
+const AdminLayout = lazy(() => import("@/features/admin/AdminLayout").then((m) => ({ default: m.AdminLayout })));
+const AdminDashboard = lazy(() => import("@/features/admin/AdminDashboard").then((m) => ({ default: m.AdminDashboard })));
+const AdminActivity = lazy(() => import("@/features/admin/activity/AdminActivity").then((m) => ({ default: m.AdminActivity })));
+const AdminBackups = lazy(() => import("@/features/admin/AdminBackups").then((m) => ({ default: m.AdminBackups })));
+const AdminUpdates = lazy(() => import("@/features/admin/AdminUpdates").then((m) => ({ default: m.AdminUpdates })));
+const AdminIntegrations = lazy(() => import("@/features/admin/AdminIntegrations").then((m) => ({ default: m.AdminIntegrations })));
+const AdminUsers = lazy(() => import("@/features/admin/AdminUsers").then((m) => ({ default: m.AdminUsers })));
+const AdminRoles = lazy(() => import("@/features/admin/AdminRoles").then((m) => ({ default: m.AdminRoles })));
+const AdminDiscord = lazy(() => import("@/features/admin/AdminDiscord").then((m) => ({ default: m.AdminDiscord })));
+const AdminLibraries = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminLibraries })));
+const AdminCatalog = lazy(() => import("@/features/admin/AdminCatalog").then((m) => ({ default: m.AdminCatalog })));
+const AdminMediaSettings = lazy(() => import("@/features/admin/AdminMediaSettings").then((m) => ({ default: m.AdminMediaSettings })));
+const AdminRetention = lazy(() => import("@/features/admin/AdminRetention").then((m) => ({ default: m.AdminRetention })));
+const AdminStatsMigration = lazy(() => import("@/features/admin/AdminStatsMigration").then((m) => ({ default: m.AdminStatsMigration })));
 const PartyPage = lazy(() => import("@/features/devices/PartyPage").then((m) => ({ default: m.PartyPage })));
-const AdminHealth = lazy(() => import("@/features/admin/AdminHealth").then((m) => ({ default: m.AdminHealth })));
-const AdminQuotas = lazy(() => import("@/features/admin/AdminQuotas").then((m) => ({ default: m.AdminQuotas })));
-const AdminMaintenance = lazy(() => import("@/features/admin/AdminMaintenance").then((m) => ({ default: m.AdminMaintenance })));
-const AdminDiagnostics = lazy(() => import("@/features/admin/AdminDiagnostics").then((m) => ({ default: m.AdminDiagnostics })));
 const ConnectedServicesPage = lazy(() => import("@/features/settings/ConnectedServicesPage").then((m) => ({ default: m.ConnectedServicesPage })));
 const FavouritesPage = lazy(() => import("@/features/favourites/FavouritesPage").then((m) => ({ default: m.FavouritesPage })));
 const LibrariesPage = lazy(() => import("@/features/library/LibrariesPage").then((m) => ({ default: m.LibrariesPage })));
@@ -42,33 +53,6 @@ const PublicProfilePage = lazy(() => import("@/features/library/PublicProfilePag
 const UploadPage = lazy(() => import("@/features/upload/UploadPage").then((m) => ({ default: m.UploadPage })));
 const ImportPage = lazy(() => import("@/features/imports/ImportPage").then((m) => ({ default: m.ImportPage })));
 const ProfilePage = lazy(() => import("@/features/profile/ProfilePage").then((m) => ({ default: m.ProfilePage })));
-const AdminLayout = lazy(() => import("@/features/admin/AdminLayout").then((m) => ({ default: m.AdminLayout })));
-const AdminOverview = lazy(() => import("@/features/admin/AdminOverview").then((m) => ({ default: m.AdminOverview })));
-const AdminUsers = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminUsers })));
-const AdminRoles = lazy(() => import("@/features/admin/AdminRoles").then((m) => ({ default: m.AdminRoles })));
-const AdminStorage = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminStorage })));
-const AdminLibraries = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminLibraries })));
-const AdminWorkers = lazy(() => import("@/features/admin/AdminWorkers").then((m) => ({ default: m.AdminWorkers })));
-const AdminBackups = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminBackups })));
-const AdminDatabase = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminDatabase })));
-const AdminDiscord = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminDiscord })));
-const AdminIntegrations = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminIntegrations })));
-const AdminExternal = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminExternalProviders })));
-const AdminWebhooks = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminWebhooks })));
-const AdminCatalog = lazy(() => import("@/features/admin/AdminCatalog").then((m) => ({ default: m.AdminCatalog })));
-const AdminMetadata = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminMetadata })));
-const AdminTranscode = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminTranscode })));
-const AdminRetention = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminRetention })));
-const AdminListenCompare = lazy(() => import("@/features/admin/AdminListenCompare").then((m) => ({ default: m.AdminListenCompare })));
-const AdminStatsRebuild = lazy(() => import("@/features/admin/AdminStatsRebuild").then((m) => ({ default: m.AdminStatsRebuild })));
-const AdminAcquisitionPolicy = lazy(() => import("@/features/admin/AdminAcquisitionPolicy").then((m) => ({ default: m.AdminAcquisitionPolicy })));
-const AdminDuplicateReview = lazy(() => import("@/features/admin/AdminDuplicateReview").then((m) => ({ default: m.AdminDuplicateReview })));
-const AdminLyrics = lazy(() => import("@/features/admin/AdminLyrics").then((m) => ({ default: m.AdminLyrics })));
-const AdminGrants = lazy(() => import("@/features/admin/AdminGrants").then((m) => ({ default: m.AdminGrants })));
-const AdminSecurity = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminSecurity })));
-const AdminLogs = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminLogs })));
-const AdminInspect = lazy(() => import("@/features/admin/AdminInspect").then((m) => ({ default: m.AdminInspect })));
-const AdminUpdates = lazy(() => import("@/features/admin/AdminPages").then((m) => ({ default: m.AdminUpdates })));
 
 const BOOT_REQUEST_TIMEOUT_MS = 12_000;
 
@@ -169,42 +153,24 @@ export function AppRouter() {
           <Route path="/profile/devices" element={<DevicesPage />} />
           <Route path="/profile/party" element={<PartyPage />} />
           <Route path="/admin" element={user.is_admin ? <AdminLayout /> : <ForbiddenPage />}>
-            <Route index element={<AdminOverview />} />
-            <Route path="health" element={<AdminHealth />} />
-            <Route path="quotas" element={<AdminQuotas />} />
-            <Route path="maintenance" element={<AdminMaintenance />} />
-            <Route path="backup-preview" element={<Navigate to="/admin" replace />} />
-            <Route path="diagnostics" element={<AdminDiagnostics />} />
-            <Route path="demo" element={<Navigate to="/admin" replace />} />
-            <Route path="grants" element={<AdminGrants />} />
+            <Route index element={<AdminDashboard />} />
+            <Route path="activity" element={<AdminActivity />} />
+            <Route path="backups" element={<AdminBackups />} />
+            <Route path="updates" element={<AdminUpdates />} />
+            <Route path="integrations" element={<AdminIntegrations />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="users/:id/library" element={<PersonalLibraryPage admin />} />
             <Route path="discord-users/:discordID/library" element={<PersonalLibraryPage adminDiscord />} />
-            <Route path="roles" element={<AdminRoles />} />
-            <Route path="storage" element={<AdminStorage />} />
-            <Route path="libraries" element={<AdminLibraries />} />
-            <Route path="workers" element={<AdminWorkers />} />
-            <Route path="jobs" element={<Navigate to="/admin/workers" replace />} />
-            <Route path="backups" element={<AdminBackups />} />
-            <Route path="database" element={<AdminDatabase />} />
+            <Route path="groups" element={<AdminRoles />} />
             <Route path="discord" element={<AdminDiscord />} />
-            <Route path="integrations" element={<AdminIntegrations />} />
-            <Route path="providers" element={<AdminExternal />} />
-            <Route path="webhooks" element={<AdminWebhooks />} />
+            <Route path="libraries" element={<AdminLibraries />} />
             <Route path="catalog" element={<AdminCatalog />} />
-            <Route path="metadata" element={<AdminMetadata />} />
-            <Route path="lyrics" element={<AdminLyrics />} />
-            <Route path="transcoding" element={<AdminTranscode />} />
+            <Route path="media-settings" element={<AdminMediaSettings />} />
             <Route path="retention" element={<AdminRetention />} />
-            <Route path="listen-compare" element={<AdminListenCompare />} />
-            <Route path="stats-rebuild" element={<AdminStatsRebuild />} />
-            <Route path="acquisition-policy" element={<AdminAcquisitionPolicy />} />
-            <Route path="duplicate-review" element={<AdminDuplicateReview />} />
-            <Route path="security" element={<AdminSecurity />} />
-            <Route path="inspect" element={<AdminInspect />} />
-            <Route path="logs" element={<AdminLogs />} />
-            <Route path="cloudflare" element={<Navigate to="/admin" replace />} />
-            <Route path="updates" element={<AdminUpdates />} />
+            <Route path="stats-migration" element={<AdminStatsMigration />} />
+            {Object.entries(legacyAdminRedirects).map(([from, to]) => (
+              <Route key={from} path={from} element={<Navigate to={to} replace />} />
+            ))}
           </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Route>

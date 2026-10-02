@@ -9,6 +9,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
+	"github.com/sounddock/sounddock/internal/oplog"
 	"github.com/sounddock/sounddock/internal/playback"
 )
 
@@ -147,6 +148,7 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	data := i.ApplicationCommandData()
 	user := interactionUser(i)
 	ctx := context.Background()
+	recordCommand(ctx, i, data)
 	switch data.Name {
 	case "join":
 		g, ch, ok := b.VoiceOfUser(user)
@@ -477,4 +479,40 @@ func (b *Bot) handlePlaylist(s *discordgo.Session, i *discordgo.InteractionCreat
 	default:
 		b.reply(s, i, "Unknown playlist subcommand.")
 	}
+}
+
+// recordCommand adds a slash command to the activity log. Option values are
+// kept for search-style commands; link codes are never stored.
+func recordCommand(ctx context.Context, i *discordgo.InteractionCreate, data discordgo.ApplicationCommandInteractionData) {
+	name := ""
+	if i.Member != nil && i.Member.User != nil {
+		name = i.Member.User.Username
+	} else if i.User != nil {
+		name = i.User.Username
+	}
+	opts := map[string]any{}
+	for _, o := range data.Options {
+		if data.Name == "link" || o.Type != discordgo.ApplicationCommandOptionString && o.Type != discordgo.ApplicationCommandOptionInteger {
+			opts[o.Name] = "[set]"
+			continue
+		}
+		v := fmt.Sprint(o.Value)
+		if len(v) > 120 {
+			v = v[:120]
+		}
+		opts[o.Name] = v
+	}
+	details := map[string]any{"guild_id": i.GuildID, "channel_id": i.ChannelID, "discord_user_id": interactionUser(i)}
+	if len(opts) > 0 {
+		details["options"] = opts
+	}
+	oplog.Emit(ctx, oplog.Entry{
+		Level:     "info",
+		Category:  "discord",
+		Action:    "discord.command." + data.Name,
+		Message:   "Discord command /" + data.Name,
+		ActorName: "discord:" + name,
+		Result:    oplog.ResultSuccess,
+		Details:   details,
+	})
 }

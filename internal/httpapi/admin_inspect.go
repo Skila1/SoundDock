@@ -889,8 +889,8 @@ func inspectErr(at time.Time, msg, class string, extra map[string]any) map[strin
 
 func (s *Server) collectOplogErrors(ctx context.Context, limit int) []map[string]any {
 	rows, err := s.Pool.Query(ctx, `
-		SELECT id, created_at, level, category, message, job_id, track_id, actor_id
-		FROM operational_logs WHERE level IN ('warn','error')
+		SELECT id, created_at, level, category, message, job_id, track_id, actor_id, request_id
+		FROM operational_logs WHERE level = 'error'
 		ORDER BY created_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil
@@ -902,10 +902,14 @@ func (s *Server) collectOplogErrors(ctx context.Context, limit int) []map[string
 		var at time.Time
 		var level, cat, msg string
 		var job, track, actor *uuid.UUID
-		if err := rows.Scan(&id, &at, &level, &cat, &msg, &job, &track, &actor); err != nil {
+		var reqID string
+		if err := rows.Scan(&id, &at, &level, &cat, &msg, &job, &track, &actor, &reqID); err != nil {
 			continue
 		}
 		m := inspectErr(at, msg, cat, map[string]any{"id": id.String(), "level": level, "category": cat})
+		if reqID != "" {
+			m["request_id"] = reqID
+		}
 		if job != nil {
 			m["job_id"] = job.String()
 		}

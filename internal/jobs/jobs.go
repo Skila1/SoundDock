@@ -601,7 +601,7 @@ func (rt *poolRuntime) runJob(parent context.Context, job Job, cfg PoolConfig) {
 	defer rt.busy.Add(-1)
 	defer func() {
 		if rec := recover(); rec != nil {
-			r.log.Error("job panic", "type", job.Type, "id", job.ID, "pool", rt.id, "panic", rec)
+			r.log.Error("job panic", "type", job.Type, "id", job.ID, "pool", rt.id, "panic", rec, oplog.NoActivity)
 			r.fail(parent, job, fmt.Errorf("panic: %v", rec), cfg)
 		}
 	}()
@@ -609,9 +609,10 @@ func (rt *poolRuntime) runJob(parent context.Context, job Job, cfg PoolConfig) {
 	if h == nil {
 		_, _ = r.db.Exec(parent, `UPDATE jobs SET status='failed', last_error='no handler', finished_at=now(), locked_until=NULL, updated_at=now() WHERE id=$1`, job.ID)
 		jid := job.ID
-		_ = oplog.Write(parent, r.db, oplog.Entry{Level: "error", Category: "job", Message: "no handler", JobID: &jid, Details: map[string]any{"type": job.Type}})
+		_ = oplog.Write(parent, r.db, oplog.Entry{Level: "error", Category: "job", Action: "job.failed", Result: oplog.ResultFailure, Message: "no handler", JobID: &jid, Details: map[string]any{"type": job.Type}})
 		return
 	}
+	started := time.Now()
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
@@ -650,15 +651,19 @@ wait:
 		if r.OnCompleted != nil && tag.RowsAffected() > 0 {
 			r.OnCompleted(parent, job)
 		}
+		if tag.RowsAffected() > 0 && !QuietJobType(job.Type) {
+			emitJob(parent, job, rt.id, "info", "completed", "", time.Since(started))
+		}
 		return
 	}
 	if errors.Is(err, ErrCancelled) || errors.Is(err, context.Canceled) {
 		_, _ = r.db.Exec(parent, `
 			UPDATE jobs SET status='cancelled', last_error=$2, finished_at=now(), locked_until=NULL, updated_at=now()
 			WHERE id=$1 AND status='running' AND locked_by LIKE $3`, job.ID, errString(err), r.workerID+"%")
+		emitJob(parent, job, rt.id, "warn", "cancelled", errString(err), time.Since(started))
 		return
 	}
-	r.log.Error("job failed", "type", job.Type, "id", job.ID, "pool", rt.id, "err", err)
+	r.log.Error("job failed", "type", job.Type, "id", job.ID, "pool", rt.id, "err", err, oplog.NoActivity)
 	r.fail(parent, job, err, cfg)
 }
 
@@ -683,7 +688,46 @@ func (r *Runner) fail(ctx context.Context, job Job, err error, cfg PoolConfig) {
 	_ = r.db.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, job.ID).Scan(&status)
 	if status == "failed" {
 		writeJobLog(ctx, r.db, job, msg)
+		return
 	}
+	emitJob(ctx, job, job.Pool, "warn", "will retry", msg, 0)
+}
+
+// QuietJobType reports per-track or housekeeping jobs whose successes would
+// flood the Activity log. Their failures are still recorded.
+func QuietJobType(t string) bool {
+	switch t {
+	case "waveform.generate", "fingerprint.generate", "party.expire", "external.playlist.tick",
+		"radio.refresh", "smart_playlist.refresh", "maintenance.gc-cache":
+		return true
+	}
+	return false
+}
+
+func emitJob(ctx context.Context, job Job, pool ID, level, outcome, errText string, took time.Duration) {
+	jid := job.ID
+	result := oplog.ResultSuccess
+	if level != "info" {
+		result = oplog.ResultFailure
+	}
+	details := map[string]any{"type": job.Type, "pool": string(pool), "attempt": job.Attempts + 1}
+	var ms *int
+	if took > 0 {
+		v := int(took / time.Millisecond)
+		ms = &v
+		details["duration"] = took.Round(time.Millisecond).String()
+	}
+	oplog.Emit(ctx, oplog.Entry{
+		Level:      level,
+		Category:   "job",
+		Action:     "job." + strings.ReplaceAll(outcome, " ", "_"),
+		Message:    "Job " + job.Type + " " + outcome,
+		JobID:      &jid,
+		Details:    details,
+		Error:      errText,
+		Result:     result,
+		DurationMs: ms,
+	})
 }
 
 func currentRSSMB() int {
@@ -695,9 +739,11 @@ func writeJobLog(ctx context.Context, pool *pgxpool.Pool, job Job, msg string) {
 	_ = oplog.Write(ctx, pool, oplog.Entry{
 		Level:    "error",
 		Category: "job",
+		Action:   "job.failed",
 		Message:  msg,
 		JobID:    &jid,
-		Details:  map[string]any{"type": job.Type},
+		Result:   oplog.ResultFailure,
+		Details:  map[string]any{"type": job.Type, "pool": string(job.Pool)},
 	})
 }
 

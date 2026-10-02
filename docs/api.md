@@ -32,3 +32,9 @@ Play and queue requests return immediately. They do not block on yt-dlp. Queue i
 ## Backups
 
 Encrypted archives. `POST /api/v1/admin/backups` fails if `pg_dump` is missing or no recovery passphrase is set. Restore requires `{confirm: true, passphrase}`. First setup can list/import R2 at `/api/v1/setup/backups/*`. See [backup.md](backup.md).
+
+## Activity and audit
+
+`GET /api/v1/admin/logs` returns activity entries newest first. Filters: `q` (text), `level` (comma list: `debug,info,warn,error`), `category` (comma list), `result` (`success`/`failure`), `actor` (username fragment or user ID), `ip` (prefix), `request_id`, and `since`/`until` (RFC 3339). Pass `limit` (max 200) and `cursor` (the previous page's `next_cursor`) to page. The first page also includes `categories`, plus `dropped` (entries skipped because the buffer was full). Every API response carries `X-Request-Id`, which matches `request_id` in the log.
+
+`GET /api/v1/admin/audit` returns administrative changes with `username`, `ip`, `meta`, and `request_id`. It takes `q`, `actor`, `ip`, `request_id`, `since`, `until`, `limit`, and `cursor`, and returns `{items, next_cursor}`.

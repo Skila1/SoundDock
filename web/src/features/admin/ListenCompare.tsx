@@ -6,7 +6,6 @@ import { Badge } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
-import { PageHeader } from "@/components/ui/empty";
 import type { ListenComparePair, ListenCompareReport } from "@/types/api";
 
 type Preset = "last_30_days" | "all" | "custom";
@@ -29,7 +28,7 @@ function localInput(iso?: string | null) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-export function AdminListenCompare() {
+export function ListenComparePanel() {
   const [preset, setPreset] = useState<Preset>("last_30_days");
   const [fromLocal, setFromLocal] = useState("");
   const [toLocal, setToLocal] = useState("");
@@ -57,10 +56,9 @@ export function AdminListenCompare() {
 
   return (
     <div>
-      <PageHeader
-        title="Listen compare"
-        description="Validation report only. History and events are compared in parallel - this is not a merged listen statistic. Home, Stats, and Wrapped still read listen_history. Recap minutes from sum(duration_ms) are labeled estimated_minutes."
-      />
+      <p className="mb-4 text-sm text-muted">
+        A side-by-side check of the older history and the new listening data for the same period. It does not change anything.
+      </p>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Badge tone={d?.ready ? "success" : "warning"}>{d?.ready ? "Events ready" : "Events not ready"}</Badge>
@@ -96,8 +94,8 @@ export function AdminListenCompare() {
 
       {!d?.ready && (
         <article className="mb-6 rounded-xl border border-warning/40 bg-warning/10 p-4 text-sm">
-          <div className="font-medium">Shadow tables not ready</div>
-          <p className="mt-1 text-muted">{d?.message || "listen_events / listen_output_segments are missing (migration 0015 pending). History figures below still come from listen_history."}</p>
+          <div className="font-medium">New listening data is not available yet</div>
+          <p className="mt-1 text-muted">{d?.message || "The database has not been upgraded for the new listening data yet. The history figures below are still accurate."}</p>
         </article>
       )}
 
@@ -106,8 +104,8 @@ export function AdminListenCompare() {
       <div className="mb-8 grid gap-4 md:grid-cols-2">
         <section className="rounded-xl border border-border bg-surface-1 p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold">listen_history</h2>
-            <Badge tone="accent">production readers</Badge>
+            <h2 className="font-semibold">Older history</h2>
+            <Badge tone="accent">in use</Badge>
           </div>
           <dl className="space-y-2 text-sm">
             <Row label="Rows (all sources)" value={fmt(hist?.row_count)} />
@@ -115,15 +113,15 @@ export function AdminListenCompare() {
             <Row label="Import rows" value={fmt(hist?.import_row_count)} />
             <Row label="Distinct users" value={fmt(hist?.distinct_users_excluding_import)} hint="excluding import" />
             <Row label="Distinct tracks" value={fmt(hist?.distinct_tracks_excluding_import)} hint="excluding import" />
-            <Row label="estimated_minutes" value={fmtMin(hist?.estimated_minutes)} hint={hist?.estimated_minutes_source || "sum(duration_ms) / 60000"} />
-            <Row label="estimated_minutes excluding import" value={fmtMin(hist?.estimated_minutes_excluding_import)} />
+            <Row label="Estimated minutes" value={fmtMin(hist?.estimated_minutes)} hint={hist?.estimated_minutes_source || "sum(duration_ms) / 60000"} />
+            <Row label="Estimated minutes excluding import" value={fmtMin(hist?.estimated_minutes_excluding_import)} />
           </dl>
         </section>
 
         <section className="rounded-xl border border-border bg-surface-1 p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold">listen_events</h2>
-            <Badge tone="neutral">shadow</Badge>
+            <h2 className="font-semibold">New listening data</h2>
+            <Badge tone="neutral">recorded in background</Badge>
           </div>
           <dl className="space-y-2 text-sm">
             <Row label="Rows" value={fmt(ev?.row_count)} />
@@ -146,11 +144,11 @@ export function AdminListenCompare() {
       <section className="rounded-xl border border-border bg-surface-1 p-4">
         <div className="mb-3 flex items-center gap-2">
           <GitCompare className="h-4 w-4 text-muted" />
-          <h2 className="font-semibold">Diffs</h2>
+          <h2 className="font-semibold">Differences</h2>
           <Badge tone="warning">not a merged total</Badge>
         </div>
         {!diffs ? (
-          <p className="text-sm text-muted">Diffs are omitted until listen_events is ready.</p>
+          <p className="text-sm text-muted">Shown once the new listening data is available.</p>
         ) : (
           <>
             <p className="mb-4 text-sm text-muted">{diffs.delta_meaning}</p>

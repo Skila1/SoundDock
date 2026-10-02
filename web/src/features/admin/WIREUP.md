@@ -74,32 +74,21 @@ settings:
   - quotas
 dependencies: []
 frontend_routes:
-  - path: /admin/health
-    component: web/src/features/admin/AdminHealth.tsx#AdminHealth
-  - path: /admin/quotas
-    component: web/src/features/admin/AdminQuotas.tsx#AdminQuotas
-  - path: /admin/maintenance
-    component: web/src/features/admin/AdminMaintenance.tsx#AdminMaintenance
-  - path: /admin/diagnostics
-    component: web/src/features/admin/AdminDiagnostics.tsx#AdminDiagnostics
-  - path: /admin/grants
-    component: web/src/features/admin/AdminGrants.tsx#AdminGrants
+  - path: /admin
+    component: web/src/features/admin/AdminDashboard.tsx#AdminDashboard
+    note: health, diagnostics, database, maintenance mode, and announcement
+  - path: /admin/activity
+    component: web/src/features/admin/activity/AdminActivity.tsx#AdminActivity
+    note: Live, Jobs & Workers, Logs, Audit, Errors tabs (?tab=)
+  - path: /admin/users
+    component: web/src/features/admin/AdminUsers.tsx#AdminUsers
+    note: per-user and default upload quotas
+  - path: /admin/libraries
+    component: web/src/features/admin/AdminLibraries.tsx#AdminLibraries
+    note: libraries, storage, library grants (?tab=access), library quotas
 nav:
-  - slot: AdminLayout
-    to: health
-    label: Health
-  - slot: AdminLayout
-    to: quotas
-    label: Quotas
-  - slot: AdminLayout
-    to: maintenance
-    label: Maintenance
-  - slot: AdminLayout
-    to: diagnostics
-    label: Diagnostics
-  - slot: AdminLayout
-    to: grants
-    label: Grants
+  - source: web/src/features/admin/adminNav.ts
+    note: old admin URLs redirect through legacyAdminRedirects
 api_types:
   - name: Announcement
     fields: { announcement: string, maintenance: boolean }
@@ -118,4 +107,3 @@ notes:
   - AppShell banner: GET /api/v1/announcement (requireAuth).
   - Fingerprint health is fpcalc LookPath: available|missing.
   - Restore requires JSON {confirm: true}; refuses incomplete pg_dump fallbacks.
-  - New pages also re-exported from AdminPages.tsx; do not rewrite Updates/Discord/Cloudflare/Jobs/Users.

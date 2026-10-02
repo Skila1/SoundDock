@@ -5,7 +5,6 @@ import { RefreshCw } from "lucide-react";
 import { api } from "@/lib/api";
 import { Badge, Progress } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
-import { PageHeader } from "@/components/ui/empty";
 import { relativeTime } from "@/lib/utils";
 import { toast } from "sonner";
 import type { StatsRebuildEnqueue, StatsRebuildStatus } from "@/types/api";
@@ -23,7 +22,7 @@ function jobTone(status?: string) {
   return "neutral" as const;
 }
 
-export function AdminStatsRebuild() {
+export function StatsRebuildPanel() {
   const qc = useQueryClient();
   const [submitting, setSubmitting] = useState(false);
   const q = useQuery({
@@ -59,13 +58,9 @@ export function AdminStatsRebuild() {
 
   return (
     <div>
-      <PageHeader
-        title="Stats rebuild"
-        description="Queue a one-time cutover job. Production Home, Stats, and Wrapped keep reading listen_history until this rebuild finishes and flips the reader to listen_events. This page is rebuild plus current reader mode - not a merged listen total."
-      />
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <Badge tone={readerTone(mode)}>{onEvents ? "Reader: listen_events" : "Reader: listen_history"}</Badge>
+        <Badge tone={readerTone(mode)}>{onEvents ? "Using new listening data" : "Using older history"}</Badge>
         {busy && <Badge tone="accent">Rebuild in progress</Badge>}
         {job && !busy && <Badge tone={jobTone(job.status)}>Last job: {job.status}</Badge>}
       </div>
@@ -76,18 +71,15 @@ export function AdminStatsRebuild() {
           Cutover
         </div>
         <p className="text-muted">
-          Listen events are written in the background today. Readers do not switch to{" "}
-          <span className="font-medium text-foreground">listen_events</span> until a successful{" "}
-          <span className="font-medium text-foreground">stats.rebuild</span> job completes. Until then, counts stay on{" "}
-          <span className="font-medium text-foreground">listen_history</span>. Cancel is hidden during the swap - let the
-          job finish.
+          New listening data is recorded in a more detailed format in the background. Home, Stats, and Wrapped keep using the
+          older history until this one-time rebuild finishes and switches them over. Let the rebuild finish once it starts.
         </p>
         <p className="mt-2 text-muted">
-          Side-by-side history vs events validation (not a combined total) lives on{" "}
-          <Link to="/admin/listen-compare" className="text-accent hover:underline">
-            Listen compare
-          </Link>
-          .
+          To check the two sources agree first, use the{" "}
+          <Link to="/admin/stats-migration?tab=compare" className="text-accent hover:underline">
+            Compare
+          </Link>{" "}
+          tab.
         </p>
       </article>
 
@@ -100,14 +92,13 @@ export function AdminStatsRebuild() {
         <dl className="space-y-2 text-sm">
           <div className="flex items-start justify-between gap-4">
             <dt className="text-muted">
-              listen_reader
-              <div className="text-xs text-subtle">server_settings key; missing is treated as history</div>
+              Stats source
             </dt>
             <dd className="font-medium">{mode}</dd>
           </div>
           <div className="flex items-start justify-between gap-4">
-            <dt className="text-muted">Home / Stats / Wrapped</dt>
-            <dd className="font-medium">{onEvents ? "listen_events" : "listen_history"}</dd>
+            <dt className="text-muted">Home, Stats, and Wrapped read from</dt>
+            <dd className="font-medium">{onEvents ? "New listening data" : "Older history"}</dd>
           </div>
         </dl>
       </section>
@@ -116,16 +107,16 @@ export function AdminStatsRebuild() {
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <h2 className="font-semibold">Rebuild job</h2>
           <Button size="sm" onClick={enqueue} disabled={busy || submitting}>
-            {busy ? "Rebuild running" : "Queue rebuild"}
+            {busy ? "Rebuild running" : "Start rebuild"}
           </Button>
         </div>
         {!job ? (
-          <p className="text-sm text-muted">No stats.rebuild job has been queued yet.</p>
+          <p className="text-sm text-muted">The rebuild has not been run yet.</p>
         ) : (
           <div className="space-y-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <Badge tone={jobTone(job.status)}>{job.status}</Badge>
-              <span className="text-muted">id {job.id}</span>
+              
             </div>
             {(busy || job.progress > 0) && <Progress value={job.progress || 0} />}
             <dl className="space-y-2">

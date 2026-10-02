@@ -11,6 +11,7 @@ import { PageHeader } from "@/components/ui/empty";
 import { Switch } from "@/components/ui/switch";
 import { formatBytes, relativeTime } from "@/lib/utils";
 import { toast } from "sonner";
+import { SaveBar, errorMessage } from "./adminUi";
 
 type Policy = {
   enabled: boolean;
@@ -79,11 +80,11 @@ type Retention = {
 };
 
 const modes = [
-  { value: "disabled", label: "Disabled - never automatically delete acquired music" },
-  { value: "age", label: "Age based - prune idle ScapeX tracks after the age threshold" },
-  { value: "storage", label: "Storage limit - keep managed media below the high-water mark" },
-  { value: "free_space", label: "Free-space protection - prune when the disk is too full" },
-  { value: "hybrid", label: "Hybrid - age rules, then prune harder under storage pressure" }
+  { value: "disabled", label: "Off - never remove downloaded music automatically" },
+  { value: "age", label: "By age - remove idle downloads after a number of days" },
+  { value: "storage", label: "By size - keep downloads under a storage limit" },
+  { value: "free_space", label: "By free space - prune when the disk is nearly full" },
+  { value: "hybrid", label: "Combined - by age, and harder when space runs low" }
 ];
 
 function toGB(bytes?: number | null) {
@@ -118,6 +119,9 @@ export function AdminRetention() {
   const [exKind, setExKind] = useState("track");
   const [exId, setExId] = useState("");
   const [preview, setPreview] = useState<{ rows: PreviewRow[]; bytes: number } | null>(null);
+  const [baseline, setBaseline] = useState("");
+  const [needBaseline, setNeedBaseline] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const d = q.data;
@@ -144,12 +148,12 @@ export function AdminRetention() {
     const o: Record<string, boolean> = {};
     (d.libraries || []).forEach((l) => { o[l.id] = !!l.retention_opt_in; });
     setOptIn(o);
+    setNeedBaseline(true);
   }, [q.data]);
 
   const st = q.data?.status;
   const logPolicies = (q.data?.log_policies || []).filter((r) => r.key !== "operational_logs");
-  const save = async () => {
-    await api.put("/api/v1/admin/retention", {
+  const buildPayload = () => ({
       log_policies: Object.fromEntries(logPolicies.map((r) => [r.key, Number(days[r.key] ?? r.days) || 0])),
       media: {
         enabled,
@@ -166,29 +170,44 @@ export function AdminRetention() {
         dry_run: dryRun
       },
       libraries: (q.data?.libraries || []).map((l) => ({ id: l.id, retention_opt_in: !!optIn[l.id] }))
-    });
-    toast.success("Retention saved");
-    qc.invalidateQueries({ queryKey: ["ret"] });
+  });
+  // Snapshot the form right after it is filled from the server so the save
+  // bar only appears once something actually changed.
+  useEffect(() => {
+    if (!needBaseline) return;
+    setBaseline(JSON.stringify(buildPayload()));
+    setNeedBaseline(false);
+    // The form state and needBaseline are set in the same update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needBaseline]);
+  const dirty = !!baseline && JSON.stringify(buildPayload()) !== baseline;
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put("/api/v1/admin/retention", buildPayload());
+      toast.success("Retention saved");
+      await qc.invalidateQueries({ queryKey: ["ret"] });
+    } catch (e) {
+      toast.error(errorMessage(e, "Could not save retention"));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const openPreview = async () => {
+    try {
+      const res = await api.post<{ preview?: PreviewRow[]; eligible_bytes?: number }>("/api/v1/admin/retention/preview");
+      setPreview({ rows: res.preview || [], bytes: res.eligible_bytes || 0 });
+    } catch (e) {
+      toast.error(errorMessage(e, "Could not preview"));
+    }
   };
 
   return (
     <div>
       <PageHeader
         title="Retention"
-        description="Prune ScapeX / YouTube-acquired media so temporary listening does not fill the disk. NAS, mounted, and read-only libraries are never deleted unless you opt them in."
-        actions={
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={async () => {
-              const res = await api.post<{ preview?: PreviewRow[]; eligible_bytes?: number }>("/api/v1/admin/retention/preview");
-              setPreview({ rows: res.preview || [], bytes: res.eligible_bytes || 0 });
-            }}>Preview prune</Button>
-            <Button onClick={async () => {
-              await api.post("/api/v1/admin/retention/run");
-              toast.success("Prune queued on the Maintenance pool");
-              qc.invalidateQueries({ queryKey: ["ret"] });
-            }}>Run prune now</Button>
-          </div>
-        }
+        description="Automatically remove downloaded music nobody is listening to, so temporary listening does not fill the disk. Network, mounted, and read-only libraries are never touched unless you opt them in."
+        actions={<Button variant="secondary" onClick={openPreview}>Prune now…</Button>}
       />
 
       <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -214,7 +233,7 @@ export function AdminRetention() {
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-medium">Enable automatic pruning</div>
-            <p className="text-xs text-subtle">Runs on the Maintenance worker pool. Playback, search, and ScapeX are not blocked.</p>
+            <p className="text-xs text-subtle">Runs in the background without slowing down playback, search, or downloads.</p>
           </div>
           <Switch checked={enabled} onCheckedChange={setEnabled} />
         </div>
@@ -228,7 +247,7 @@ export function AdminRetention() {
           <Field label="Batch size" hint="Maximum deletions per run.">
             <Input type="number" min={1} max={500} value={batch} onChange={(e) => setBatch(e.target.value)} />
           </Field>
-          <Field label="Age threshold (days)" hint="Idle ScapeX tracks older than this become eligible.">
+          <Field label="Age threshold (days)" hint="Downloaded tracks older than this, and not recently played, can be removed.">
             <Input type="number" min={0} value={ageDays} onChange={(e) => setAgeDays(e.target.value)} />
           </Field>
           <Field label="Recent-play protection (days)" hint="Do not prune anything played within this window. 0 disables.">
@@ -237,16 +256,16 @@ export function AdminRetention() {
           <Field label="Protect after this many plays" hint="0 disables. Frequently played tracks stay.">
             <Input type="number" min={0} value={minPlays} onChange={(e) => setMinPlays(e.target.value)} />
           </Field>
-          <Field label="Maximum managed storage (GB)" hint="High-water mark. 0 means no size cap.">
+          <Field label="Maximum managed storage (GB)" hint="Start removing tracks above this size. 0 means no limit.">
             <Input type="number" min={0} step="0.1" value={maxGB} onChange={(e) => setMaxGB(e.target.value)} />
           </Field>
-          <Field label="Prune down to (GB)" hint="Low-water mark so pruning is not one-song-at-a-time. 0 uses 90% of the maximum.">
+          <Field label="Prune down to (GB)" hint="Keep removing until storage is back under this. 0 uses 90% of the maximum.">
             <Input type="number" min={0} step="0.1" value={lowGB} onChange={(e) => setLowGB(e.target.value)} />
           </Field>
           <Field label="Minimum free disk (GB)" hint="Start pruning when free space drops below this. 0 disables.">
             <Input type="number" min={0} step="0.1" value={freeGB} onChange={(e) => setFreeGB(e.target.value)} />
           </Field>
-          <Field label="Free-space target (GB)" hint="Optional extra headroom after a free-space prune. 0 adds 5 GB.">
+          <Field label="Free-space target (GB)" hint="Extra space to free once pruning starts. 0 frees an extra 5 GB.">
             <Input type="number" min={0} step="0.1" value={freeTargetGB} onChange={(e) => setFreeTargetGB(e.target.value)} />
           </Field>
         </div>
@@ -261,7 +280,7 @@ export function AdminRetention() {
 
       <section className="mb-8 max-w-2xl space-y-3">
         <h2 className="font-semibold">Libraries</h2>
-        <p className="text-sm text-muted">Managed libraries are eligible for ScapeX-acquired tracks by default. Opt a NAS or local library in only if you want destructive pruning there.</p>
+        <p className="text-sm text-muted">Downloaded tracks in SoundDock-managed libraries can be pruned. Turn a network or local library on only if SoundDock may delete files there.</p>
         <ul className="space-y-2">
           {(q.data?.libraries || []).map((l) => (
             <li key={l.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface-1 px-3 py-2">
@@ -282,7 +301,7 @@ export function AdminRetention() {
 
       <section className="mb-8 max-w-2xl space-y-3">
         <h2 className="font-semibold">Exclusions</h2>
-        <p className="text-sm text-muted">Never prune these tracks, albums, artists, playlists, or libraries. Favourites, Keep forever, manual playlists, Up Next, and active jobs are already protected.</p>
+        <p className="text-sm text-muted">Never prune these tracks, albums, artists, playlists, or libraries. Favourites, Keep forever, playlists, queues, and active jobs are always protected.</p>
         <form
           className="flex flex-wrap items-end gap-2"
           onSubmit={async (e) => {
@@ -297,7 +316,7 @@ export function AdminRetention() {
             <Select value={exKind} onValueChange={setExKind} options={["track", "album", "artist", "playlist", "library"].map((k) => ({ value: k, label: k }))} />
           </Field>
           <Field label="ID">
-            <Input className="w-72" value={exId} onChange={(e) => setExId(e.target.value)} placeholder="UUID" required />
+            <Input className="w-72" value={exId} onChange={(e) => setExId(e.target.value)} placeholder="ID (from the item's page address)" required />
           </Field>
           <Button type="submit">Exclude</Button>
         </form>
@@ -350,7 +369,7 @@ export function AdminRetention() {
 
       <section className="mb-8 max-w-md space-y-3">
         <h2 className="font-semibold">Logs and history</h2>
-        <p className="text-sm text-muted">0 days means keep forever. These only expire database rows, not music files.</p>
+        <p className="text-sm text-muted">0 days means keep forever. These only clear old records, never music files.</p>
         {(logPolicies).map((r) => (
           <Field key={r.key} label={r.label || r.key}>
             <Input type="number" min={0} value={days[r.key] ?? r.days} onChange={(e) => setDays({ ...days, [r.key]: e.target.value })} />
@@ -358,13 +377,31 @@ export function AdminRetention() {
         ))}
       </section>
 
-      <Button onClick={save}>Save retention</Button>
+      <SaveBar dirty={dirty} saving={saving} onSave={save} onReset={() => q.refetch().then(() => setNeedBaseline(true))} />
 
       <Dialog open={!!preview} onOpenChange={(v) => { if (!v) setPreview(null); }}>
-        <DialogContent title="Preview prune" className="max-h-[90vh] overflow-auto">
+        <DialogContent title="Prune now" className="max-h-[90vh] overflow-auto">
           <p className="mb-3 text-sm text-muted">
-            {preview?.rows.length || 0} tracks · {formatBytes(preview?.bytes)} would be reclaimed. Protected favourites, Keep forever, manual playlists, queue, and active jobs are excluded.
+            {preview?.rows.length || 0} tracks · {formatBytes(preview?.bytes)} would be freed. Favourites, tracks marked Keep forever, playlists, queues, and active jobs are never pruned.
           </p>
+          <div className="mb-3 flex gap-2">
+            <Button
+              disabled={!preview?.rows.length}
+              onClick={async () => {
+                try {
+                  await api.post("/api/v1/admin/retention/run");
+                  toast.success("Prune started");
+                  setPreview(null);
+                  qc.invalidateQueries({ queryKey: ["ret"] });
+                } catch (e) {
+                  toast.error(errorMessage(e, "Could not start prune"));
+                }
+              }}
+            >
+              Prune {preview?.rows.length || 0} tracks
+            </Button>
+            <Button variant="ghost" onClick={() => setPreview(null)}>Cancel</Button>
+          </div>
           <ul className="space-y-2 text-sm">
             {(preview?.rows || []).map((row) => (
               <li key={row.id} className="rounded-lg border border-border px-3 py-2">

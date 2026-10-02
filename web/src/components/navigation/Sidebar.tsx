@@ -58,26 +58,25 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
             {adminNavGroups.map((g) => (
               <div key={g.id} className={compact ? "pt-2" : "pt-3"}>
                 {!compact && (
-                  <div className="px-3 pb-1">
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-accent">{g.label}</div>
-                    <p className="text-[11px] text-accent/70">{g.hint}</p>
-                  </div>
+                  <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-accent">{g.label}</div>
                 )}
-                {g.links.map(([to, label]) => (
+                {g.links.map(({ to, label, icon: Icon }) => (
                   <NavLink
                     key={to}
                     to={adminPath(to)}
                     end={to === "."}
                     title={compact ? label : undefined}
+                    aria-label={compact ? label : undefined}
                     className={({ isActive }) =>
                       cn(
                         "flex items-center gap-3 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
-                        compact && "justify-center px-0 text-xs",
+                        compact && "justify-center px-0 py-2",
                         isActive && "bg-surface-2 text-foreground"
                       )
                     }
                   >
-                    {compact ? label.slice(0, 2) : label}
+                    <Icon className="h-4 w-4 shrink-0" />
+                    {!compact && label}
                   </NavLink>
                 ))}
               </div>

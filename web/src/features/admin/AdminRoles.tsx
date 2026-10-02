@@ -37,7 +37,7 @@ export function AdminRoles() {
     <div>
       <PageHeader
         title="Groups"
-        description="SoundDock permissions are the source of truth. Discord role links only add people to a group when they sign in with Discord, and are optional."
+        description="Groups decide what people can do. Linking Discord roles is optional and only adds people to a group when they sign in with Discord."
         actions={<Button onClick={() => setCreateOpen(true)}>Create group</Button>}
       />
       <div className="grid gap-3 md:grid-cols-2">

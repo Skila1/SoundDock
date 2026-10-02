@@ -7,6 +7,9 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { PageHeader } from "@/components/ui/empty";
+import { AdminTabs } from "./adminUi";
+import { DuplicateReview } from "./DuplicateReview";
+import { CatalogCleanup } from "./CatalogCleanup";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { Track, TrackPage } from "@/types/api";
@@ -34,7 +37,7 @@ type TrackMeta = {
   disc_number?: number;
 };
 
-export function AdminCatalog() {
+function CatalogEditor() {
   const qc = useQueryClient();
   const [albumQ, setAlbumQ] = useState("");
   const [singles, setSingles] = useState(true);
@@ -204,15 +207,12 @@ export function AdminCatalog() {
 
   return (
     <div>
-      <PageHeader
-        title="Catalog"
-        description="Edit albums and track metadata. Autoplay uses genre and tags only - not titles. One-track albums from imports can be merged here."
-        actions={
-          <Button onClick={() => setCreateOpen(true)}>
-            <Plus className="h-4 w-4" /> New album
-          </Button>
-        }
-      />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted">Edit albums and track details. Merge the one-track albums that imports often create.</p>
+        <Button onClick={() => setCreateOpen(true)}>
+          <Plus className="h-4 w-4" /> New album
+        </Button>
+      </div>
 
       <div className="grid gap-8 lg:grid-cols-2">
         <section>
@@ -533,5 +533,21 @@ function AlbumEditForm({
         <Button type="submit">Save</Button>
       </div>
     </form>
+  );
+}
+
+export function AdminCatalog() {
+  return (
+    <div>
+      <PageHeader title="Catalog" description="Tidy up albums, tracks, duplicates, and metadata across every library." />
+      <AdminTabs
+        fallback="edit"
+        tabs={[
+          { id: "edit", label: "Albums & tracks", content: <CatalogEditor /> },
+          { id: "duplicates", label: "Duplicates", content: <DuplicateReview /> },
+          { id: "cleanup", label: "Cleanup", content: <CatalogCleanup /> }
+        ]}
+      />
+    </div>
   );
 }
