@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- The admin panel is reorganised into 12 pages: Dashboard, Activity, Backups, Updates, Integrations, Users, Groups, Discord, Libraries & Storage, Catalog, Media Settings, and Retention. Old admin links redirect to the matching page.
+- New Activity page with Live, Jobs & Workers, Logs, Audit, and Errors tabs. It records who did what, when, from which IP, and whether it worked, with search, filters, and request IDs.
+- Upload and library limits now live on the Users and Libraries pages. Library access is a tab on Libraries & Storage.
+- Passwords, tokens, keys, and other secrets are never stored in the activity log.
+
 ## 0.1.1
 
 - The site is installable as a phone app (Add to Home Screen on iOS, Install on Android) with proper icons and standalone display.
