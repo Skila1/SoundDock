@@ -129,6 +129,7 @@ let listen: ListenScratch | null = null;
 let xfTimer: number | undefined;
 let sleepHandle: number | undefined;
 let voiceTimer: number | undefined;
+let discordJoinInFlight = false;
 let discordQueueTimer: number | undefined;
 let playheadTimer: number | undefined;
 let volTimer: number | undefined;
@@ -993,6 +994,7 @@ type PlayerStore = {
   stopAfterCurrent: boolean;
   sleepUntil: number | null;
   output: OutputTarget;
+  discordJoining: boolean;
   voice: VoiceState | null;
   sinkId: string;
   listeners: PresenceParticipant[];
@@ -1040,6 +1042,7 @@ export const usePlayer = create<PlayerStore>()(
       stopAfterCurrent: false,
       sleepUntil: null,
       output: prefs.outputManual === "browser" ? "browser" : "discord",
+      discordJoining: false,
       voice: null,
       sinkId: prefs.sinkId,
       listeners: [],
@@ -1356,6 +1359,12 @@ export const usePlayer = create<PlayerStore>()(
       },
       setOutput: async (o) => {
         if (o === "discord") {
+          // One join at a time: a second click used to start a racing join that
+          // tore down the first one's half-open voice connection.
+          if (discordJoinInFlight) return;
+          discordJoinInFlight = true;
+          set({ discordJoining: true });
+          try {
           const wasPlaying = get().playing || get().queue?.status === "playing";
           const resumeId = get().current?.id;
           const resumePos = get().position;
@@ -1416,7 +1425,12 @@ export const usePlayer = create<PlayerStore>()(
           }
           ensureSessionPoll();
           return;
+          } finally {
+            discordJoinInFlight = false;
+            set({ discordJoining: false });
+          }
         }
+        if (discordJoinInFlight) return;
         setManualOutput("browser");
         try {
           const switched = (await commands.control(
@@ -1450,6 +1464,11 @@ export const usePlayer = create<PlayerStore>()(
       },
       pollVoice: async () => {
         const voice = await fetchVoice();
+        if (discordJoinInFlight) {
+          // The join flow owns the output toggle until it settles.
+          set({ voice });
+          return;
+        }
         const manual = loadDevicePrefs().outputManual;
         const pref = session.queue.output_pref;
         const output = pref === "discord" || pref === "browser" ? pref : resolveOutput(voice, manual);

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.org/x/sync/singleflight"
 	"io"
 	"math"
 	"os/exec"
@@ -177,10 +178,32 @@ func (b *Bot) finishVoiceJoin(ctx context.Context, vc *discordgo.VoiceConnection
 
 // JoinChannel connects the bot to a guild voice channel and starts PCM streaming
 // from the discord_guild playback session. Reuses an existing healthy connection.
+//
+// Concurrent calls for the same guild share one join attempt: a second click,
+// or a join racing a play request, used to drop the half-open connection the
+// first call was still negotiating, so neither finished and users had to click
+// again. The attempt also outlives the HTTP request that started it, so a
+// client that gives up waiting does not abort a join that is about to succeed.
 func (b *Bot) JoinChannel(ctx context.Context, guildID, channelID string) error {
 	if guildID == "" || channelID == "" {
 		return fmt.Errorf("not in a voice channel")
 	}
+	ch := joinFlight.DoChan(guildID+"/"+channelID, func() (any, error) {
+		jctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 45*time.Second)
+		defer cancel()
+		return nil, b.joinChannel(jctx, guildID, channelID)
+	})
+	select {
+	case res := <-ch:
+		return res.Err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+var joinFlight singleflight.Group
+
+func (b *Bot) joinChannel(ctx context.Context, guildID, channelID string) error {
 	sess := b.session()
 	if sess == nil {
 		return fmt.Errorf("discord gateway is not connected")
@@ -192,7 +215,9 @@ func (b *Bot) JoinChannel(ctx context.Context, guildID, channelID string) error 
 	}
 
 	if vc := b.voiceConn(guildID); vc != nil {
-		if cur, ok := b.BotChannel(guildID); ok && cur == channelID && waitVoiceReady(vc, 0) {
+		// A connection to this channel that is still negotiating gets a moment to
+		// finish instead of being torn down and redialled.
+		if cur, ok := b.BotChannel(guildID); ok && cur == channelID && waitVoiceReady(vc, 8*time.Second) {
 			if err := waitDAVEReady(vc, 5*time.Second); err == nil {
 				b.markVoiceConnected(ctx, guildID, channelID, sid)
 				return nil

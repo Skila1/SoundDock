@@ -14,7 +14,8 @@ import {
   Shuffle,
   SkipBack,
   SkipForward,
-  Square
+  Square,
+  Loader2
 } from "lucide-react";
 import { Artwork } from "@/components/media/Artwork";
 import { Button } from "@/components/ui/button";
@@ -185,13 +186,15 @@ export function PlayerBar() {
             </button>
             <button
               type="button"
-              disabled={!discordOn}
-              aria-pressed={p.output === "discord"}
-              title={!discordOn ? "Join a Discord voice channel" : "Play in Discord"}
-              className={`rounded-full px-2 py-1 disabled:cursor-not-allowed disabled:opacity-40 ${p.output === "discord" ? "bg-surface-1 text-foreground" : "text-muted"}`}
-              onClick={() => discordOn && p.setOutput("discord")}
+              disabled={p.discordJoining}
+              aria-pressed={p.output === "discord" || p.discordJoining}
+              aria-busy={p.discordJoining}
+              title={p.discordJoining ? "Joining your voice channel…" : !discordOn ? "Join a Discord voice channel, then click to play there" : "Play in Discord"}
+              className={`inline-flex items-center gap-1 rounded-full px-2 py-1 disabled:cursor-wait ${p.output === "discord" || p.discordJoining ? "bg-surface-1 text-foreground" : "text-muted"} ${!discordOn && !p.discordJoining ? "opacity-60" : ""}`}
+              onClick={() => void p.setOutput("discord")}
             >
-              Discord
+              {p.discordJoining && <Loader2 className="h-3 w-3 animate-spin" />}
+              {p.discordJoining ? "Joining…" : "Discord"}
             </button>
           </div>
         )}

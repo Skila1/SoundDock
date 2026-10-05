@@ -297,6 +297,10 @@ func (s *Server) listTracks(w http.ResponseWriter, r *http.Request) {
 	}
 	q := strings.TrimSpace(r.URL.Query().Get("q"))
 	includeAll := strings.EqualFold(r.URL.Query().Get("all"), "1") || strings.EqualFold(r.URL.Query().Get("all"), "true")
+	if order, ok := trackSortOrders[r.URL.Query().Get("sort")]; ok {
+		s.listTracksSorted(w, r, libs, q, includeAll, order, limit)
+		return
+	}
 	sql, extra := listTracksFilteredSQL(q, includeAll)
 	args := append([]any{libs}, extra...)
 	args = append(args, cursorArg, cursorID, limit+1)
@@ -314,6 +318,64 @@ func (s *Server) listTracks(w http.ResponseWriter, r *http.Request) {
 			next = encodeTrackCursor(ts, id)
 		}
 		items = items[:limit]
+	}
+	writeJSON(w, 200, map[string]any{"items": items, "next_cursor": next})
+}
+
+// trackSortOrders are the non-default catalogue orderings. They page by offset
+// (cursor "o:<n>") because their keys are not unique or monotonic.
+var trackSortOrders = map[string]string{
+	"title":      "lower(t.title) ASC, t.id ASC",
+	"title_desc": "lower(t.title) DESC, t.id DESC",
+	"artist":     "lower(" + listenArtistSQL + ") ASC, lower(coalesce(al.title,'')) ASC, t.disc_number, t.track_number, t.id",
+	"album":      "lower(coalesce(al.title,'')) ASC, t.disc_number, t.track_number, t.id",
+	"year":       "t.year DESC NULLS LAST, lower(t.title), t.id",
+	"duration":   "t.duration_ms DESC, t.id",
+	"oldest":     "t.created_at ASC, t.id ASC",
+}
+
+func (s *Server) listTracksSorted(w http.ResponseWriter, r *http.Request, libs []uuid.UUID, q string, includeAll bool, order string, limit int) {
+	offset := 0
+	if raw := r.URL.Query().Get("cursor"); strings.HasPrefix(raw, "o:") {
+		if n, err := strconv.Atoi(strings.TrimPrefix(raw, "o:")); err == nil && n > 0 {
+			offset = n
+		}
+	}
+	var b strings.Builder
+	b.WriteString(`
+		SELECT t.id, t.title, t.duration_ms, t.track_number, t.disc_number, t.year, t.explicit, t.album_id, t.library_id,
+		       coalesce(al.title,''), t.created_at, ` + listenArtistSQL + `
+		FROM tracks t LEFT JOIN albums al ON al.id=t.album_id
+		WHERE t.library_id = ANY($1)`)
+	if !includeAll {
+		b.WriteString(" AND " + trackPlayablePred)
+	}
+	args := []any{libs}
+	if q != "" {
+		args = append(args, likePattern(q))
+		b.WriteString(`
+		  AND (
+		    t.title ILIKE $2 ESCAPE '\'
+		    OR coalesce(al.title,'') ILIKE $2 ESCAPE '\'
+		    OR EXISTS (
+		      SELECT 1 FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
+		      WHERE ta.track_id=t.id AND ar.name ILIKE $2 ESCAPE '\'
+		    )
+		  )`)
+	}
+	args = append(args, limit+1, offset)
+	b.WriteString(fmt.Sprintf(" ORDER BY %s LIMIT $%d OFFSET $%d", order, len(args)-1, len(args)))
+	rows, err := s.Pool.Query(r.Context(), b.String(), args...)
+	if err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	defer rows.Close()
+	items := scanMaps(rows, "id", "title", "duration_ms", "track_number", "disc_number", "year", "explicit", "album_id", "library_id", "album", "created_at", "artist")
+	var next any
+	if len(items) > limit {
+		items = items[:limit]
+		next = "o:" + strconv.Itoa(offset+limit)
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "next_cursor": next})
 }

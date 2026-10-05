@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -172,10 +173,12 @@ func (s *Server) userPublicProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) writePersonalLibrary(w http.ResponseWriter, r *http.Request, o minilib.Owner, viewer uuid.UUID, inspecting bool) {
-	limit := trackPageLimit(r.URL.Query().Get("limit"))
+	// The page filters and sorts the whole library client-side, so it asks for
+	// everything; the cap only guards against runaway responses.
+	limit := personalLibraryLimit(r.URL.Query().Get("limit"))
 	rows, err := s.Pool.Query(r.Context(), `
 		SELECT t.id, t.title, t.duration_ms, t.track_number, t.disc_number, t.year, t.explicit, t.album_id, t.library_id,
-		       coalesce(al.title,''), e.first_requested_at, e.last_requested_at, e.request_count, `+listenArtistSQL+`
+		       coalesce(al.title,''), e.first_requested_at, e.last_requested_at, e.request_count, `+listenArtistSQL+`, coalesce(t.genre_text,'')
 		FROM personal_library_entries e
 		JOIN tracks t ON t.id = e.track_id
 		LEFT JOIN albums al ON al.id = t.album_id
@@ -188,7 +191,7 @@ func (s *Server) writePersonalLibrary(w http.ResponseWriter, r *http.Request, o 
 		return
 	}
 	defer rows.Close()
-	items := scanMaps(rows, "id", "title", "duration_ms", "track_number", "disc_number", "year", "explicit", "album_id", "library_id", "album", "first_requested_at", "last_requested_at", "request_count", "artist")
+	items := scanMaps(rows, "id", "title", "duration_ms", "track_number", "disc_number", "year", "explicit", "album_id", "library_id", "album", "first_requested_at", "last_requested_at", "request_count", "artist", "genre")
 	if items == nil {
 		items = []map[string]any{}
 	}
@@ -218,4 +221,16 @@ func (s *Server) writePersonalLibrary(w http.ResponseWriter, r *http.Request, o 
 		"items":      items,
 		"inspecting": inspecting,
 	})
+}
+
+func personalLibraryLimit(raw string) int {
+	const def, max = 5000, 20000
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return def
+	}
+	if n > max {
+		return max
+	}
+	return n
 }

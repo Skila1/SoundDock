@@ -52,7 +52,11 @@ type trackMetaBody struct {
 	Artist      *string `json:"artist"`
 	KeepForever *bool   `json:"keep_forever"`
 	AlbumID     *string `json:"album_id"`
-	WriteBack   bool    `json:"write_back"`
+	// Album is an album title; it links the track to a matching album in the
+	// same library, or creates one. Ignored when AlbumID is also sent.
+	Album        *string  `json:"album"`
+	ManualGainDB *float64 `json:"manual_gain_db"`
+	WriteBack    bool     `json:"write_back"`
 }
 
 func (s *Server) getTrackMetadata(w http.ResponseWriter, r *http.Request) {
@@ -247,8 +251,57 @@ func (s *Server) applyTrackMeta(ctx context.Context, id uuid.UUID, body trackMet
 			}
 		}
 	}
+	if body.AlbumID == nil && body.Album != nil && !s.fieldLocked(ctx, "track", id, "album") {
+		if s.linkTrackAlbumByTitle(ctx, id, strings.TrimSpace(*body.Album)) {
+			updated = append(updated, "album")
+		}
+	}
+	if body.ManualGainDB != nil {
+		if _, err := s.Pool.Exec(ctx, `UPDATE tracks SET manual_gain_db=$2, updated_at=now() WHERE id=$1`, id, *body.ManualGainDB); err == nil {
+			updated = append(updated, "manual_gain_db")
+		}
+	}
 	_ = userID
 	return updated
+}
+
+// linkTrackAlbumByTitle points a track at the album called title in its
+// library, preferring one that shares an artist with the track, and creates the
+// album when none exists. An empty title detaches the track.
+func (s *Server) linkTrackAlbumByTitle(ctx context.Context, trackID uuid.UUID, title string) bool {
+	if title == "" {
+		_, err := s.Pool.Exec(ctx, `UPDATE tracks SET album_id=NULL, updated_at=now() WHERE id=$1`, trackID)
+		return err == nil
+	}
+	var current string
+	_ = s.Pool.QueryRow(ctx, `SELECT coalesce(al.title,'') FROM tracks t LEFT JOIN albums al ON al.id=t.album_id WHERE t.id=$1`, trackID).Scan(&current)
+	if current == title {
+		return false
+	}
+	var albumID uuid.UUID
+	err := s.Pool.QueryRow(ctx, `
+		SELECT al.id FROM albums al, tracks t
+		WHERE t.id=$1 AND lower(al.title)=lower($2)
+		  AND (al.library_id IS NOT DISTINCT FROM t.library_id)
+		ORDER BY EXISTS (
+		  SELECT 1 FROM album_artists aa JOIN track_artists ta ON ta.artist_id=aa.artist_id
+		  WHERE aa.album_id=al.id AND ta.track_id=t.id
+		) DESC, al.created_at
+		LIMIT 1`, trackID, title).Scan(&albumID)
+	if err != nil {
+		if err := s.Pool.QueryRow(ctx, `
+			INSERT INTO albums (title, year, library_id)
+			SELECT $2, t.year, t.library_id FROM tracks t WHERE t.id=$1
+			RETURNING id`, trackID, title).Scan(&albumID); err != nil {
+			return false
+		}
+		_, _ = s.Pool.Exec(ctx, `
+			INSERT INTO album_artists (album_id, artist_id, position)
+			SELECT $1, ta.artist_id, ta.position FROM track_artists ta WHERE ta.track_id=$2 AND ta.role='primary'
+			ON CONFLICT DO NOTHING`, albumID, trackID)
+	}
+	_, err = s.Pool.Exec(ctx, `UPDATE tracks SET album_id=$2, updated_at=now() WHERE id=$1`, trackID, albumID)
+	return err == nil
 }
 
 func (s *Server) replaceTrackArtists(ctx context.Context, trackID uuid.UUID, names string) {
