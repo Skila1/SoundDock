@@ -40,3 +40,6 @@ coverage.out
 
 # Local agent handoff (not published)
 /BRIEFING.md
+
+#Cursor files
+.cursor/
