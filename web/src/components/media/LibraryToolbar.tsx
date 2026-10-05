@@ -124,7 +124,9 @@ const PAGE = 120;
 export function TrackGrid({ tracks, onPlay }: { tracks: Track[]; onPlay: (index: number) => void }) {
   const [shown, setShown] = useState(PAGE);
   const sentinel = useRef<HTMLDivElement>(null);
-  useEffect(() => setShown(PAGE), [tracks]);
+  // Start over only when the list itself changes (new search/sort), not on every render.
+  const head = tracks[0]?.id;
+  useEffect(() => setShown(PAGE), [head]);
   useEffect(() => {
     const el = sentinel.current;
     if (!el || shown >= tracks.length) return;
