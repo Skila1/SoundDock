@@ -1,23 +1,18 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { Download, Heart, ListPlus, Pencil, Play, SkipForward } from "lucide-react";
-import { useState } from "react";
 import { api } from "@/lib/api";
 import { Artwork } from "@/components/media/Artwork";
 import { CoverEditor } from "@/components/media/CoverEditor";
 import { hasPerm } from "@/lib/perms";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { Field } from "@/components/ui/field";
-import { Input, Textarea } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/misc";
 import { artworkUrl, formatDuration, formatBytes } from "@/lib/utils";
 import { usePlayer } from "@/stores/player";
 import type { Favourite, Track, User } from "@/types/api";
 import { toast } from "sonner";
-import { callWriteBack, downloadTrack, saveTrackMeta } from "@/components/media/TrackList";
-import { refreshCatalogue } from "@/lib/catalogue";
+import { downloadTrack, saveTrackMeta } from "@/components/media/TrackList";
+import { useTrackActions } from "@/components/media/TrackActions";
 
 export type TrackMeta = Track & {
   genre?: string;
@@ -60,7 +55,6 @@ export function TrackPage() {
   const q = useQuery({ queryKey: ["track-meta", id], queryFn: () => loadTrack(id!), enabled: !!id });
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const favs = useQuery({ queryKey: ["favourites"], queryFn: () => api.get<Favourite[]>("/api/v1/favourites") });
-  const [edit, setEdit] = useState(false);
   const t = q.data;
   if (!t) return <div className="h-64 animate-pulse rounded-xl bg-surface-2" />;
   const fav = !!t.favourite || !!(favs.data || []).some((f) => f.type === "track" && f.id === t.id);
@@ -116,7 +110,7 @@ export function TrackPage() {
             <Button variant="ghost" onClick={() => add([t.id]).then(() => toast.success("Added to queue"))}><ListPlus /> Add to queue</Button>
             <Button variant="ghost" onClick={toggleFav} aria-label="Favourite"><Heart className={fav ? "fill-current" : ""} /></Button>
             <Button variant="ghost" onClick={() => downloadTrack(t)}><Download /> Download</Button>
-            {admin && <Button variant="ghost" onClick={() => setEdit(true)}><Pencil /> Edit</Button>}
+            {admin && <Button variant="ghost" onClick={() => useTrackActions.getState().openEdit(t.id)}><Pencil /> Edit</Button>}
             {admin && (
               <Button
                 variant="ghost"
@@ -135,75 +129,6 @@ export function TrackPage() {
       {t.lyrics && (
         <section className="mb-8 max-w-xl whitespace-pre-wrap text-sm text-muted">{t.lyrics}</section>
       )}
-      {edit && <TrackEditDialog track={t} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); qc.invalidateQueries({ queryKey: ["track-meta", id] }); refreshCatalogue(qc); }} />}
     </div>
-  );
-}
-
-function TrackEditDialog({ track, onClose, onSaved }: { track: TrackMeta; onClose: () => void; onSaved: () => void }) {
-  const [title, setTitle] = useState(track.title);
-  const [artist, setArtist] = useState(track.artists?.map((a) => a.name).join(", ") || track.artist || "");
-  const [genre, setGenre] = useState(track.genre || "");
-  const [year, setYear] = useState(track.year ? String(track.year) : "");
-  const [disc, setDisc] = useState(String(track.disc_number || 1));
-  const [num, setNum] = useState(String(track.track_number || 0));
-  const [isrc, setIsrc] = useState(track.isrc || "");
-  const [lyrics, setLyrics] = useState(track.lyrics || "");
-  const [explicit, setExplicit] = useState(!!track.explicit);
-  const [writeBack, setWriteBack] = useState(false);
-
-  return (
-    <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent title="Edit metadata" className="max-h-[90vh] overflow-auto">
-        <form
-          className="space-y-3"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            const y = year.trim() ? Number(year) : undefined;
-            await saveTrackMeta(track.id, {
-              title,
-              artist,
-              genre,
-              year: y && !Number.isNaN(y) ? y : undefined,
-              disc_number: Number(disc) || 1,
-              track_number: Number(num) || 0,
-              isrc,
-              lyrics,
-              explicit,
-              write_back: writeBack
-            });
-            toast.success("Metadata saved");
-            if (writeBack) await callWriteBack([track.id], true);
-            onSaved();
-          }}
-        >
-          <Field label="Title"><Input value={title} onChange={(e) => setTitle(e.target.value)} /></Field>
-          <Field label="Artists"><Input value={artist} onChange={(e) => setArtist(e.target.value)} /></Field>
-          <Field label="Genre"><Input value={genre} onChange={(e) => setGenre(e.target.value)} /></Field>
-          <div className="grid grid-cols-3 gap-2">
-            <Field label="Year"><Input value={year} onChange={(e) => setYear(e.target.value)} inputMode="numeric" /></Field>
-            <Field label="Disc"><Input value={disc} onChange={(e) => setDisc(e.target.value)} inputMode="numeric" /></Field>
-            <Field label="Track"><Input value={num} onChange={(e) => setNum(e.target.value)} inputMode="numeric" /></Field>
-          </div>
-          <Field label="ISRC"><Input value={isrc} onChange={(e) => setIsrc(e.target.value)} /></Field>
-          <Field label="Lyrics"><Textarea value={lyrics} onChange={(e) => setLyrics(e.target.value)} /></Field>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm">Explicit</span>
-            <Switch checked={explicit} onCheckedChange={setExplicit} />
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-sm">Write tags to file</span>
-            <Switch checked={writeBack} onCheckedChange={setWriteBack} />
-          </div>
-          <p className="text-xs text-subtle">
-            {track.write_back_supported ? "Managed library - P3 write-back when registered." : "DB save always. File write-back is managed libraries only (P3)."}
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
-            <Button type="submit">Save</Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
   );
 }

@@ -12,7 +12,10 @@ export default defineConfig({
       registerType: "prompt",
       injectRegister: false,
       includeAssets: [
-        "favicon.svg",
+        "favicon-64.png",
+        "logo.png",
+        "logo-full.png",
+        "logo-mark.png",
         "manifest.webmanifest",
         "icons/icon-192.png",
         "icons/icon-512.png",

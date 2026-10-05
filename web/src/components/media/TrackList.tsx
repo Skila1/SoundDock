@@ -18,6 +18,7 @@ import { api } from "@/lib/api";
 import type { Favourite, Playlist, Track, User } from "@/types/api";
 import { toast } from "sonner";
 import { saveTracksOffline } from "@/lib/offlineFill";
+import { useTrackActions } from "./TrackActions";
 
 export const TRACK_DND_MIME = "application/x-sounddock-tracks";
 
@@ -396,6 +397,7 @@ export function TrackList({
                 <DropdownMenuItem onSelect={() => openPlaylist(t)}>Add to playlist</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => saveTracksOffline(targetIds(t))}>Save offline</DropdownMenuItem>
                 <DropdownMenuItem onSelect={() => navigate(`/tracks/${t.id}`)}>Go to track info</DropdownMenuItem>
+                {admin && t.source !== "youtube" && <DropdownMenuItem onSelect={() => useTrackActions.getState().openEdit(t.id)}>Edit…</DropdownMenuItem>}
                 {admin && t.source !== "youtube" && (
                   <DropdownMenuItem
                     onSelect={() => {
@@ -429,6 +431,7 @@ export function TrackList({
         <ContextMenuItem onSelect={() => openPlaylist(t)}>Add to playlist</ContextMenuItem>
         <ContextMenuItem onSelect={() => saveTracksOffline(targetIds(t))}>Save offline</ContextMenuItem>
         <ContextMenuItem onSelect={() => navigate(`/tracks/${t.id}`)}>Go to track info</ContextMenuItem>
+                {admin && t.source !== "youtube" && <ContextMenuItem onSelect={() => useTrackActions.getState().openEdit(t.id)}>Edit…</ContextMenuItem>}
         {admin && t.source !== "youtube" && (
           <ContextMenuItem
             onSelect={() => {

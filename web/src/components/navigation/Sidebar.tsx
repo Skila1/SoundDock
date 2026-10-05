@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { Disc3, Home, Library, Link2, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Search, Shield } from "lucide-react";
+import { Disc3, Home, Library, Link2, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Shield } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -10,7 +10,6 @@ import type { User } from "@/types/api";
 
 const primary = [
   { to: "/", label: "Home", icon: Home, end: true },
-  { to: "/search", label: "Search", icon: Search },
   { to: "/me/library", label: "My Library", icon: Library },
   { to: "/playlists", label: "My Playlists", icon: ListMusic },
   { to: "/library", label: "Catalogue", icon: Disc3 },
@@ -33,8 +32,8 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
   return (
     <aside className={cn("h-full min-h-0 flex-col overflow-hidden border-r border-border bg-surface-1/80", className || "hidden md:flex", compact ? "w-[72px]" : "w-[232px]")}>
       <div className="flex items-center bg-black">
-        <NavLink to="/" end className={cn("flex min-w-0 flex-1 items-center px-3 py-4", compact && "justify-center px-2")}>
-          <Logo className={compact ? "h-9 w-9" : "h-12 w-auto max-w-[168px]"} />
+        <NavLink to="/" end aria-label="SoundDock home" className={cn("flex min-w-0 flex-1 items-center px-4 py-3", compact && "justify-center px-2")}>
+          <Logo mark={compact} className={compact ? "h-10 w-10" : "h-14 w-auto max-w-[176px]"} />
         </NavLink>
         {collapsible && !compact && (
           <Tooltip label="Collapse menu">

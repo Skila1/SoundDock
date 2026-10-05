@@ -16,6 +16,7 @@ import { attachAudioListeners, usePlayer } from "@/stores/player";
 import { ensureDiscordPresence } from "@/features/settings/discordPresence";
 import { queueDocked, useUi } from "@/stores/ui";
 import { InstallHint } from "@/components/pwa/InstallHint";
+import { TrackActionsHost } from "@/components/media/TrackActions";
 import { api } from "@/lib/api";
 import type { User } from "@/types/api";
 
@@ -24,8 +25,9 @@ const titles: Record<string, string> = {
   "/search": "Search",
   "/library/add": "Add music",
   "/library/import": "Import",
-  "/library": "Library",
-  "/playlists": "Playlists",
+  "/library": "Catalogue",
+  "/me/library": "My Library",
+  "/playlists": "My Playlists",
   "/radio": "Radio",
   "/profile/devices": "Devices",
   "/profile/party": "Party",
@@ -79,6 +81,7 @@ export function AppShell({ user }: { user: User }) {
       <NowPlaying />
       <LyricsSheet />
       <LyricsPrefetch />
+      <TrackActionsHost />
       <Sheet open={ui.mobileNav} onOpenChange={(v) => ui.set({ mobileNav: v })}>
         <SheetContent side="left" title="Menu">
           <div className="mt-8" onClick={() => ui.set({ mobileNav: false })}>

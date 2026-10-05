@@ -24,6 +24,7 @@ export type PersonalLibraryTrack = Track & {
   first_requested_at?: string;
   last_requested_at?: string;
   request_count?: number;
+  genre?: string;
 };
 
 export type PersonalLibraryResponse = {
