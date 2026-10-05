@@ -612,12 +612,22 @@ func (s *Server) spa() http.Handler {
 		if p == "" {
 			p = "index.html"
 		}
+		// Embedded files carry no modification time, so without explicit headers
+		// browsers cache the app shell heuristically and keep running an old build
+		// until a hard refresh. Hashed bundles never change; everything else must
+		// revalidate.
 		f, err := s.Web.Open(p)
 		if err != nil {
+			w.Header().Set("Cache-Control", "no-cache")
 			http.ServeFileFS(w, r, s.Web, "index.html")
 			return
 		}
 		f.Close()
+		if strings.HasPrefix(p, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
 		http.ServeFileFS(w, r, s.Web, p)
 	})
 }

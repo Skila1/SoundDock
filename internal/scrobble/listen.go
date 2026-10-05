@@ -6,7 +6,19 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/listen"
+	"github.com/sounddock/sounddock/internal/playback"
 )
+
+// listenKeys are the web query roots that show a user's listening data. Open
+// pages refetch them when a play or skip is recorded instead of going stale
+// until a hard refresh.
+var listenKeys = []string{"me-history", "history", "me-stats", "stats", "home", "me-wrapped", "me-never-played", "me-rediscovery", "track-meta"}
+
+func (s *Service) notifyListened(ctx context.Context, userID uuid.UUID) {
+	_ = playback.Notify(context.WithoutCancel(ctx), s.pool, playback.Signal{
+		T: "resource.invalidate", Scope: "user", Actor: userID.String(), Keys: listenKeys,
+	})
+}
 
 func (s *Service) HandleListen(ctx context.Context, userID uuid.UUID, ev Event) error {
 	_ = EnsureSchema(ctx, s.pool)
@@ -40,6 +52,7 @@ func (s *Service) HandleListen(ctx context.Context, userID uuid.UUID, ev Event) 
 			INSERT INTO play_counts (user_id, track_id, count, skip_count) VALUES ($1,$2,0,1)
 			ON CONFLICT (user_id, track_id) DO UPDATE SET skip_count=play_counts.skip_count+1`,
 			userID, ev.TrackID)
+		s.notifyListened(ctx, userID)
 		return nil
 	}
 	if out.CountPlay && out.InsertHistory {
@@ -47,6 +60,7 @@ func (s *Service) HandleListen(ctx context.Context, userID uuid.UUID, ev Event) 
 			return err
 		}
 		s.scrobbleNow(ctx, userID, ev)
+		s.notifyListened(ctx, userID)
 	} else if ev.Kind == "progress" && ev.PositionMS > 0 {
 		s.updateNowPlaying(ctx, userID, ev)
 	}

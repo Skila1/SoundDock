@@ -86,6 +86,8 @@ export type QueueSseHandlers = {
   onPresence: (event: SessionPresenceEvent) => void;
   onAcquisition?: (event: AcquisitionStatusEvent) => void;
   onInvalidate?: (event: ResourceInvalidateEvent) => void;
+  /** Called after a reconnect: invalidations sent while offline were missed. */
+  onResync?: () => void;
   onJobProgress?: (event: JobProgressEvent) => void;
   onAuthLost?: () => void;
 };
@@ -403,8 +405,11 @@ export function createQueueSseClient(handlers: QueueSseHandlers): QueueSseClient
     };
   }
 
+  let subscribedOnce = false;
   async function resyncAndSubscribe() {
     if (stopped) return;
+    if (subscribedOnce) handlers.onResync?.();
+    subscribedOnce = true;
     const my = ++epoch;
     pathIndex = 0;
     closeEs();

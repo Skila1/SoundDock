@@ -25,6 +25,18 @@ const updateSW = registerSW({
       duration: Infinity
     });
   },
+  // Long-lived tabs never reload, so look for a new build regularly and when
+  // the tab comes back into view instead of only at startup.
+  onRegisteredSW(_url, reg) {
+    if (!reg) return;
+    const check = () => {
+      if (navigator.onLine) void reg.update().catch(() => undefined);
+    };
+    window.setInterval(check, 30 * 60_000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") check();
+    });
+  },
   onOfflineReady() {
     toast.success("SoundDock is ready to work offline");
   }

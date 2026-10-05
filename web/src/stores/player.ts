@@ -652,6 +652,9 @@ function ensureQueueSse(): QueueSseClient {
         void queryClient.invalidateQueries({ queryKey: [key] });
       }
     },
+    onResync: () => {
+      void queryClient.invalidateQueries({ predicate: (q) => q.queryKey[0] !== "setup" && q.queryKey[0] !== "me" });
+    },
     onJobProgress: () => undefined,
     onAuthLost: () => {
       queueSse?.stop();
