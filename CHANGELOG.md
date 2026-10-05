@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3
+
+- The original SoundDock logo is back in the sidebar, sign-in screens, favicon and app icons.
+- My Library shows your whole library (it stopped at 200 songs) and gets its own search, sorting, genre and explicit filters. Layout, sort and filters are remembered per user.
+- The catalogue's Tracks, Albums and Artists pages get search and sorting, and large catalogues load as you scroll.
+- Admins can choose Edit on any song to change its title, artists, album, genre, numbering, IDs, volume, lyrics, flags and artwork.
+- Right-click menus work in grid view as well as list view.
+- The Discord button joins your voice channel on the first click and shows Joining while it connects. Repeat clicks no longer cancel the join.
+- History, stats, home and play counts update live as you listen, data refreshes after the connection drops, and new versions load without a hard refresh.
+- Search is no longer duplicated in the sidebar; use the search bar at the top.
+
 ## 0.1.2
 
 - The admin panel is reorganised into 12 pages: Dashboard, Activity, Backups, Updates, Integrations, Users, Groups, Discord, Libraries & Storage, Catalog, Media Settings, and Retention. Old admin links redirect to the matching page.
