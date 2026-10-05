@@ -118,35 +118,38 @@ export function LibraryToolbar({
 const PAGE = 120;
 
 /**
- * Song grid that renders in pages as you scroll, so libraries with thousands of
- * songs stay responsive. Right-click works on every card.
+ * Grid that renders in pages as you scroll, so libraries with thousands of
+ * items stay responsive.
  */
-export function TrackGrid({ tracks, onPlay }: { tracks: Track[]; onPlay: (index: number) => void }) {
+export function ProgressiveGrid<T extends { id: string }>({ items, render }: { items: T[]; render: (item: T, index: number) => ReactNode }) {
   const [shown, setShown] = useState(PAGE);
   const sentinel = useRef<HTMLDivElement>(null);
   // Start over only when the list itself changes (new search/sort), not on every render.
-  const head = tracks[0]?.id;
+  const head = items[0]?.id;
   useEffect(() => setShown(PAGE), [head]);
   useEffect(() => {
     const el = sentinel.current;
-    if (!el || shown >= tracks.length) return;
+    if (!el || shown >= items.length) return;
     const io = new IntersectionObserver(
       (entries) => {
-        if (entries.some((e) => e.isIntersecting)) setShown((n) => Math.min(tracks.length, n + PAGE));
+        if (entries.some((e) => e.isIntersecting)) setShown((n) => Math.min(items.length, n + PAGE));
       },
       { rootMargin: "800px 0px" }
     );
     io.observe(el);
     return () => io.disconnect();
-  }, [shown, tracks.length]);
+  }, [shown, items.length]);
   return (
     <>
       <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
-        {tracks.slice(0, shown).map((t, i) => (
-          <TrackCard key={t.id} track={t} onPlay={() => onPlay(i)} />
-        ))}
+        {items.slice(0, shown).map(render)}
       </div>
-      {shown < tracks.length && <div ref={sentinel} className="h-10" aria-hidden />}
+      {shown < items.length && <div ref={sentinel} className="h-10" aria-hidden />}
     </>
   );
+}
+
+/** Song grid; right-click works on every card. */
+export function TrackGrid({ tracks, onPlay }: { tracks: Track[]; onPlay: (index: number) => void }) {
+  return <ProgressiveGrid items={tracks} render={(t, i) => <TrackCard key={t.id} track={t} onPlay={() => onPlay(i)} />} />;
 }
