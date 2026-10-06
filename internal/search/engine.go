@@ -116,18 +116,18 @@ func textMatchSQL(text, titleCol, albumCol, trackIDCol string, args []any) (stri
 	if len(tokens) == 0 {
 		args = append(args, likeContains(text))
 		n := len(args)
-		return fmt.Sprintf("unaccent(lower(%s)) LIKE unaccent(lower($%d)) ESCAPE '\\\\'", titleCol, n), args
+		return fmt.Sprintf("unaccent(lower(%s)) LIKE unaccent(lower($%d)) ESCAPE '\\'", titleCol, n), args
 	}
 	parts := make([]string, 0, len(tokens))
 	for _, tok := range tokens {
 		args = append(args, likeContains(tok))
 		n := len(args)
 		parts = append(parts, fmt.Sprintf(`(
-			unaccent(lower(%s)) LIKE unaccent(lower($%d)) ESCAPE '\\'
-			OR unaccent(lower(coalesce(%s,''))) LIKE unaccent(lower($%d)) ESCAPE '\\'
+			unaccent(lower(%s)) LIKE unaccent(lower($%d)) ESCAPE '\'
+			OR unaccent(lower(coalesce(%s,''))) LIKE unaccent(lower($%d)) ESCAPE '\'
 			OR EXISTS (
 				SELECT 1 FROM track_artists ta_s JOIN artists ar_s ON ar_s.id=ta_s.artist_id
-				WHERE ta_s.track_id=%s AND unaccent(lower(ar_s.name)) LIKE unaccent(lower($%d)) ESCAPE '\\'
+				WHERE ta_s.track_id=%s AND unaccent(lower(ar_s.name)) LIKE unaccent(lower($%d)) ESCAPE '\'
 			)
 		)`, titleCol, n, albumCol, n, trackIDCol, n))
 	}
@@ -223,10 +223,10 @@ func (e *Engine) albums(ctx context.Context, q Query, libs []uuid.UUID, limit in
 			args = append(args, likeContains(tok))
 			n := len(args)
 			parts = append(parts, fmt.Sprintf(`(
-				unaccent(lower(a.title)) LIKE unaccent(lower($%d)) ESCAPE '\\'
+				unaccent(lower(a.title)) LIKE unaccent(lower($%d)) ESCAPE '\'
 				OR EXISTS (
 					SELECT 1 FROM album_artists aa_s JOIN artists ar_s ON ar_s.id=aa_s.artist_id
-					WHERE aa_s.album_id=a.id AND unaccent(lower(ar_s.name)) LIKE unaccent(lower($%d)) ESCAPE '\\'
+					WHERE aa_s.album_id=a.id AND unaccent(lower(ar_s.name)) LIKE unaccent(lower($%d)) ESCAPE '\'
 				)
 			)`, n, n))
 		}
