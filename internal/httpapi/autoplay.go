@@ -56,7 +56,24 @@ func (s *Server) ReplenishAutoplay(ctx context.Context, sid uuid.UUID) error {
 	exclude := append([]uuid.UUID{}, have...)
 	exclude = append(exclude, seed)
 
-	extra := s.autoplayLibraryTracks(fillCtx, userID, seed, exclude)
+	// With YouTube available, the related-songs mix leads and the library only
+	// bridges the gap while it loads, so autoplay is not just more songs by the
+	// same artist. Without YouTube, the library fills everything.
+	libLimit := 8
+	youtube := s.ScapeX != nil && s.ScapeX.Ready(fillCtx)
+	if youtube {
+		libLimit = 0
+		if n-idx <= 1 {
+			libLimit = 2
+		}
+	}
+	var extra []uuid.UUID
+	if libLimit > 0 {
+		extra = s.autoplayLibraryTracks(fillCtx, userID, seed, exclude)
+		if len(extra) > libLimit {
+			extra = extra[:libLimit]
+		}
+	}
 	if len(extra) > 0 {
 		if err := s.addAutoplayTracks(fillCtx, sid, userID, extra); err != nil {
 			return err
@@ -64,11 +81,7 @@ func (s *Server) ReplenishAutoplay(ctx context.Context, sid uuid.UUID) error {
 		have = append(have, extra...)
 	}
 
-	n = len(have)
-	if n == 0 {
-		n = 1
-	}
-	if !playback.ShouldReplenishAutoplay(autoplay, stopAfter, n-idx) {
+	if !youtube {
 		return nil
 	}
 	go s.replenishAutoplayYouTube(sid, seed, userID, have)
@@ -79,7 +92,8 @@ func (s *Server) replenishAutoplayYouTube(sid, seed, userID uuid.UUID, have []uu
 	if s == nil || s.Play == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	// Finding the seed's video and listing its mix are two yt-dlp calls.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	ok, err := s.Play.HasAudioListener(ctx, sid)
 	if err != nil || !ok {

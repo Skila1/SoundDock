@@ -318,6 +318,11 @@ func (s *Server) similarYouTubeHits(ctx context.Context, seed uuid.UUID, need in
 		return nil
 	}
 	need = radio.ClampFill(need)
+	ids := append([]uuid.UUID{seed}, have...)
+	if out := s.relatedYouTubeHits(ctx, seed, need, ids); len(out) > 0 {
+		return out
+	}
+	// No mix for this song: fall back to a search, but only keep real songs.
 	meta, err := radio.New(s.Pool).TrackMeta(ctx, seed)
 	if err != nil {
 		return nil
@@ -326,35 +331,11 @@ func (s *Server) similarYouTubeHits(ctx context.Context, seed uuid.UUID, need in
 	if q == "" {
 		return nil
 	}
-	hits, err := s.YouTube().Search(ctx, q, need+8)
+	hits, err := s.YouTube().Search(ctx, q, need+12)
 	if err != nil || len(hits) == 0 {
 		return nil
 	}
-	hits = scapex.RankHits(q, hits)
-	ids := append([]uuid.UUID{seed}, have...)
-	local := s.trackTitleArtist(ctx, ids)
-	var out []scapex.Hit
-	seen := map[string]struct{}{}
-	for _, h := range hits {
-		if h.ID == "" {
-			continue
-		}
-		if _, ok := seen[h.ID]; ok {
-			continue
-		}
-		if radio.SameSong(h.Title, meta.Title) {
-			continue
-		}
-		if scapex.AlreadyInLibrary(h.Title, h.Artist, local) {
-			continue
-		}
-		seen[h.ID] = struct{}{}
-		out = append(out, h)
-		if len(out) >= need {
-			break
-		}
-	}
-	return out
+	return s.pickMusicHits(ctx, scapex.RankHits(q, hits), "", meta.Title, need, ids)
 }
 
 func (s *Server) trackTitleArtist(ctx context.Context, ids []uuid.UUID) []map[string]any {
