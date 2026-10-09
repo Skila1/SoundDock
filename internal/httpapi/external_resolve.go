@@ -126,7 +126,8 @@ func abs(n int) int {
 // them. YouTube refs are downloaded into the catalogue first.
 func (s *Server) addToMyLibrary(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Refs []string `json:"refs"`
+		Refs   []string         `json:"refs"`
+		Tracks []queueTrackHint `json:"tracks"`
 	}
 	if err := decodeJSON(r, &body); err != nil || len(body.Refs) == 0 {
 		writeErr(w, 400, "invalid", "refs required")
@@ -135,7 +136,8 @@ func (s *Server) addToMyLibrary(w http.ResponseWriter, r *http.Request) {
 	if len(body.Refs) > 200 {
 		body.Refs = body.Refs[:200]
 	}
-	ids, err := s.resolvePlayTracks(r.Context(), body.Refs)
+	ctx, refs := s.acquirePlayCtx(r, body.Refs, body.Tracks)
+	ids, err := s.resolvePlayTracks(ctx, refs)
 	if err != nil {
 		writeErr(w, 502, "resolve", err.Error())
 		return

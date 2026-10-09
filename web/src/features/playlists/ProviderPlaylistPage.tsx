@@ -134,7 +134,7 @@ export function ProviderPlaylistPage() {
     let added = 0;
     try {
       await resolve(indices, "Adding to My Library", async (b) => {
-        const r = await api.post<{ added: number }>("/api/v1/me/library", { refs: b.refs });
+        const r = await api.post<{ added: number }>("/api/v1/me/library", { refs: b.refs, tracks: b.hints });
         added += r.added || 0;
       });
       void qc.invalidateQueries({ queryKey: ["personal-library"] });

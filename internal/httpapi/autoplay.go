@@ -8,6 +8,7 @@ import (
 	"github.com/sounddock/sounddock/internal/auth"
 	"github.com/sounddock/sounddock/internal/playback"
 	"github.com/sounddock/sounddock/internal/radio"
+	"github.com/sounddock/sounddock/internal/scapex"
 )
 
 // WirePlayback attaches server-side autoplay fill. Safe to call more than once.
@@ -103,6 +104,9 @@ func (s *Server) replenishAutoplayYouTube(sid, seed, userID uuid.UUID, have []uu
 	hits := s.youtubeFillHits(ctx, seed, need, have)
 	var refs []string
 	seen := map[string]struct{}{}
+	// Pass what YouTube already told us so queued placeholders show the real
+	// title, artist and length instead of "YouTube <id>" until the download lands.
+	hints := map[string]scapex.TrackHint{}
 	for _, h := range hits {
 		if h.ID == "" {
 			continue
@@ -112,11 +116,12 @@ func (s *Server) replenishAutoplayYouTube(sid, seed, userID uuid.UUID, have []uu
 		}
 		seen[h.ID] = struct{}{}
 		refs = append(refs, h.ID)
+		hints[h.ID] = scapex.TrackHint{Title: h.Title, Artist: artistDisplay(h.Artist), DurationMS: h.DurationMS}
 	}
 	if len(refs) == 0 {
 		return
 	}
-	ids, err := s.resolvePlayTracks(ctx, refs)
+	ids, err := s.resolvePlayTracks(withTrackHints(ctx, hints), refs)
 	if err != nil || len(ids) == 0 {
 		return
 	}

@@ -120,3 +120,14 @@ func (s *Server) seedVideoID(ctx context.Context, seed uuid.UUID, title, artist 
 	}
 	return ""
 }
+
+// artistDisplay turns a YouTube channel name into an artist name
+// ("Yung Filly - Topic" -> "Yung Filly", "DrakeVEVO" -> "Drake").
+func artistDisplay(a string) string {
+	a = strings.TrimSpace(a)
+	a = strings.TrimSuffix(a, " - Topic")
+	if strings.HasSuffix(a, "VEVO") && len(a) > 4 {
+		a = strings.TrimSpace(strings.TrimSuffix(a, "VEVO"))
+	}
+	return a
+}
