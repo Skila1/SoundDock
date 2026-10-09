@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
-import { Heart, Pencil, Play, Shuffle } from "lucide-react";
+import { Heart, Pencil, Shuffle } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { Artwork } from "@/components/media/Artwork";
+import { HeroIconButton, MediaHero } from "@/components/media/MediaHero";
 import { CoverEditor } from "@/components/media/CoverEditor";
 import { hasPerm } from "@/lib/perms";
 import { MediaCard } from "@/components/media/MediaCard";
@@ -43,25 +44,30 @@ export function ArtistPage() {
 
   return (
     <div>
-      <div className="mb-8 flex flex-col gap-6 md:flex-row md:items-end">
-        <CoverEditor kind="artist" id={a.id} canEdit={canEditCover} className="h-40 w-40 rounded-full shadow-card md:h-52 md:w-52">
-          <Artwork src={artworkUrl("artist", a.id, "page")} id={a.id} name={a.name} kind="artist" />
-        </CoverEditor>
-        <div>
-          <p className="text-xs uppercase tracking-widest text-subtle">Artist</p>
-          <h1 className="text-4xl font-semibold md:text-6xl">{a.name}</h1>
-          <p className="mt-2 text-sm text-muted">{albums.length} albums · {(a.tracks || []).length} tracks</p>
-          <div className="mt-4 flex gap-2">
-            <Button disabled={!ids.length} onClick={() => play(ids)}><Play className="fill-current" /> Play</Button>
-            <Button variant="secondary" disabled={!ids.length} onClick={() => play([...ids].sort(() => Math.random() - 0.5))}><Shuffle /> Shuffle</Button>
-            <Button variant="ghost" onClick={toggleFav} aria-label="Favourite"><Heart className={fav ? "fill-current" : ""} /></Button>
-            {admin && <Button variant="ghost" onClick={() => setEdit(true)}><Pencil /> Edit</Button>}
-          </div>
-        </div>
-      </div>
+      <MediaHero
+        round
+        art={
+          <CoverEditor kind="artist" id={a.id} canEdit={canEditCover} className="h-full w-full rounded-full">
+            <Artwork src={artworkUrl("artist", a.id, "page")} id={a.id} name={a.name} kind="artist" />
+          </CoverEditor>
+        }
+        backdrop={artworkUrl("artist", a.id, "thumb")}
+        eyebrow="Artist"
+        title={a.name}
+        stats={`${albums.length} ${albums.length === 1 ? "album" : "albums"} · ${(a.tracks || []).length} songs`}
+        onPlay={() => play(ids)}
+        playDisabled={!ids.length}
+        actions={
+          <>
+            <HeroIconButton label="Shuffle" disabled={!ids.length} onClick={() => play([...ids].sort(() => Math.random() - 0.5))}><Shuffle /></HeroIconButton>
+            <HeroIconButton label={fav ? "Remove from favourites" : "Favourite"} active={fav} onClick={toggleFav}><Heart className={fav ? "fill-current" : ""} /></HeroIconButton>
+          </>
+        }
+        menu={[{ label: "Edit artist", icon: <Pencil className="h-4 w-4" />, onSelect: () => setEdit(true), hidden: !admin }]}
+      />
       {(a.tracks || []).length > 0 && (
         <section className="mb-8">
-          <h2 className="mb-3 text-lg font-semibold">Popular</h2>
+          <h2 className="mb-3 text-xl font-bold tracking-tight">Popular</h2>
           <TrackList
             tracks={a.tracks || []}
             onPlay={(i) => play([ids[i]])}
@@ -73,7 +79,7 @@ export function ArtistPage() {
       )}
       {albums.length > 0 && (
         <section className="mb-8">
-          <h2 className="mb-3 text-lg font-semibold">Albums</h2>
+          <h2 className="mb-4 text-xl font-bold tracking-tight">Albums</h2>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 lg:grid-cols-6">
             {albums.map((al) => <MediaCard key={al.id} className="max-w-none min-w-0" to={`/albums/${al.id}`} id={al.id} title={al.title} subtitle={String(al.year || "")} kind="album" />)}
           </div>
@@ -81,7 +87,7 @@ export function ArtistPage() {
       )}
       {comps.length > 0 && (
         <section>
-          <h2 className="mb-3 text-lg font-semibold">Compilations</h2>
+          <h2 className="mb-4 text-xl font-bold tracking-tight">Compilations</h2>
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             {comps.map((al) => <MediaCard key={al.id} className="max-w-none min-w-0" to={`/albums/${al.id}`} id={al.id} title={al.title} kind="album" />)}
           </div>

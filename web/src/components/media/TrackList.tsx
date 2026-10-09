@@ -1,4 +1,4 @@
-import { Heart, MoreHorizontal, Play } from "lucide-react";
+import { Clock3, Heart, MoreHorizontal, Play } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from "react";
@@ -18,6 +18,7 @@ import { api } from "@/lib/api";
 import type { Favourite, Playlist, Track, User } from "@/types/api";
 import { toast } from "sonner";
 import { saveTracksOffline } from "@/lib/offlineFill";
+import { usePlayer } from "@/stores/player";
 import { useTrackActions } from "./TrackActions";
 
 export const TRACK_DND_MIME = "application/x-sounddock-tracks";
@@ -109,6 +110,9 @@ export function TrackList({
 }) {
   const parent = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const playingId = usePlayer((s) => s.current?.id);
+  const isPlaying = usePlayer((s) => s.playing);
+  const activeId = currentId ?? playingId;
   const qc = useQueryClient();
   const virtual = tracks.length > 80;
   const rowVirtualizer = useVirtualizer({
@@ -276,10 +280,10 @@ export function TrackList({
           draggable
           onDragStart={(e) => onDragStart(e, t)}
           className={cn(
-            "group grid cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 hover:bg-surface-2",
+            "group grid cursor-pointer items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-surface-2/80",
             showAlbum ? "grid-cols-[20px_32px_minmax(0,1fr)_auto_auto] md:grid-cols-[20px_32px_minmax(0,1fr)_minmax(0,1fr)_auto_auto]" : "grid-cols-[20px_32px_minmax(0,1fr)_auto_auto]",
-            currentId === t.id && "text-accent",
-            selected.has(t.id) && "bg-surface-2"
+            activeId === t.id && "text-accent",
+            selected.has(t.id) && "bg-accent/10 hover:bg-accent/15"
           )}
           onClick={(e) => {
             if ((e.target as HTMLElement).closest("a,button,input,[role='menu']")) return;
@@ -302,7 +306,15 @@ export function TrackList({
             onChange={() => toggleOne(t, i)}
           />
           <div className="relative text-center text-xs text-subtle">
-            <span className="pointer-events-none group-hover:invisible">{t.track_number || i + 1}</span>
+            {activeId === t.id && isPlaying ? (
+              <span className="pointer-events-none flex h-3.5 items-end justify-center gap-[2px] group-hover:invisible" aria-label="Now playing">
+                <span className="sd-eq w-[3px] rounded-sm bg-accent" />
+                <span className="sd-eq w-[3px] rounded-sm bg-accent [animation-delay:-0.4s]" />
+                <span className="sd-eq w-[3px] rounded-sm bg-accent [animation-delay:-0.2s]" />
+              </span>
+            ) : (
+              <span className="pointer-events-none group-hover:invisible">{t.track_number || i + 1}</span>
+            )}
             <button
               type="button"
               className="absolute inset-0 hidden w-full items-center justify-center group-hover:flex"
@@ -319,7 +331,7 @@ export function TrackList({
             </button>
           </div>
           <div className="flex min-w-0 items-center gap-3">
-            <div className="hidden h-10 w-10 shrink-0 overflow-hidden rounded sm:block">
+            <div className="hidden h-10 w-10 shrink-0 overflow-hidden rounded-md ring-1 ring-inset ring-border sm:block">
               <Artwork src={t.source === "youtube" ? t.artwork_url || artworkUrl("youtube", t.id, "thumb") : artworkUrl("track", t.id, "thumb")} id={t.id} name={t.title} kind="track" size="sm" />
             </div>
             <div className="min-w-0">
@@ -363,7 +375,7 @@ export function TrackList({
             ) : (
               <span className="hidden truncate text-sm text-muted md:block">{t.album}</span>
             ))}
-          <div className="w-12 text-right text-xs text-subtle">{formatDuration(t.duration_ms)}</div>
+          <div className="tabular w-12 text-right text-xs text-subtle">{formatDuration(t.duration_ms)}</div>
           <div
             className="relative z-10 flex shrink-0 justify-end gap-0.5 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100"
             onPointerDown={stopRow}
@@ -458,14 +470,31 @@ export function TrackList({
 
   return (
     <div>
-      {tracks.length > 1 && !selected.size && (
-        <label className="mb-1 flex w-fit cursor-pointer items-center gap-2 px-2 text-xs text-subtle hover:text-foreground">
-          <input type="checkbox" className="h-4 w-4 accent-accent" checked={false} onChange={toggleAll} />
-          Select all {tracks.length}
-        </label>
+      {tracks.length > 0 && !selected.size && (
+        <div
+          className={cn(
+            "mb-1 grid items-center gap-3 border-b border-border px-2 pb-2 text-[11px] font-semibold uppercase tracking-wider text-subtle",
+            showAlbum ? "grid-cols-[20px_32px_minmax(0,1fr)_auto_auto] md:grid-cols-[20px_32px_minmax(0,1fr)_minmax(0,1fr)_auto_auto]" : "grid-cols-[20px_32px_minmax(0,1fr)_auto_auto]"
+          )}
+        >
+          <input
+            type="checkbox"
+            className="h-4 w-4 cursor-pointer accent-accent"
+            checked={false}
+            onChange={toggleAll}
+            aria-label={`Select all ${tracks.length}`}
+            title={`Select all ${tracks.length}`}
+            disabled={tracks.length < 2}
+          />
+          <span className="text-center">#</span>
+          <span>Title</span>
+          {showAlbum && <span className="hidden md:block">Album</span>}
+          <span className="flex w-12 justify-end"><Clock3 className="h-3.5 w-3.5" /></span>
+          <span className="w-[66px]" />
+        </div>
       )}
       {selected.size > 0 && (
-        <div className="sticky top-0 z-10 mb-2 flex flex-wrap items-center gap-2 rounded-md bg-surface-2 px-3 py-2 text-sm shadow-card">
+        <div className="sticky top-0 z-10 mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-accent/30 bg-surface-1/95 px-3 py-2 text-sm shadow-card backdrop-blur">
           <label className="flex cursor-pointer items-center gap-2">
             <input type="checkbox" className="h-4 w-4 accent-accent" checked={allSelected} onChange={toggleAll} aria-label="Select all" />
             <span className="text-muted">{selected.size} selected</span>

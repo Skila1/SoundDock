@@ -65,7 +65,7 @@ export function DiscordCallbackCatch() {
     })();
   }, []);
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-background p-4">
+    <div className="sd-auth relative flex min-h-dvh items-center justify-center overflow-hidden bg-background p-4">
       <p className="text-sm text-muted">{msg}</p>
     </div>
   );
@@ -84,13 +84,13 @@ export function LoginPage({
   const [busy, setBusy] = useState(false);
   const [localErr, setLocalErr] = useState("");
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-background p-4">
-      <div className="w-full max-w-sm space-y-4 rounded-2xl border border-border bg-surface-1 p-8 shadow-card">
+    <div className="sd-auth relative flex min-h-dvh items-center justify-center overflow-hidden bg-background p-4">
+      <div className="w-full max-w-sm space-y-4 rounded-3xl border border-border bg-surface-1/80 p-8 shadow-[0_40px_120px_-40px_rgba(0,0,0,0.6)] backdrop-blur-xl">
         <div className="mb-2 text-center">
-          <div className="mx-auto mb-4 flex w-max items-center justify-center rounded-xl bg-black p-3">
+          <div className="mx-auto mb-5 flex w-max items-center justify-center rounded-2xl bg-black p-3 shadow-[0_20px_60px_-20px_var(--sd-accent)] ring-1 ring-white/10">
             <Logo className="h-28 w-auto" />
           </div>
-          <h1 className="text-xl font-semibold">Sign in</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Welcome back</h1>
           <p className="text-sm text-muted">
             {discordConfigured ? "Use Discord or your local username and password." : "Sign in with your local account. Discord is optional and configured in Admin."}
           </p>
@@ -151,13 +151,13 @@ export function SetupPage({ onDone, discordConfigured }: { onDone: () => void; d
   const [passphrase, setPassphrase] = useState("");
   const [reqItems, setReqItems] = useState<{ key: string; class: string; note?: string; recovered?: boolean }[]>([]);
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-background p-4">
-      <div className="w-full max-w-md space-y-4 rounded-2xl border border-border bg-surface-1 p-8 shadow-card">
+    <div className="sd-auth relative flex min-h-dvh items-center justify-center overflow-hidden bg-background p-4">
+      <div className="w-full max-w-md space-y-4 rounded-3xl border border-border bg-surface-1/80 p-8 shadow-[0_40px_120px_-40px_rgba(0,0,0,0.6)] backdrop-blur-xl">
         <div className="mb-2 text-center">
-          <div className="mx-auto mb-4 flex w-max items-center justify-center rounded-xl bg-black p-3">
+          <div className="mx-auto mb-5 flex w-max items-center justify-center rounded-2xl bg-black p-3 shadow-[0_20px_60px_-20px_var(--sd-accent)] ring-1 ring-white/10">
             <Logo className="h-28 w-auto" />
           </div>
-          <h1 className="text-xl font-semibold">First setup</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Set up SoundDock</h1>
           <p className="text-sm text-muted">
             {mode === "create"
               ? "Create a local administrator. You can enable Discord later under Admin. Link Discord from your profile after you sign in."

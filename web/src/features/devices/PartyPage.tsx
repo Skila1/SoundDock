@@ -67,11 +67,11 @@ export function PartyPage() {
       {party.isError && !p && (
         <EmptyState icon={Users} title="Party unavailable" description="Start a party to invite others onto this playback session." />
       )}
-      <div className="space-y-4 rounded-xl border border-border bg-surface-1 p-5">
+      <div className="space-y-4 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Users className="h-4 w-4 text-accent" />
-            <h2 className="font-semibold">Listening party</h2>
+            <h2 className="text-base font-semibold tracking-tight">Listening party</h2>
             <Badge tone={p?.enabled ? "success" : "neutral"}>{p?.enabled ? "On" : "Off"}</Badge>
           </div>
           {p?.enabled ? (

@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Library } from "lucide-react";
+import { Eye, Globe, Library, ListPlus, Lock, MoreHorizontal, Play, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { TrackList } from "@/components/media/TrackList";
 import { LibraryToolbar, LocalSearch, TrackGrid } from "@/components/media/LibraryToolbar";
 import { Select } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { EmptyState, PageHeader, QueryError } from "@/components/ui/empty";
 import { Badge, Skeleton } from "@/components/ui/misc";
@@ -137,32 +138,43 @@ export function PersonalLibraryPage({ mine, admin, adminDiscord }: { mine?: bool
             : "Requested songs for this listener."
         }
         actions={
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge tone={visibility === "public" ? "success" : "neutral"}>{visibility === "public" ? "Public" : "Private"}</Badge>
-            {mine && (
-              <Button asChild size="sm" variant="secondary">
-                <Link to="/profile">Visibility</Link>
-              </Button>
-            )}
-            {items.length > 0 && (
-              <Button size="sm" onClick={() => play(ids)}>{filtered ? `Play ${items.length}` : "Play all"}</Button>
-            )}
-            {items.length > 0 && (
-              <Button size="sm" variant="secondary" onClick={() => add(ids).then(() => toast.success(filtered ? "Queued results" : "Queued library"))}>
-                {filtered ? "Queue results" : "Queue all"}
-              </Button>
-            )}
+          <>
+            <Badge tone={visibility === "public" ? "success" : "neutral"}>
+              {visibility === "public" ? <Globe className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
+              {visibility === "public" ? "Public" : "Private"}
+            </Badge>
             {mine && selected.length > 0 && (
-              <Button size="sm" variant="secondary" onClick={() => void removeFromLibrary({ track_ids: selected })}>
-                Remove {selected.length === 1 ? "1 song" : `${selected.length} songs`}
+              <Button variant="secondary" onClick={() => void removeFromLibrary({ track_ids: selected })}>
+                <Trash2 /> Remove {selected.length === 1 ? "1 song" : `${selected.length} songs`}
               </Button>
             )}
-            {mine && all.length > 0 && (
-              <Button size="sm" variant="ghost" onClick={() => setClearOpen(true)}>
-                Clear My Library
+            {items.length > 0 && (
+              <Button variant="secondary" onClick={() => add(ids).then(() => toast.success(filtered ? "Queued results" : "Queued library"))}>
+                <ListPlus /> {filtered ? "Queue results" : "Queue all"}
               </Button>
             )}
-          </div>
+            {items.length > 0 && (
+              <Button onClick={() => play(ids)}>
+                <Play className="fill-current" /> {filtered ? `Play ${items.length}` : "Play all"}
+              </Button>
+            )}
+            {mine && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon" variant="ghost" aria-label="More library options"><MoreHorizontal /></Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => navigate("/profile")}><Eye className="h-4 w-4" /> Visibility settings</DropdownMenuItem>
+                  {all.length > 0 && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem className="text-destructive" onSelect={() => setClearOpen(true)}><Trash2 className="h-4 w-4" /> Clear My Library</DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </>
         }
       />
       {q.data?.inspecting && (
@@ -264,7 +276,7 @@ export function PersonalLibraryPage({ mine, admin, adminDiscord }: { mine?: bool
         onConfirm={() => void removeFromLibrary({ all: true })}
       />
       {mine && me.data && (
-        <p className="mt-6 text-xs text-subtle">
+        <p className="mt-8 text-center text-xs text-subtle">
           The shared catalogue is still at <Link className="underline" to="/library">Catalogue</Link>.
           Open a track&apos;s menu to add it to one of your playlists.
         </p>

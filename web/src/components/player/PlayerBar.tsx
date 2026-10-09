@@ -17,13 +17,14 @@ import {
   Square,
   Loader2
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Artwork } from "@/components/media/Artwork";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { VolumeControl } from "@/components/player/VolumeControl";
-import { formatDuration, artworkUrl } from "@/lib/utils";
+import { cn, formatDuration, artworkUrl } from "@/lib/utils";
 import { usePlayer } from "@/stores/player";
 import { useUi } from "@/stores/ui";
 import { api } from "@/lib/api";
@@ -100,13 +101,33 @@ export function PlayerBar() {
   }, [p.sleepUntil]);
 
   return (
-    <footer className="relative grid h-[72px] shrink-0 grid-cols-[1fr_auto] items-center gap-3 overflow-x-hidden border-t border-border bg-surface-1 px-3 md:grid-cols-[minmax(160px,1fr)_minmax(240px,2fr)_minmax(200px,1fr)] md:px-4">
-      <button className="flex min-w-0 items-center gap-3 text-left" onClick={() => ui.set({ nowPlayingOpen: true })}>
-        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-md bg-surface-2">
-          {t && <Artwork src={artworkUrl("track", t.id, "thumb")} id={t.id} name={t.title} kind="track" />}
+    <footer className="group/player relative h-[80px] shrink-0 overflow-hidden border-t border-border bg-surface-1">
+      {t && (
+        <div aria-hidden className="pointer-events-none absolute inset-0 opacity-[0.18] blur-3xl saturate-150">
+          <Artwork src={artworkUrl("track", t.id, "thumb")} id={t.id} name={t.title} kind="track" />
         </div>
+      )}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-surface-3 md:hidden">
+        <div className="h-full bg-accent transition-[width] duration-300" style={{ width: `${progress}%` }} />
+      </div>
+      <div className="relative grid h-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 md:grid-cols-[minmax(180px,1fr)_minmax(280px,1.6fr)_minmax(220px,1fr)] md:px-4">
+      <div className="flex min-w-0 items-center gap-3">
+        <button
+          type="button"
+          className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-surface-2 shadow-card ring-1 ring-inset ring-border transition hover:scale-[1.03]"
+          onClick={() => ui.set({ nowPlayingOpen: true })}
+          aria-label="Open now playing"
+        >
+          {t && <Artwork src={artworkUrl("track", t.id, "thumb")} id={t.id} name={t.title} kind="track" />}
+        </button>
         <div className="min-w-0">
-          <div className="truncate text-sm font-medium">{t?.title || "Nothing playing"}</div>
+          {t ? (
+            <Link to={`/tracks/${t.id}`} className="block truncate text-sm font-semibold hover:underline">
+              {t.title}
+            </Link>
+          ) : (
+            <div className="truncate text-sm font-semibold text-muted">Nothing playing</div>
+          )}
           <div className="truncate text-xs text-muted">{t?.artists?.map((a) => a.name).join(", ") || t?.artist || ""}</div>
         </div>
         {t && !tiny && (
@@ -114,9 +135,9 @@ export function PlayerBar() {
             <Button
               size="icon"
               variant="ghost"
-              className="hidden h-8 w-8 md:inline-flex"
-              onClick={(e) => {
-                e.stopPropagation();
+              className="hidden h-8 w-8 shrink-0 md:inline-flex"
+              aria-label="Favourite"
+              onClick={() => {
                 api.post("/api/v1/favourites", { type: "track", id: t.id, on: true }).then(() => toast.success("Added to favourites"));
               }}
             >
@@ -124,43 +145,49 @@ export function PlayerBar() {
             </Button>
           </Tooltip>
         )}
-      </button>
+      </div>
 
-      <div className="hidden flex-col items-center md:flex">
-        <div className="flex items-center gap-1">
+      <div className="hidden flex-col items-center gap-1 md:flex">
+        <div className="flex items-center gap-2">
           {!tiny && (
-            <Tooltip label="Shuffle">
-              <Button size="icon" variant="ghost" className={p.shuffle ? "text-accent" : ""} onClick={() => p.control("shuffle")}>
+            <Tooltip label={p.shuffle ? "Shuffle on" : "Shuffle"}>
+              <Button size="icon" variant="ghost" className={cn("h-8 w-8", p.shuffle && "text-accent")} onClick={() => p.control("shuffle")} aria-label="Shuffle" aria-pressed={p.shuffle}>
                 <Shuffle />
               </Button>
             </Tooltip>
           )}
           <Tooltip label="Previous">
-            <Button size="icon" variant="ghost" onClick={() => p.control("previous")}>
-              <SkipBack />
+            <Button size="icon" variant="ghost" className="h-9 w-9 text-foreground" onClick={() => p.control("previous")} aria-label="Previous">
+              <SkipBack className="fill-current" />
             </Button>
           </Tooltip>
           <Tooltip label={p.playing ? "Pause" : "Play"}>
-            <Button size="icon" onClick={() => p.control(p.playing ? "pause" : "resume")} aria-label={p.playing ? "Pause" : "Play"}>
-              {p.playing ? <Pause className="fill-current" /> : <Play className="fill-current" />}
-            </Button>
+            <button
+              type="button"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-foreground text-background shadow-card transition hover:scale-105 active:scale-95"
+              onClick={() => p.control(p.playing ? "pause" : "resume")}
+              aria-label={p.playing ? "Pause" : "Play"}
+            >
+              {p.playing ? <Pause className="h-4 w-4 fill-current" /> : <Play className="ml-0.5 h-4 w-4 fill-current" />}
+            </button>
           </Tooltip>
           <Tooltip label="Next">
-            <Button size="icon" variant="ghost" onClick={() => p.control("skip")}>
-              <SkipForward />
+            <Button size="icon" variant="ghost" className="h-9 w-9 text-foreground" onClick={() => p.control("skip")} aria-label="Next">
+              <SkipForward className="fill-current" />
             </Button>
           </Tooltip>
           {!tiny && (
             <Tooltip label={`Repeat ${p.repeat}`}>
-              <Button size="icon" variant="ghost" className={p.repeat !== "off" ? "text-accent" : ""} onClick={() => p.control("repeat", { mode: nextRepeat(p.repeat) })}>
+              <Button size="icon" variant="ghost" className={cn("h-8 w-8", p.repeat !== "off" && "text-accent")} onClick={() => p.control("repeat", { mode: nextRepeat(p.repeat) })} aria-label="Repeat">
                 <RepeatIcon />
               </Button>
             </Tooltip>
           )}
         </div>
-        <div className="mt-1 flex w-full max-w-xl items-center gap-2">
-          <span className="w-10 text-right text-[10px] text-subtle">{formatDuration(pos)}</span>
+        <div className="flex w-full max-w-2xl items-center gap-2">
+          <span className="tabular w-10 text-right text-[11px] text-subtle">{formatDuration(pos)}</span>
           <Slider
+            className="sd-seek"
             value={[progress]}
             onValueChange={([v]) => setScrub(((v || 0) / 100) * (p.duration || 0))}
             onValueCommit={([v]) => {
@@ -169,17 +196,17 @@ export function PlayerBar() {
               p.seek(ms);
             }}
           />
-          <span className="w-10 text-[10px] text-subtle">{formatDuration(p.duration)}</span>
+          <span className="tabular w-10 text-[11px] text-subtle">{formatDuration(p.duration)}</span>
         </div>
       </div>
 
       <div className="flex items-center justify-end gap-1">
         {showDiscord && (
-          <div className="mr-1 hidden items-center rounded-full bg-surface-2 p-0.5 text-[10px] font-semibold sm:flex" role="group" aria-label="Output">
+          <div className="mr-1 hidden items-center rounded-full bg-surface-2/80 p-0.5 text-[11px] font-semibold ring-1 ring-inset ring-border sm:flex" role="group" aria-label="Output">
             <button
               type="button"
               aria-pressed={p.output === "browser"}
-              className={`rounded-full px-2 py-1 ${p.output === "browser" ? "bg-surface-1 text-foreground" : "text-muted"}`}
+              className={`rounded-full px-2.5 py-1 transition-colors ${p.output === "browser" ? "bg-surface-1 text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}
               onClick={() => p.setOutput("browser")}
             >
               Browser
@@ -211,7 +238,7 @@ export function PlayerBar() {
           <Button
             size="icon"
             variant="ghost"
-            className={ui.lyricsOpen ? "text-accent" : ""}
+            className={cn("hidden sm:inline-flex", ui.lyricsOpen && "text-accent")}
             onClick={() => ui.toggleLyrics()}
             aria-label="Lyrics"
             aria-pressed={ui.lyricsOpen}
@@ -263,6 +290,7 @@ export function PlayerBar() {
           </DropdownMenuContent>
         </DropdownMenu>
         <VolumeControl />
+      </div>
       </div>
     </footer>
   );

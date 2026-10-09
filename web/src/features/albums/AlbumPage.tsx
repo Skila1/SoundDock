@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams } from "react-router-dom";
-import { Heart, ListPlus, Pencil, Play, Shuffle, Trash2 } from "lucide-react";
+import { Heart, ListPlus, Pencil, Shuffle, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/lib/api";
 import { Artwork } from "@/components/media/Artwork";
+import { HeroIconButton, MediaHero } from "@/components/media/MediaHero";
 import { CoverEditor } from "@/components/media/CoverEditor";
 import { hasPerm } from "@/lib/perms";
 import { TrackList, callWriteBack } from "@/components/media/TrackList";
@@ -52,27 +53,39 @@ export function AlbumPage() {
 
   return (
     <div>
-      <div className="mb-8 flex flex-col gap-6 md:flex-row">
-        <CoverEditor kind="album" id={a.id} canEdit={canEditCover} className="h-52 w-52 overflow-hidden rounded-xl shadow-card">
-          <Artwork src={artworkUrl("album", a.id, "page")} id={a.id} name={a.title} kind="album" />
-        </CoverEditor>
-        <div className="flex flex-col justify-end">
-          <p className="text-xs uppercase tracking-widest text-subtle">{a.is_compilation ? "Compilation" : "Album"}</p>
-          <h1 className="text-4xl font-semibold md:text-5xl">{a.title}</h1>
-          <p className="mt-2 text-muted">{a.artist}{a.edition_title ? ` · ${a.edition_title}` : ""}{a.year ? ` · ${a.year}` : ""}</p>
-          <p className="text-sm text-subtle">{tracks.length} tracks · {formatDuration(total)}</p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Button onClick={() => play(ids)}><Play className="fill-current" /> Play</Button>
-            <Button variant="secondary" onClick={() => play([...ids].sort(() => Math.random() - 0.5))}><Shuffle /> Shuffle</Button>
-            <Button variant="ghost" onClick={toggleFav} aria-label="Favourite"><Heart className={fav ? "fill-current" : ""} /></Button>
-            <Button variant="ghost" onClick={() => add(ids).then(() => toast.success("Added to queue"))}><ListPlus /> Add to queue</Button>
-            {admin && <Button variant="ghost" onClick={() => setEdit(true)}><Pencil /> Edit</Button>}
-            {admin && ids.length > 0 && (
-              <Button variant="ghost" className="text-destructive" onClick={() => setDelOpen(true)}><Trash2 /> Delete album</Button>
-            )}
-          </div>
-        </div>
-      </div>
+      <MediaHero
+        art={
+          <CoverEditor kind="album" id={a.id} canEdit={canEditCover} className="h-full w-full">
+            <Artwork src={artworkUrl("album", a.id, "page")} id={a.id} name={a.title} kind="album" />
+          </CoverEditor>
+        }
+        backdrop={artworkUrl("album", a.id, "thumb")}
+        eyebrow={a.is_compilation ? "Compilation" : "Album"}
+        title={a.title}
+        meta={
+          <>
+            <span className="font-semibold">{a.artist}</span>
+            {a.edition_title && <span className="text-muted">· {a.edition_title}</span>}
+            {a.year && <span className="text-muted">· {a.year}</span>}
+          </>
+        }
+        stats={`${tracks.length} ${tracks.length === 1 ? "song" : "songs"} · ${formatDuration(total)}`}
+        onPlay={() => play(ids)}
+        playDisabled={!ids.length}
+        actions={
+          <>
+            <HeroIconButton label="Shuffle" onClick={() => play([...ids].sort(() => Math.random() - 0.5))} disabled={!ids.length}><Shuffle /></HeroIconButton>
+            <HeroIconButton label={fav ? "Remove from favourites" : "Favourite"} active={fav} onClick={toggleFav}><Heart className={fav ? "fill-current" : ""} /></HeroIconButton>
+            <HeroIconButton label="Add to queue" onClick={() => add(ids).then(() => toast.success("Added to queue"))} disabled={!ids.length}><ListPlus /></HeroIconButton>
+          </>
+        }
+        menu={[
+          { label: "Play next", icon: <ListPlus className="h-4 w-4" />, onSelect: () => void add(ids, true).then(() => toast.success("Playing next")), hidden: !ids.length },
+          { label: "Edit album", icon: <Pencil className="h-4 w-4" />, onSelect: () => setEdit(true), hidden: !admin },
+          "separator",
+          { label: "Delete album", icon: <Trash2 className="h-4 w-4" />, onSelect: () => setDelOpen(true), destructive: true, hidden: !admin || !ids.length }
+        ]}
+      />
       {[...discs.entries()].map(([disc, list]) => (
         <section key={disc} className="mb-6">
           {discs.size > 1 && <h2 className="mb-2 text-sm font-semibold text-muted">Disc {disc}</h2>}

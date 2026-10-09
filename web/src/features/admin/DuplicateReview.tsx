@@ -92,7 +92,7 @@ export function DuplicateReview() {
         {groups.map((g) => {
           const winner = winnerByGroup[g.id] || g.tracks[0]?.id;
           return (
-            <article key={g.id} className="rounded-xl border border-border bg-surface-1 p-4">
+            <article key={g.id} className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
               <div className="mb-3 flex flex-wrap items-center gap-2">
                 <Badge tone="neutral">{reasonLabel(g.reason)}</Badge>
                 <span className="text-sm text-muted">{g.tracks.length} tracks</span>

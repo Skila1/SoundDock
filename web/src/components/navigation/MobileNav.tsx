@@ -12,16 +12,22 @@ const tabs = [
 
 export function MobileNav() {
   return (
-    <nav className="grid h-[calc(3.5rem+env(safe-area-inset-bottom))] shrink-0 grid-cols-5 border-t border-border bg-surface-1 pb-[env(safe-area-inset-bottom)] md:hidden">
+    <nav className="grid h-[calc(4rem+env(safe-area-inset-bottom))] shrink-0 grid-cols-5 border-t border-border bg-surface-1/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden">
       {tabs.map((t) => (
         <NavLink
           key={t.to}
           to={t.to}
           end={t.end}
-          className={({ isActive }) => cn("flex flex-col items-center justify-center gap-0.5 text-[10px] text-subtle", isActive && "text-accent")}
+          className={({ isActive }) => cn("group flex flex-col items-center justify-center gap-1 text-[10px] font-medium text-subtle transition-colors", isActive && "text-foreground")}
         >
-          <t.icon className="h-5 w-5" />
-          {t.label}
+          {({ isActive }) => (
+            <>
+              <span className={cn("flex h-7 w-12 items-center justify-center rounded-full transition-colors", isActive && "bg-accent/15 text-accent")}>
+                <t.icon className="h-5 w-5" />
+              </span>
+              {t.label}
+            </>
+          )}
         </NavLink>
       ))}
     </nav>

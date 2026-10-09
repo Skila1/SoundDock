@@ -31,7 +31,7 @@ export function LibrariesPage({ user }: { user: User }) {
       )}
       <div className="grid gap-4 md:grid-cols-2">
         {list.map((l) => (
-          <article key={l.id} className="rounded-xl border border-border bg-surface-1 p-5 shadow-card">
+          <article key={l.id} className="rounded-2xl border border-border bg-surface-1 p-6 shadow-sm shadow-card">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold">{l.name}</h2>

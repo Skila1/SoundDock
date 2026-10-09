@@ -17,10 +17,10 @@ export function SyncDiffPanel({ playlistId }: { playlistId: string }) {
   const d = q.data;
   if (!d || (!d.items?.length && !d.provider)) return null;
   return (
-    <section className="mb-8 rounded-xl border border-border bg-surface-1 p-4">
+    <section className="mb-8 rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
       <div className="mb-3 flex flex-wrap items-end justify-between gap-2">
         <div>
-          <h2 className="font-semibold">Sync diff</h2>
+          <h2 className="text-base font-semibold tracking-tight">Sync diff</h2>
           <p className="text-sm text-muted">
             {d.matched} matched · {d.unmatched} unmatched
             {d.ignored ? ` · ${d.ignored} ignored` : ""}

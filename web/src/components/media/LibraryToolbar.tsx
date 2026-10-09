@@ -92,7 +92,7 @@ export function LibraryToolbar({
           {filters}
           {sort && (
             <div className="flex items-center gap-1">
-              <Select className="h-9 w-[150px]" value={sort.value} onValueChange={sort.onChange} options={sort.options} />
+              <Select className="h-9 w-[172px]" value={sort.value} onValueChange={sort.onChange} options={sort.options} />
               {onDesc && (
                 <Tooltip label={desc ? "Descending" : "Ascending"}>
                   <button

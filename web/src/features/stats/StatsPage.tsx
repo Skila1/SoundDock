@@ -39,17 +39,19 @@ export function StatsPage() {
         actions={<LayoutToggle />}
       />
       <ListeningNav />
-      <div className="mb-5 flex flex-wrap items-center gap-2">
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <div className="inline-flex flex-wrap gap-1 rounded-full bg-surface-2/70 p-1 ring-1 ring-inset ring-border">
         {periods.map((p) => (
           <button
             key={p.id}
             type="button"
             onClick={() => setPeriod(p.id)}
-            className={`rounded-full px-3 py-1 text-sm ${period === p.id ? "bg-accent text-[#04140a]" : "bg-surface-2 text-muted"}`}
+            className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${period === p.id ? "bg-surface-1 text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}
           >
             {p.label}
           </button>
         ))}
+        </div>
         <Button size="sm" variant={includeImport ? "secondary" : "ghost"} onClick={() => setIncludeImport((v) => !v)}>
           {includeImport ? "Including imported" : "Include imported"}
         </Button>
@@ -149,7 +151,7 @@ export function StatsPage() {
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-4">
+    <div className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
       <p className="text-xs uppercase tracking-wide text-subtle">{label}</p>
       <p className="mt-1 text-2xl font-semibold">{value}</p>
     </div>

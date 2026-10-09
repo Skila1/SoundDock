@@ -182,7 +182,7 @@ export function SearchPage() {
       {grouped.youtube.length > 0 && (
         <section className="mb-8">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <h2 className="font-semibold">{playlistQuery ? "YouTube playlist" : "YouTube"}</h2>
+            <h2 className="text-base font-semibold tracking-tight">{playlistQuery ? "YouTube playlist" : "YouTube"}</h2>
             {playlistQuery && (
               <Button
                 size="sm"

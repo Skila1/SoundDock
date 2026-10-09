@@ -82,7 +82,7 @@ export function HistoryPage() {
 
 function RecapCard({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-4">
+    <div className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
       <p className="text-xs uppercase tracking-wide text-subtle">{label}</p>
       <p className="mt-1 text-lg font-semibold">{value}</p>
       {hint && <p className="mt-1 text-xs text-muted">{hint}</p>}

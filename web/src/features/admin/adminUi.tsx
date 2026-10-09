@@ -51,11 +51,11 @@ export function AdminTabs<T extends string>({ tabs, fallback }: { tabs: readonly
 
 export function Card({ title, description, actions, children, className }: { title?: ReactNode; description?: ReactNode; actions?: ReactNode; children?: ReactNode; className?: string }) {
   return (
-    <section className={cn("rounded-xl border border-border bg-surface-1 p-4", className)}>
+    <section className={cn("rounded-2xl border border-border bg-surface-1 p-5 shadow-sm", className)}>
       {(title || actions) && (
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            {title && <h2 className="font-semibold">{title}</h2>}
+            {title && <h2 className="text-base font-semibold tracking-tight">{title}</h2>}
             {description && <p className="mt-0.5 text-sm text-muted">{description}</p>}
           </div>
           {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
@@ -68,12 +68,16 @@ export function Card({ title, description, actions, children, className }: { tit
 
 export function StatCard({ label, value, hint, icon: Icon, tone }: { label: string; value: ReactNode; hint?: ReactNode; icon?: LucideIcon; tone?: "warning" | "danger" }) {
   return (
-    <div className={cn("rounded-xl border border-border bg-surface-1 p-4", tone === "warning" && "border-warning/40", tone === "danger" && "border-destructive/40")}>
-      <div className="flex items-center justify-between text-muted">
-        <span className="text-sm">{label}</span>
-        {Icon && <Icon className="h-4 w-4" />}
+    <div className={cn("rounded-2xl border border-border bg-surface-1 p-5 shadow-sm", tone === "warning" && "border-warning/40", tone === "danger" && "border-destructive/40")}>
+      <div className="flex items-center justify-between gap-3 text-muted">
+        <span className="text-xs font-semibold uppercase tracking-wider text-subtle">{label}</span>
+        {Icon && (
+          <span className={cn("flex h-8 w-8 items-center justify-center rounded-xl bg-accent/10 text-accent", tone === "warning" && "bg-warning/10 text-warning", tone === "danger" && "bg-destructive/10 text-destructive")}>
+            <Icon className="h-4 w-4" />
+          </span>
+        )}
       </div>
-      <div className="mt-2 truncate text-2xl font-semibold">{value}</div>
+      <div className="tabular mt-2 truncate text-3xl font-bold tracking-tight">{value}</div>
       {hint && <div className="mt-1 truncate text-xs text-subtle">{hint}</div>}
     </div>
   );

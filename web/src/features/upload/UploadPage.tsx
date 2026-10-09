@@ -127,7 +127,7 @@ export function UploadPage() {
         <input ref={folder} type="file" multiple hidden accept={UPLOAD_ACCEPT} {...({ webkitdirectory: "" } as any)} onChange={(e) => e.target.files && addFiles(e.target.files)} />
       </div>
       {items.length > 0 && (
-        <div className="mt-6 rounded-xl border border-border bg-surface-1 p-4">
+        <div className="mt-6 rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
           <div className="mb-3 flex items-center justify-between gap-3">
             <span className="text-sm text-muted">{items.filter((i) => i.status === "done").length}/{items.length} complete</span>
             <div className="flex gap-2">

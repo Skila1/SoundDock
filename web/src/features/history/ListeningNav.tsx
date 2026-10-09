@@ -11,14 +11,14 @@ const items = [
 
 export function ListeningNav() {
   return (
-    <div className="mb-5 flex flex-wrap gap-1">
+    <div className="mb-6 inline-flex flex-wrap gap-1 rounded-full bg-surface-2/70 p-1 ring-1 ring-inset ring-border">
       {items.map((it) => (
         <NavLink
           key={it.to}
           to={it.to}
           end={it.end}
           className={({ isActive }) =>
-            cn("rounded-full px-3 py-1 text-sm", isActive ? "bg-accent text-[#04140a]" : "bg-surface-2 text-muted hover:text-foreground")
+            cn("rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors", isActive ? "bg-accent text-[#04140a] shadow-sm" : "text-muted hover:text-foreground")
           }
         >
           {it.label}

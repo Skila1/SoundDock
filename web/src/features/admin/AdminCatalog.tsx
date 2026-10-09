@@ -217,7 +217,7 @@ function CatalogEditor() {
       <div className="grid gap-8 lg:grid-cols-2">
         <section>
           <div className="mb-3 flex flex-wrap items-center gap-3">
-            <h2 className="font-semibold">Albums</h2>
+            <h2 className="text-base font-semibold tracking-tight">Albums</h2>
             <label className="ml-auto flex items-center gap-2 text-sm text-muted">
               One-track albums
               <Switch checked={singles} onCheckedChange={setSingles} />
@@ -267,7 +267,7 @@ function CatalogEditor() {
 
         <section>
           <div className="mb-3 flex items-center gap-3">
-            <h2 className="font-semibold">Tracks</h2>
+            <h2 className="text-base font-semibold tracking-tight">Tracks</h2>
           </div>
           <Input
             className="mb-3"

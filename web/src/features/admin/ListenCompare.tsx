@@ -102,9 +102,9 @@ export function ListenComparePanel() {
       <p className="mb-4 max-w-3xl text-sm text-muted">{d?.note || d?.period.note}</p>
 
       <div className="mb-8 grid gap-4 md:grid-cols-2">
-        <section className="rounded-xl border border-border bg-surface-1 p-4">
+        <section className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold">Older history</h2>
+            <h2 className="text-base font-semibold tracking-tight">Older history</h2>
             <Badge tone="accent">in use</Badge>
           </div>
           <dl className="space-y-2 text-sm">
@@ -118,9 +118,9 @@ export function ListenComparePanel() {
           </dl>
         </section>
 
-        <section className="rounded-xl border border-border bg-surface-1 p-4">
+        <section className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold">New listening data</h2>
+            <h2 className="text-base font-semibold tracking-tight">New listening data</h2>
             <Badge tone="neutral">recorded in background</Badge>
           </div>
           <dl className="space-y-2 text-sm">
@@ -141,10 +141,10 @@ export function ListenComparePanel() {
         </section>
       </div>
 
-      <section className="rounded-xl border border-border bg-surface-1 p-4">
+      <section className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
         <div className="mb-3 flex items-center gap-2">
           <GitCompare className="h-4 w-4 text-muted" />
-          <h2 className="font-semibold">Differences</h2>
+          <h2 className="text-base font-semibold tracking-tight">Differences</h2>
           <Badge tone="warning">not a merged total</Badge>
         </div>
         {!diffs ? (

@@ -65,7 +65,7 @@ export function StatsRebuildPanel() {
         {job && !busy && <Badge tone={jobTone(job.status)}>Last job: {job.status}</Badge>}
       </div>
 
-      <article className="mb-6 rounded-xl border border-border bg-surface-1 p-4 text-sm">
+      <article className="mb-6 rounded-2xl border border-border bg-surface-1 p-5 shadow-sm text-sm">
         <div className="mb-2 flex items-center gap-2 font-medium">
           <RefreshCw className="h-4 w-4 text-muted" />
           Cutover
@@ -87,7 +87,7 @@ export function StatsRebuildPanel() {
         <p className="mb-4 text-sm text-destructive">{q.error instanceof Error ? q.error.message : "Could not load rebuild status"}</p>
       )}
 
-      <section className="mb-6 rounded-xl border border-border bg-surface-1 p-4">
+      <section className="mb-6 rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
         <h2 className="mb-3 font-semibold">Current reader</h2>
         <dl className="space-y-2 text-sm">
           <div className="flex items-start justify-between gap-4">
@@ -103,9 +103,9 @@ export function StatsRebuildPanel() {
         </dl>
       </section>
 
-      <section className="rounded-xl border border-border bg-surface-1 p-4">
+      <section className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="font-semibold">Rebuild job</h2>
+          <h2 className="text-base font-semibold tracking-tight">Rebuild job</h2>
           <Button size="sm" onClick={enqueue} disabled={busy || submitting}>
             {busy ? "Rebuild running" : "Start rebuild"}
           </Button>

@@ -1,12 +1,13 @@
 import { useMemo, useState } from "react";
 import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Music } from "lucide-react";
+import { MoreHorizontal, Music, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { TrackList } from "@/components/media/TrackList";
 import { LibraryToolbar, LocalSearch, TrackGrid, useDebounced } from "@/components/media/LibraryToolbar";
 import { Skeleton } from "@/components/ui/misc";
 import { EmptyState, QueryError } from "@/components/ui/empty";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { usePlayer } from "@/stores/player";
@@ -60,9 +61,16 @@ export function TracksPage() {
         sort={{ value: view.sort || "recent", options: SORTS, onChange: (v) => patchView({ sort: v }) }}
         filters={
           admin && tracks.length > 0 && !search ? (
-            <Button variant="ghost" size="sm" className="text-destructive" onClick={() => { setDelFiles(false); setAllOpen(true); }}>
-              Delete all
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button size="icon" variant="ghost" className="h-9 w-9" aria-label="More catalogue actions"><MoreHorizontal /></Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem className="text-destructive" onSelect={() => { setDelFiles(false); setAllOpen(true); }}>
+                  <Trash2 className="h-4 w-4" /> Delete every track…
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           ) : undefined
         }
         layout={layout}

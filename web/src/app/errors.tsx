@@ -49,7 +49,7 @@ export function RouteError() {
 
 export function BootScreen() {
   return (
-    <div className="flex min-h-screen min-h-dvh flex-col items-center justify-center bg-background">
+    <div className="sd-auth flex min-h-screen min-h-dvh flex-col items-center justify-center bg-background">
       <div className="mb-4 rounded-xl bg-black p-3">
         <Logo className="h-24 w-auto" />
       </div>
@@ -63,7 +63,7 @@ export function BootScreen() {
 
 export function BootError({ onRetry }: { onRetry: () => void }) {
   return (
-    <div className="flex min-h-screen min-h-dvh flex-col items-center justify-center bg-background p-6 text-center">
+    <div className="sd-auth flex min-h-screen min-h-dvh flex-col items-center justify-center bg-background p-6 text-center">
       <div className="mb-4 rounded-xl bg-black p-3">
         <Logo className="h-24 w-auto" />
       </div>

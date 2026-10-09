@@ -1,5 +1,5 @@
 import { NavLink, useLocation } from "react-router-dom";
-import { Disc3, Home, Library, Link2, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Shield } from "lucide-react";
+import { BarChart3, Disc3, History, Home, Library, Link2, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Shield, Sparkles, Users, type LucideIcon } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -8,21 +8,59 @@ import { useUi } from "@/stores/ui";
 import { adminNavGroups, adminPath } from "@/features/admin/adminNav";
 import type { User } from "@/types/api";
 
-const primary = [
-  { to: "/", label: "Home", icon: Home, end: true },
-  { to: "/me/library", label: "My Library", icon: Library },
-  { to: "/playlists", label: "My Playlists", icon: ListMusic },
-  { to: "/library", label: "Catalogue", icon: Disc3 },
-  { to: "/radio", label: "Radio", icon: Radio },
-  { to: "/settings/connected", label: "Connected Services", icon: Link2 }
+type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean };
+
+const groups: { id: string; label?: string; items: NavItem[] }[] = [
+  {
+    id: "listen",
+    items: [
+      { to: "/", label: "Home", icon: Home, end: true },
+      { to: "/radio", label: "Radio", icon: Radio }
+    ]
+  },
+  {
+    id: "library",
+    label: "Library",
+    items: [
+      { to: "/me/library", label: "My Library", icon: Library },
+      { to: "/playlists", label: "My Playlists", icon: ListMusic },
+      { to: "/library", label: "Catalogue", icon: Disc3 }
+    ]
+  },
+  {
+    id: "you",
+    label: "You",
+    items: [
+      { to: "/history", label: "History", icon: History },
+      { to: "/stats", label: "Stats", icon: BarChart3 },
+      { to: "/wrapped", label: "Wrapped", icon: Sparkles },
+      { to: "/profile/party", label: "Party", icon: Users }
+    ]
+  }
 ];
 
-const listening = [
-  { to: "/history", label: "History" },
-  { to: "/stats", label: "Stats" },
-  { to: "/wrapped", label: "Wrapped" },
-  { to: "/profile/party", label: "Party" }
-];
+const itemClass = (isActive: boolean, compact: boolean) =>
+  cn(
+    "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-2/70 hover:text-foreground",
+    compact && "justify-center px-0",
+    isActive &&
+      "bg-surface-2 text-foreground before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent [&>svg]:text-accent"
+  );
+
+function NavRow({ item, compact }: { item: NavItem; compact: boolean }) {
+  return (
+    <NavLink
+      to={item.to}
+      end={item.end}
+      title={compact ? item.label : undefined}
+      aria-label={compact ? item.label : undefined}
+      className={({ isActive }) => itemClass(isActive, compact)}
+    >
+      <item.icon className="h-[18px] w-[18px] shrink-0" />
+      {!compact && <span className="truncate">{item.label}</span>}
+    </NavLink>
+  );
+}
 
 export function Sidebar({ user, collapsed, className, collapsible = false }: { user: User; collapsed?: boolean; className?: string; collapsible?: boolean }) {
   const ui = useUi();
@@ -43,7 +81,7 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
           </Tooltip>
         )}
       </div>
-      <nav className="flex-1 space-y-0.5 overflow-auto px-2.5 pt-3">
+      <nav className="flex-1 overflow-auto px-2.5 pb-3 pt-3">
         {adminOpen ? (
           <>
             <NavLink
@@ -83,56 +121,23 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
           </>
         ) : (
           <>
-            {primary.map((it) => (
-              <NavLink
-                key={it.to}
-                to={it.to}
-                end={it.end}
-                title={compact ? it.label : undefined}
-                className={({ isActive }) =>
-                  cn(
-                    "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-2/70 hover:text-foreground",
-                    compact && "justify-center px-0",
-                    isActive && "bg-surface-2 text-foreground before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent [&>svg]:text-accent"
-                  )
-                }
-              >
-                <it.icon className="h-4 w-4 shrink-0" />
-                {!compact && it.label}
-              </NavLink>
-            ))}
-            {!compact && (
-              <div className="pt-4">
-                <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-subtle">Listening</div>
-                {listening.map((it) => (
-                  <NavLink
-                    key={it.to}
-                    to={it.to}
-                    className={({ isActive }) =>
-                      cn("block rounded-lg px-3 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-foreground", isActive && "bg-surface-2 text-foreground before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent [&>svg]:text-accent")
-                    }
-                  >
-                    {it.label}
-                  </NavLink>
-                ))}
+            {groups.map((g, gi) => (
+              <div key={g.id} className={cn(gi > 0 && (compact ? "mt-2 border-t border-border pt-2" : "pt-5"))}>
+                {!compact && g.label && (
+                  <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-subtle">{g.label}</div>
+                )}
+                <div className="space-y-0.5">
+                  {g.items.map((it) => (
+                    <NavRow key={it.to} item={it} compact={compact} />
+                  ))}
+                </div>
               </div>
-            )}
-            {user.is_admin && (
-              <NavLink
-                to="/admin"
-                title={compact ? "Administration" : undefined}
-                className={({ isActive }) =>
-                  cn(
-                    "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-2/70 hover:text-foreground",
-                    compact ? "justify-center px-0" : "mt-4",
-                    isActive && "bg-surface-2 text-foreground before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent [&>svg]:text-accent"
-                  )
-                }
-              >
-                <Shield className="h-4 w-4 shrink-0" />
-                {!compact && "Administration"}
-              </NavLink>
-            )}
+            ))}
+            <div className={cn(compact ? "mt-2 border-t border-border pt-2" : "pt-5", "space-y-0.5")}>
+              {!compact && <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-subtle">Settings</div>}
+              <NavRow item={{ to: "/settings/connected", label: "Connected Services", icon: Link2 }} compact={compact} />
+              {user.is_admin && <NavRow item={{ to: "/admin", label: "Administration", icon: Shield }} compact={compact} />}
+            </div>
           </>
         )}
       </nav>

@@ -348,8 +348,8 @@ export function QueuePanel({
           dropAt(i);
         }}
         className={cn(
-          "group flex items-center gap-2 rounded-md p-2 transition-opacity duration-150",
-          opts.nowPlaying ? "bg-surface-2" : "hover:bg-surface-2",
+          "group relative flex items-center gap-2 rounded-xl py-1.5 pl-1 pr-1.5 transition-[opacity,background-color] duration-150",
+          opts.nowPlaying ? "bg-accent/10 ring-1 ring-inset ring-accent/25" : "hover:bg-surface-2/80",
           dragFrom === i && "opacity-40",
           flashId === item.id && "ring-1 ring-accent bg-accent/10"
         )}
@@ -364,16 +364,16 @@ export function QueuePanel({
             setOverIndex(i);
           }}
           onDragEnd={clearDrag}
-          className="flex h-8 w-6 shrink-0 cursor-grab items-center justify-center text-subtle active:cursor-grabbing"
+          className="flex h-8 w-4 shrink-0 cursor-grab items-center justify-center text-subtle opacity-40 transition-opacity active:cursor-grabbing group-hover:opacity-100"
           aria-label="Drag to reorder"
         >
           <GripVertical className="h-3.5 w-3.5" />
         </span>
-        <div className="h-10 w-10 overflow-hidden rounded">
+        <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md ring-1 ring-inset ring-border">
           <Artwork src={artworkUrl("track", item.track_id, "thumb")} id={item.track_id} name={t?.title} kind="track" size="sm" />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm">{item.title || t?.title || "Track"}</div>
+          <div className={cn("truncate text-sm font-medium", opts.nowPlaying && "text-accent")} title={item.title || t?.title || "Track"}>{item.title || t?.title || "Track"}</div>
           <div className="truncate text-xs text-muted">
             {item.artist || t?.artists?.map((a) => a.name).join(", ") || t?.artist || (opts.nowPlaying ? "Now playing" : "Up next")}
           </div>
@@ -390,7 +390,7 @@ export function QueuePanel({
             <Button
               size="icon"
               variant="ghost"
-              className="h-8 w-8 shrink-0"
+              className="h-8 w-8 shrink-0 text-subtle opacity-70 group-hover:opacity-100"
               aria-label="Track actions"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => e.stopPropagation()}
@@ -407,7 +407,7 @@ export function QueuePanel({
             <Button
               size="icon"
               variant="ghost"
-              className="h-8 w-8 opacity-0 group-hover:opacity-100 focus:opacity-100"
+              className="hidden h-8 w-8 shrink-0 group-hover:inline-flex group-focus-within:inline-flex"
               onClick={(e) => {
                 e.stopPropagation();
                 p.playNow(i);
@@ -419,7 +419,7 @@ export function QueuePanel({
             <Button
               size="icon"
               variant="ghost"
-              className="h-8 w-8 opacity-0 group-hover:opacity-100 focus:opacity-100"
+              className="hidden h-8 w-8 shrink-0 group-hover:inline-flex group-focus-within:inline-flex"
               onClick={(e) => {
                 e.stopPropagation();
                 removeAt(i);
@@ -491,7 +491,7 @@ export function QueuePanel({
         </div>
       </div>
       {view === "queue" && (
-        <div className="flex justify-end gap-1 px-4">
+        <div className="flex justify-end gap-0.5 px-3 [&_button]:h-7 [&_button]:px-2 [&_button]:text-xs">
           <Button
             size="sm"
             variant="ghost"
@@ -577,10 +577,10 @@ export function QueuePanel({
         )}
       </div>
       <div className="space-y-2 border-t border-border px-4 py-3">
-        <label className="flex items-center justify-between gap-3 text-sm" title="Queues library tracks that share genre or tags with the current song. YouTube is only used when those fields exist and the library pool is thin. Title and artist are never searched.">
+        <label className="flex items-center justify-between gap-3 text-sm" title="When the queue runs low, adds songs YouTube recommends after the current one (music only, at most two per artist). Your library fills in while they load, or on its own when YouTube is off.">
           <span>
             Autoplay
-            <span className="mt-0.5 block text-xs font-normal text-muted">Same genre and tags, then YouTube if needed</span>
+            <span className="mt-0.5 block text-xs font-normal text-muted">Keeps playing similar songs when the queue ends</span>
           </span>
           <Switch checked={p.autoplay} onCheckedChange={p.setAutoplay} />
         </label>

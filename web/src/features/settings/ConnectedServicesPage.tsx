@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { SettingsTabs } from "@/components/navigation/SettingsTabs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { Link2, Radio } from "lucide-react";
@@ -81,15 +82,16 @@ export function ConnectedServicesPage() {
         title="Connected Services"
         description="Connect accounts your administrator has configured. Spotify can import playlists into SoundDock. YouTube, SoundCloud, and Apple Music import playlist metadata; they are not a substitute for those catalogues."
       />
+      <SettingsTabs />
       {q.isError && <QueryError message={q.error instanceof Error ? q.error.message : undefined} onRetry={() => q.refetch()} />}
       <div className="space-y-3">
         {(q.data || []).map((p) => (
-          <article key={p.provider} className="rounded-xl border border-border bg-surface-1 p-4">
+          <article key={p.provider} className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2">
                   <Link2 className="h-4 w-4 text-accent" />
-                  <h2 className="font-semibold">{labels[p.provider] || p.provider}</h2>
+                  <h2 className="text-base font-semibold tracking-tight">{labels[p.provider] || p.provider}</h2>
                   {p.status === "needs_reconnect" ? <Badge tone="warning">Needs reconnect</Badge> : p.connected ? <Badge tone="success">Connected</Badge> : <Badge>Not connected</Badge>}
                 </div>
                 {p.account_name && <p className="mt-1 text-sm text-muted">{p.account_name}</p>}
@@ -162,12 +164,12 @@ export function ConnectedServicesPage() {
           </article>
         ))}
 
-        <article className="rounded-xl border border-border bg-surface-1 p-4">
+        <article className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
                 <Radio className="h-4 w-4 text-accent" />
-                <h2 className="font-semibold">Last.fm</h2>
+                <h2 className="text-base font-semibold tracking-tight">Last.fm</h2>
                 {sc.data?.lastfm_connected ? <Badge tone="success">Connected</Badge> : <Badge>Not connected</Badge>}
               </div>
               {sc.data?.lastfm_username && <p className="mt-1 text-sm text-muted">{sc.data.lastfm_username}</p>}
@@ -222,12 +224,12 @@ export function ConnectedServicesPage() {
           )}
         </article>
 
-        <article className="rounded-xl border border-border bg-surface-1 p-4">
+        <article className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
                 <Radio className="h-4 w-4 text-accent" />
-                <h2 className="font-semibold">ListenBrainz</h2>
+                <h2 className="text-base font-semibold tracking-tight">ListenBrainz</h2>
                 {sc.data?.listenbrainz_connected ? <Badge tone="success">Connected</Badge> : <Badge>Not connected</Badge>}
               </div>
               {sc.data?.listenbrainz_username && <p className="mt-1 text-sm text-muted">{sc.data.listenbrainz_username}</p>}
@@ -282,12 +284,12 @@ export function ConnectedServicesPage() {
           )}
         </article>
 
-        <article className="rounded-xl border border-border bg-surface-1 p-4">
+        <article className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
                 <Radio className="h-4 w-4 text-accent" />
-                <h2 className="font-semibold">Discord Rich Presence</h2>
+                <h2 className="text-base font-semibold tracking-tight">Discord Rich Presence</h2>
                 {presence ? <Badge tone="success">On</Badge> : <Badge>Off</Badge>}
               </div>
               <p className="mt-1 text-xs text-subtle">

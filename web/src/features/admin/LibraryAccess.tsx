@@ -42,7 +42,7 @@ export function LibraryAccess({ initialLibrary = "" }: { initialLibrary?: string
         The User group&apos;s grant is what makes a library visible to everyone.
       </p>
       {libs.isError && <QueryError message={libs.error instanceof Error ? libs.error.message : undefined} onRetry={() => libs.refetch()} />}
-      <article className="mb-6 max-w-lg rounded-xl border border-border bg-surface-1 p-4">
+      <article className="mb-6 max-w-lg rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
         <label className="flex items-center justify-between gap-3 text-sm">
           <span>
             <span className="font-medium">Strict permissions</span>

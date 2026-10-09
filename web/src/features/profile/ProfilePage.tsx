@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SettingsTabs } from "@/components/navigation/SettingsTabs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -67,8 +68,9 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
           </div>
         }
       />
+      <SettingsTabs />
       <form
-        className="space-y-4 rounded-xl border border-border bg-surface-1 p-5"
+        className="space-y-4 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm"
         onSubmit={async (e) => {
           e.preventDefault();
           try {
@@ -106,8 +108,8 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
         </Field>
         <Button type="submit">Save</Button>
       </form>
-      <section className="mt-6 space-y-3 rounded-xl border border-border bg-surface-1 p-5">
-        <h2 className="font-semibold">Keyboard shortcuts</h2>
+      <section className="mt-6 space-y-3 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm">
+        <h2 className="text-base font-semibold tracking-tight">Keyboard shortcuts</h2>
         <p className="text-sm text-muted">Space, arrows, and media keys for the player. Off by default. Ctrl+K search stays available.</p>
         <label className="flex items-center justify-between gap-3 text-sm">
           Enable player shortcuts
@@ -115,7 +117,7 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
         </label>
       </section>
       <form
-        className="mt-6 space-y-4 rounded-xl border border-border bg-surface-1 p-5"
+        className="mt-6 space-y-4 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm"
         onSubmit={async (e) => {
           e.preventDefault();
           const fd = new FormData(e.currentTarget);
@@ -128,13 +130,13 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
           }
         }}
       >
-        <h2 className="font-semibold">Password</h2>
+        <h2 className="text-base font-semibold tracking-tight">Password</h2>
         <Field label="Current"><Input name="current" type="password" autoComplete="current-password" required /></Field>
         <Field label="New"><Input name="next" type="password" autoComplete="new-password" required /></Field>
         <Button type="submit">Change password</Button>
       </form>
-      <section className="mt-6 space-y-3 rounded-xl border border-border bg-surface-1 p-5">
-        <h2 className="font-semibold">Sessions</h2>
+      <section className="mt-6 space-y-3 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm">
+        <h2 className="text-base font-semibold tracking-tight">Sessions</h2>
         <p className="text-sm text-muted">Signed-in browsers and apps. Revoke one without logging everyone out.</p>
         {sessions.isError && <QueryError message={sessions.error instanceof Error ? sessions.error.message : undefined} onRetry={() => sessions.refetch()} />}
         {sessionRows.length === 0 && !sessions.isLoading && !sessions.isError && <p className="text-sm text-subtle">No active sessions.</p>}
@@ -166,8 +168,8 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
           ))}
         </ul>
       </section>
-      <section className="mt-6 space-y-3 rounded-xl border border-border bg-surface-1 p-5">
-        <h2 className="font-semibold">API keys</h2>
+      <section className="mt-6 space-y-3 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm">
+        <h2 className="text-base font-semibold tracking-tight">API keys</h2>
         <p className="text-sm text-muted">
           Keys are created under Administration → API keys, where an administrator sets scopes.
           {user.is_admin ? <> <a className="text-accent underline" href="/admin/integrations">Open API keys</a></> : null}

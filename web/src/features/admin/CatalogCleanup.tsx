@@ -68,10 +68,10 @@ export function CatalogCleanup() {
 
   return (
     <div>
-      <section className="rounded-xl border border-border bg-surface-1 p-4">
+      <section className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="font-semibold">Fill in missing metadata</h2>
+            <h2 className="text-base font-semibold tracking-tight">Fill in missing metadata</h2>
             <p className="mt-1 text-sm text-muted">
               Looks up every track on MusicBrainz and fills in missing tags, genres, artist links, and cover art. Tracks you have locked are skipped.
               {tracks > 0 && (

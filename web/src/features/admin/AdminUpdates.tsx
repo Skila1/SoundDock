@@ -51,7 +51,7 @@ export function AdminUpdates() {
         {d.schema_forward_only ? <Badge tone="warning">Cannot be rolled back</Badge> : null}
         {d.needs_recovery ? <Badge tone="danger">Needs recovery</Badge> : null}
       </div>
-      <div className="mb-4 rounded-xl border border-border bg-surface-1 p-5">
+      <div className="mb-4 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm">
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
             <div className="text-sm text-muted">Installed</div>
@@ -144,7 +144,7 @@ export function AdminUpdates() {
           }}>{updating ? "Updating…" : "Update now"}</Button>
         </div>
       </div>
-      <div className="flex max-w-lg items-center justify-between rounded-xl border border-border bg-surface-1 p-4">
+      <div className="flex max-w-lg items-center justify-between rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
         <div>
           <div className="text-sm font-medium">Automatic updates</div>
           <p className="text-xs text-subtle">Checks about once an hour and installs new versions automatically.</p>

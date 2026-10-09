@@ -319,6 +319,7 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 	var (
 		trackCancel  context.CancelFunc
 		current      uuid.UUID
+		instance     string
 		status       string
 		appliedStart int
 		appliedAt    time.Time
@@ -396,7 +397,13 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 		if g := b.streamGain(guildID); g != nil {
 			g.Set(liveVolumeMultiplier(st))
 		}
-		if tid == current && stat == status && trackCancel != nil {
+		// A new playback instance means a new queue entry started, even when it
+		// is the same song queued twice in a row.
+		inst := ""
+		if v := st["playback_instance_id"]; v != nil {
+			inst = fmt.Sprint(v)
+		}
+		if tid == current && inst == instance && stat == status && trackCancel != nil {
 			pos := sessionPositionMS(st)
 			expected := appliedStart + int(time.Since(appliedAt).Milliseconds())
 			if pos-expected > 2000 || expected-pos > 2000 {
@@ -407,7 +414,7 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 			}
 		}
 		stopTrack()
-		current, status = tid, stat
+		current, instance, status = tid, inst, stat
 		appliedStart = sessionPositionMS(st)
 		appliedAt = time.Now()
 		tctx, cancel := context.WithCancel(ctx)

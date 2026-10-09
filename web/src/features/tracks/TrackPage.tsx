@@ -1,11 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { Download, Heart, ListPlus, Pencil, Play, SkipForward } from "lucide-react";
+import { Download, Heart, ListPlus, Pencil, Pin, SkipForward } from "lucide-react";
 import { api } from "@/lib/api";
 import { Artwork } from "@/components/media/Artwork";
 import { CoverEditor } from "@/components/media/CoverEditor";
 import { hasPerm } from "@/lib/perms";
-import { Button } from "@/components/ui/button";
+import { HeroIconButton, MediaHero } from "@/components/media/MediaHero";
 import { Badge } from "@/components/ui/misc";
 import { artworkUrl, formatDuration, formatBytes } from "@/lib/utils";
 import { usePlayer } from "@/stores/player";
@@ -56,7 +56,7 @@ export function TrackPage() {
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const favs = useQuery({ queryKey: ["favourites"], queryFn: () => api.get<Favourite[]>("/api/v1/favourites") });
   const t = q.data;
-  if (!t) return <div className="h-64 animate-pulse rounded-xl bg-surface-2" />;
+  if (!t) return <HeroSkeleton />;
   const fav = !!t.favourite || !!(favs.data || []).some((f) => f.type === "track" && f.id === t.id);
   const admin = !!me.data?.is_admin;
   const canEditCover = admin || hasPerm(me.data, "library.upload");
@@ -70,65 +70,91 @@ export function TrackPage() {
     toast.success(fav ? "Removed from favourites" : "Favourited");
   };
 
+  const specs = [
+    t.codec,
+    t.sample_rate ? `${t.sample_rate / 1000} kHz` : "",
+    t.bit_depth ? `${t.bit_depth}-bit` : "",
+    t.size_bytes ? formatBytes(t.size_bytes) : ""
+  ].filter(Boolean);
+
   return (
     <div>
-      <div className="mb-8 flex flex-col gap-6 md:flex-row">
-        <CoverEditor kind="track" id={t.id} canEdit={canEditCover} className="h-52 w-52 overflow-hidden rounded-xl shadow-card">
-          <Artwork src={artworkUrl("track", t.id, "page")} id={t.id} name={t.title} kind="track" />
-        </CoverEditor>
-        <div className="flex flex-col justify-end">
-          <p className="text-xs uppercase tracking-widest text-subtle">Track</p>
-          <h1 className="text-4xl font-semibold md:text-5xl">{t.title}</h1>
-          <p className="mt-2 text-muted">
-            {artist}
+      <MediaHero
+        art={
+          <CoverEditor kind="track" id={t.id} canEdit={canEditCover} className="h-full w-full">
+            <Artwork src={artworkUrl("track", t.id, "page")} id={t.id} name={t.title} kind="track" />
+          </CoverEditor>
+        }
+        backdrop={artworkUrl("track", t.id, "thumb")}
+        eyebrow="Song"
+        title={t.title}
+        meta={
+          <>
+            <span className="font-semibold">{artist}</span>
             {t.album_id ? (
               <>
-                {" · "}
-                <Link to={`/albums/${t.album_id}`} className="hover:underline">{t.album}</Link>
+                <span className="text-muted">·</span>
+                <Link to={`/albums/${t.album_id}`} className="text-muted hover:text-foreground hover:underline">{t.album}</Link>
               </>
-            ) : t.album ? ` · ${t.album}` : ""}
-            {t.year ? ` · ${t.year}` : ""}
-          </p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
+            ) : t.album ? <span className="text-muted">· {t.album}</span> : null}
+            {t.year ? <span className="text-muted">· {t.year}</span> : null}
+            <span className="text-muted">· {formatDuration(t.duration_ms)}</span>
+          </>
+        }
+        stats={
+          <div className="mt-1 flex flex-wrap items-center gap-1.5">
             {t.explicit && <Badge tone="warning">Explicit</Badge>}
-            {t.media_unavailable && <Badge tone="warning">Unavailable - will reacquire</Badge>}
-            {t.keep_forever && <Badge tone="success">Keep forever</Badge>}
-            {t.codec && <Badge>{t.codec}</Badge>}
             {hires && <Badge tone="accent">Hi-Res</Badge>}
             {t.genre && <Badge>{t.genre}</Badge>}
+            {t.keep_forever && <Badge tone="success">Keep forever</Badge>}
+            {t.media_unavailable && <Badge tone="warning">Unavailable - will reacquire</Badge>}
+            {specs.length > 0 && <span className="text-xs text-subtle">{specs.join(" · ")}</span>}
+            {t.play_count ? <span className="text-xs text-subtle">· {t.play_count} plays</span> : null}
           </div>
-          <p className="mt-2 text-sm text-subtle">
-            {formatDuration(t.duration_ms)}
-            {t.sample_rate ? ` · ${t.sample_rate / 1000} kHz` : ""}
-            {t.bit_depth ? ` · ${t.bit_depth}-bit` : ""}
-            {t.size_bytes ? ` · ${formatBytes(t.size_bytes)}` : ""}
-            {t.play_count ? ` · ${t.play_count} plays` : ""}
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Button onClick={() => play([t.id])}><Play className="fill-current" /> Play</Button>
-            <Button variant="secondary" onClick={() => add([t.id], true).then(() => toast.success("Playing next"))}><SkipForward /> Play next</Button>
-            <Button variant="ghost" onClick={() => add([t.id]).then(() => toast.success("Added to queue"))}><ListPlus /> Add to queue</Button>
-            <Button variant="ghost" onClick={toggleFav} aria-label="Favourite"><Heart className={fav ? "fill-current" : ""} /></Button>
-            <Button variant="ghost" onClick={() => downloadTrack(t)}><Download /> Download</Button>
-            {admin && <Button variant="ghost" onClick={() => useTrackActions.getState().openEdit(t.id)}><Pencil /> Edit</Button>}
-            {admin && (
-              <Button
-                variant="ghost"
-                onClick={async () => {
-                  await saveTrackMeta(t.id, { keep_forever: !t.keep_forever });
-                  qc.invalidateQueries({ queryKey: ["track-meta", id] });
-                  toast.success(t.keep_forever ? "Track can be pruned again" : "Marked Keep forever");
-                }}
-              >
-                {t.keep_forever ? "Allow prune" : "Keep forever"}
-              </Button>
-            )}
-          </div>
-        </div>
-      </div>
+        }
+        onPlay={() => play([t.id])}
+        actions={
+          <>
+            <HeroIconButton label={fav ? "Remove from favourites" : "Favourite"} active={fav} onClick={toggleFav}><Heart className={fav ? "fill-current" : ""} /></HeroIconButton>
+            <HeroIconButton label="Play next" onClick={() => add([t.id], true).then(() => toast.success("Playing next"))}><SkipForward /></HeroIconButton>
+            <HeroIconButton label="Add to queue" onClick={() => add([t.id]).then(() => toast.success("Added to queue"))}><ListPlus /></HeroIconButton>
+            <HeroIconButton label="Download" onClick={() => downloadTrack(t)}><Download /></HeroIconButton>
+          </>
+        }
+        menu={[
+          { label: "Add to playlist", icon: <ListPlus className="h-4 w-4" />, onSelect: () => useTrackActions.getState().openPlaylist([t.id]) },
+          { label: "Edit song", icon: <Pencil className="h-4 w-4" />, onSelect: () => useTrackActions.getState().openEdit(t.id), hidden: !admin },
+          {
+            label: t.keep_forever ? "Allow pruning" : "Keep forever",
+            icon: <Pin className="h-4 w-4" />,
+            hidden: !admin,
+            onSelect: async () => {
+              await saveTrackMeta(t.id, { keep_forever: !t.keep_forever });
+              qc.invalidateQueries({ queryKey: ["track-meta", id] });
+              toast.success(t.keep_forever ? "Track can be pruned again" : "Marked Keep forever");
+            }
+          }
+        ]}
+      />
       {t.lyrics && (
-        <section className="mb-8 max-w-xl whitespace-pre-wrap text-sm text-muted">{t.lyrics}</section>
+        <section className="mb-8 max-w-2xl">
+          <h2 className="mb-3 text-xl font-bold tracking-tight">Lyrics</h2>
+          <div className="whitespace-pre-wrap text-[15px] leading-relaxed text-muted">{t.lyrics}</div>
+        </section>
       )}
+    </div>
+  );
+}
+
+export function HeroSkeleton() {
+  return (
+    <div className="flex flex-col gap-6 pt-6 md:flex-row md:items-end">
+      <div className="h-44 w-44 animate-pulse rounded-2xl bg-surface-2 md:h-56 md:w-56" />
+      <div className="flex-1 space-y-3">
+        <div className="h-3 w-20 animate-pulse rounded bg-surface-2" />
+        <div className="h-10 w-2/3 animate-pulse rounded-lg bg-surface-2" />
+        <div className="h-4 w-1/3 animate-pulse rounded bg-surface-2" />
+      </div>
     </div>
   );
 }

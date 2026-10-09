@@ -228,8 +228,8 @@ export function AdminRetention() {
         </div>
       )}
 
-      <section className="mb-8 max-w-2xl space-y-4 rounded-xl border border-border bg-surface-1 p-4">
-        <h2 className="font-semibold">Media pruning</h2>
+      <section className="mb-8 max-w-2xl space-y-4 rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
+        <h2 className="text-base font-semibold tracking-tight">Media pruning</h2>
         <div className="flex items-center justify-between gap-3">
           <div>
             <div className="text-sm font-medium">Enable automatic pruning</div>
@@ -279,7 +279,7 @@ export function AdminRetention() {
       </section>
 
       <section className="mb-8 max-w-2xl space-y-3">
-        <h2 className="font-semibold">Libraries</h2>
+        <h2 className="text-base font-semibold tracking-tight">Libraries</h2>
         <p className="text-sm text-muted">Downloaded tracks in SoundDock-managed libraries can be pruned. Turn a network or local library on only if SoundDock may delete files there.</p>
         <ul className="space-y-2">
           {(q.data?.libraries || []).map((l) => (
@@ -300,7 +300,7 @@ export function AdminRetention() {
       </section>
 
       <section className="mb-8 max-w-2xl space-y-3">
-        <h2 className="font-semibold">Exclusions</h2>
+        <h2 className="text-base font-semibold tracking-tight">Exclusions</h2>
         <p className="text-sm text-muted">Never prune these tracks, albums, artists, playlists, or libraries. Favourites, Keep forever, playlists, queues, and active jobs are always protected.</p>
         <form
           className="flex flex-wrap items-end gap-2"
@@ -334,7 +334,7 @@ export function AdminRetention() {
       </section>
 
       <section className="mb-8 max-w-2xl space-y-3">
-        <h2 className="font-semibold">Recent retention activity</h2>
+        <h2 className="text-base font-semibold tracking-tight">Recent retention activity</h2>
         <div className="overflow-x-auto rounded-xl border border-border">
           <table className="w-full text-left text-sm">
             <thead className="bg-surface-2 text-muted">
@@ -368,7 +368,7 @@ export function AdminRetention() {
       </section>
 
       <section className="mb-8 max-w-md space-y-3">
-        <h2 className="font-semibold">Logs and history</h2>
+        <h2 className="text-base font-semibold tracking-tight">Logs and history</h2>
         <p className="text-sm text-muted">0 days means keep forever. These only clear old records, never music files.</p>
         {(logPolicies).map((r) => (
           <Field key={r.key} label={r.label || r.key}>
@@ -422,7 +422,7 @@ export function AdminRetention() {
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-xl border border-border bg-surface-1 p-4">
+    <div className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
       <div className="text-xs uppercase tracking-wide text-subtle">{label}</div>
       <div className="mt-1 text-lg font-semibold">{value}</div>
       {hint && <div className="mt-1 truncate text-xs text-muted">{hint}</div>}

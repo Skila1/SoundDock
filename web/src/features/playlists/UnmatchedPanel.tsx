@@ -34,7 +34,7 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
   const items = q.data || [];
   if (!items.length) return null;
   return (
-    <section className="mb-8 rounded-xl border border-border bg-surface-1 p-4">
+    <section className="mb-8 rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
       <h2 className="mb-1 font-semibold">Needs review</h2>
       <p className="mb-4 text-sm text-muted">{items.length} items are not in your SoundDock library. Playback skips them until they match or download from YouTube.</p>
       <ul className="space-y-3">

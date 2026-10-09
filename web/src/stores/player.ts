@@ -363,14 +363,29 @@ function sameTrackId(a: string | null | undefined, b: string | null | undefined)
   return String(a || "") === String(b || "");
 }
 
+/**
+ * Identifies the queue entry that is playing, not just the song. The same song
+ * queued twice is two entries, so skipping from one to the other must restart
+ * playback even though the track id does not change.
+ */
+function currentEntryKey(q: { items?: PlayerQueueItem[]; current_index?: number; current_track_id?: string | null } | null | undefined): string {
+  if (!q) return "";
+  const idx = q.current_index ?? 0;
+  const item = q.items?.[idx];
+  if (item?.id && (!q.current_track_id || sameTrackId(item.track_id, q.current_track_id))) return `item:${item.id}`;
+  return `idx:${idx}:${q.current_track_id || ""}`;
+}
+
 function queueNeedsLocalBind(
   prevId: string | null | undefined,
   prevItems: PlayerQueueItem[] | undefined,
-  q: PlayerQueue
+  q: PlayerQueue,
+  prevEntry?: string
 ): boolean {
   const id = q.current_track_id;
   if (!id) return false;
   if (!sameTrackId(id, prevId)) return true;
+  if (prevEntry !== undefined && prevEntry !== currentEntryKey(q)) return true;
   return mediaBecameReady(prevItems, q, id);
 }
 
@@ -563,6 +578,7 @@ function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kin
   const prev = usePlayer.getState();
   const prevId = prev.queue?.current_track_id;
   const prevItems = prev.queue?.items;
+  const prevEntry = currentEntryKey(prev.queue);
   const view = ingestQueue(snap, opts);
   const q = session.queue as PlayerQueue;
   const own = !usingDiscord() && tabOwnsBrowserLease(session.queue, tabId());
@@ -602,7 +618,7 @@ function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kin
     usePlayer.setState({ playing: false });
   }
 
-  if (!keepTransport && own && queueNeedsLocalBind(prevId, prevItems, q) && q.current_track_id) {
+  if (!keepTransport && own && queueNeedsLocalBind(prevId, prevItems, q, prevEntry) && q.current_track_id) {
     const id = q.current_track_id;
     void usePlayer
       .getState()
@@ -1235,6 +1251,9 @@ export const usePlayer = create<PlayerStore>()(
         if (!q) return;
         const prevId = get().current?.id;
         const prevItems = get().queue?.items;
+        // Read before ingesting the response; if a live update already applied
+        // this change, the keys match and that path has restarted audio.
+        const prevEntry = currentEntryKey(get().queue);
         const metaOnly =
           action === "seek" ||
           action === "reorder" ||
@@ -1288,7 +1307,7 @@ export const usePlayer = create<PlayerStore>()(
           pauseAll();
           set({ playing: false, position: 0 });
         }
-        if (queueNeedsLocalBind(prevId, prevItems, q) && q.current_track_id) {
+        if (queueNeedsLocalBind(prevId, prevItems, q, prevEntry) && q.current_track_id) {
           const t = await get().hydrateTrack(q.current_track_id);
           currentMeta = t;
           if (skipLocalStart) {

@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Download, ListMusic, ListPlus, Loader2, Play, Plus } from "lucide-react";
+import { Download, ListMusic, ListPlus, Loader2, Play, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { cn, formatDuration } from "@/lib/utils";
@@ -11,6 +11,7 @@ import { Badge, Skeleton } from "@/components/ui/misc";
 import { EmptyState, QueryError } from "@/components/ui/empty";
 import { TaskProgress, type TaskState } from "@/components/ui/task-progress";
 import { LocalSearch } from "@/components/media/LibraryToolbar";
+import { MediaHero } from "@/components/media/MediaHero";
 
 type ExtTrack = {
   provider_track_id: string;
@@ -176,9 +177,6 @@ export function ProviderPlaylistPage() {
 
   return (
     <div>
-      <Link to="/playlists" className="mb-4 inline-flex items-center gap-1 text-sm text-muted hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" /> My Playlists
-      </Link>
       {q.isLoading && (
         <div className="space-y-3">
           <Skeleton className="h-40 w-40" />
@@ -189,32 +187,28 @@ export function ProviderPlaylistPage() {
       {q.isError && <QueryError message={q.error instanceof Error ? q.error.message : undefined} onRetry={() => q.refetch()} />}
       {q.data && (
         <>
-          <header className="mb-6 flex flex-col gap-5 sm:flex-row sm:items-end">
-            <div className="h-40 w-40 shrink-0 overflow-hidden rounded-xl bg-surface-2 shadow-card">
-              {pl?.artwork ? <img src={pl.artwork} alt="" className="h-full w-full object-cover" /> : <ListMusic className="m-auto mt-14 h-12 w-12 text-subtle" />}
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs uppercase tracking-widest text-subtle">{provider.replace("_", " ")} playlist</p>
-              <h1 className="mt-1 truncate text-3xl font-semibold md:text-4xl">{pl?.name || "Playlist"}</h1>
-              <p className="mt-1 text-sm text-muted">
-                {[pl?.owner, `${tracks.length} songs`].filter(Boolean).join(" · ")}
-              </p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Button onClick={() => void playFrom(targets())} disabled={running || !tracks.length}>
-                  <Play className="fill-current" /> Play {scope === "all" ? "" : scope}
-                </Button>
-                <Button variant="secondary" onClick={() => void queue(targets())} disabled={running || !tracks.length}>
+          <MediaHero
+            art={pl?.artwork ? <img src={pl.artwork} alt="" className="h-full w-full object-cover" /> : <div className="flex h-full w-full items-center justify-center"><ListMusic className="h-12 w-12 text-subtle" /></div>}
+            backdrop={pl?.artwork}
+            eyebrow={`${provider.replace("_", " ")} playlist`}
+            title={pl?.name || "Playlist"}
+            meta={pl?.owner ? <span className="font-semibold">{pl.owner}</span> : undefined}
+            stats={`${tracks.length} songs${selected.size ? ` · ${selected.size} selected` : ""}`}
+            onPlay={() => void playFrom(targets())}
+            busy={running}
+            playDisabled={!tracks.length}
+            actions={
+              <>
+                <Button variant="secondary" size="sm" onClick={() => void queue(targets())} disabled={running || !tracks.length}>
                   <ListPlus /> Queue {scope}
                 </Button>
-                <Button variant="secondary" onClick={() => void save(targets())} disabled={running || !tracks.length}>
+                <Button variant="secondary" size="sm" onClick={() => void save(targets())} disabled={running || !tracks.length}>
                   <Plus /> Add {scope} to My Library
                 </Button>
-                <Button variant="ghost" onClick={() => void importPlaylist()} disabled={running}>
-                  <Download /> Import as playlist
-                </Button>
-              </div>
-            </div>
-          </header>
+              </>
+            }
+            menu={[{ label: "Import as SoundDock playlist", icon: <Download className="h-4 w-4" />, onSelect: () => void importPlaylist() }]}
+          />
           <TaskProgress task={task} className="mb-4" onDismiss={() => setTask(null)} />
           {tracks.length > 0 && (
             <div className="mb-3 flex flex-wrap items-center gap-2">

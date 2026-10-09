@@ -39,7 +39,7 @@ export function ImportPage() {
         <p className="mb-4 text-sm text-muted">You do not have permission to import files.</p>
       )}
       {canImport && <form
-        className="max-w-xl space-y-4 rounded-xl border border-border bg-surface-1 p-5"
+        className="max-w-xl space-y-4 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm"
         onSubmit={async (e) => {
           e.preventDefault();
           const urls = splitURLs(url);

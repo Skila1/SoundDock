@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListMusic, Radio as RadioIcon } from "lucide-react";
+import { Download, Link2, ListMusic, Plus, Radio as RadioIcon, Shuffle, Wand2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { hasPerm } from "@/lib/perms";
 import { MediaCard } from "@/components/media/MediaCard";
 import { TrackedJobs, useTrackedJobs } from "@/components/ui/job-progress";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input, Textarea } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
@@ -92,6 +93,21 @@ export function PlaylistsPage() {
     return [...map.entries()];
   }, [list]);
 
+  const importAll = async () => {
+    setBusyId("all");
+    try {
+      const r = await api.post<{ count: number; job_ids?: string[] }>(`/api/v1/providers/${tab}/import-all`, { mode: "once" });
+      const ids = r.job_ids || [];
+      ids.forEach((jid, i) => trackJob(jid, `Importing playlist ${i + 1} of ${ids.length}`));
+      toast.success(`Importing ${r.count} playlists. Matching your library first.`);
+      qc.invalidateQueries({ queryKey: ["playlists"] });
+    } catch (err: any) {
+      toast.error(err?.message || "Could not import playlists");
+    } finally {
+      setBusyId("");
+    }
+  };
+
   const quickMix = async () => {
     const r = await api.get<RadioResponse>("/api/v1/radio?kind=quick_mix&limit=20");
     const ids = r.track_ids || [];
@@ -108,60 +124,62 @@ export function PlaylistsPage() {
         title="My Playlists"
         description="Private collections you curate. Sharing stays off unless you mark a playlist public."
         actions={
-          <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => navigate("/radio")}><RadioIcon /> Radio</Button>
-            <Button variant="secondary" onClick={quickMix}>Quick Mix</Button>
-            {canImport && <Button variant="secondary" onClick={() => setImp(true)}>Import from URL</Button>}
-            {canImport && providerOk && (
-              <Button
-                variant="secondary"
-                onClick={async () => {
-                  setBusyId("all");
-                  try {
-                    const r = await api.post<{ count: number; job_ids?: string[] }>(`/api/v1/providers/${tab}/import-all`, { mode: "once" });
-                    const ids = r.job_ids || [];
-                    ids.forEach((jid, i) => trackJob(jid, `Importing playlist ${i + 1} of ${ids.length}`));
-                    toast.success(`Importing ${r.count} playlists. Matching your library first.`);
-                    qc.invalidateQueries({ queryKey: ["playlists"] });
-                  } catch (err: any) {
-                    toast.error(err?.message || "Could not import Spotify playlists");
-                  } finally {
-                    setBusyId("");
-                  }
-                }}
-                disabled={busyId === "all"}
-              >
-                {busyId === "all" ? "Importing…" : `Import all from ${tabs.find((x) => x.id === tab)?.label || "provider"}`}
-              </Button>
-            )}
-            <Button variant="secondary" onClick={() => setSmart(true)}>Smart playlist</Button>
-            <Button onClick={() => setOpen(true)}>New playlist</Button>
-          </div>
+          <>
+            <Button variant="secondary" onClick={quickMix}><Shuffle /> Quick Mix</Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="secondary" aria-label="More playlist actions"><Plus /> Add</Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-56">
+                <DropdownMenuItem onSelect={() => setOpen(true)}><ListMusic className="h-4 w-4" /> New playlist</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => setSmart(true)}><Wand2 className="h-4 w-4" /> Smart playlist</DropdownMenuItem>
+                {canImport && (
+                  <>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onSelect={() => setImp(true)}><Link2 className="h-4 w-4" /> Import from URL</DropdownMenuItem>
+                  </>
+                )}
+                {canImport && providerOk && (
+                  <DropdownMenuItem disabled={busyId === "all"} onSelect={() => void importAll()}>
+                    <Download className="h-4 w-4" /> Import all from {tabs.find((x) => x.id === tab)?.label || "provider"}
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => navigate("/radio")}><RadioIcon className="h-4 w-4" /> Radio stations</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+            <Button onClick={() => setOpen(true)}><Plus /> New playlist</Button>
+          </>
         }
       />
       <TrackedJobs className="mb-5" />
-      <div className="mb-5 flex flex-wrap gap-1">
-        {tabs.map((t) => {
-          const row = (providers.data || []).find((p) => p.provider === t.id);
-          return (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`rounded-full px-3 py-1 text-sm ${tab === t.id ? "bg-accent text-[#04140a]" : "bg-surface-2 text-muted"}`}
-            >
-              {t.label}
-              {row?.status === "needs_reconnect" ? " (reconnect)" : ""}
-            </button>
-          );
-        })}
-      </div>
-      <div className="mb-5 flex flex-wrap gap-1">
-        <button onClick={() => setFolder("all")} className={`rounded-full px-3 py-1 text-sm ${folder === "all" ? "bg-surface-3" : "bg-surface-2 text-muted"}`}>All folders</button>
-        {(folders.data || []).filter((f) => f.name).map((f) => (
-          <button key={f.name} onClick={() => setFolder(f.name)} className={`rounded-full px-3 py-1 text-sm ${folder === f.name ? "bg-surface-3" : "bg-surface-2 text-muted"}`}>
-            {f.name} ({f.count})
-          </button>
-        ))}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        {tabs.length > 1 ? (
+        <div className="inline-flex flex-wrap gap-1 rounded-full bg-surface-2/70 p-1 ring-1 ring-inset ring-border">
+          {tabs.map((t) => {
+            const row = (providers.data || []).find((p) => p.provider === t.id);
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => setTab(t.id)}
+                className={`rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${tab === t.id ? "bg-accent text-[#04140a] shadow-sm" : "text-muted hover:text-foreground"}`}
+              >
+                {t.label}
+                {row?.status === "needs_reconnect" ? " (reconnect)" : ""}
+              </button>
+            );
+          })}
+        </div>
+        ) : <span />}
+        {(folders.data || []).some((f) => f.name) && (
+          <Select
+            className="h-9 w-[200px]"
+            value={folder}
+            onValueChange={setFolder}
+            options={[{ value: "all", label: "All folders" }, ...(folders.data || []).filter((f) => f.name).map((f) => ({ value: f.name, label: `${f.name} (${f.count})` }))]}
+          />
+        )}
       </div>
       {tab !== "all" && !providerOk && providers.data && (
         <p className="mb-5 text-sm text-muted">
@@ -179,9 +197,9 @@ export function PlaylistsPage() {
       {canImport && providerOk && (remote.data || []).length > 0 && (
         <section className="mb-8">
           <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-subtle">Your {tabs.find((x) => x.id === tab)?.label} playlists</h2>
-          <ul className="divide-y divide-border rounded-xl border border-border bg-surface-1">
+          <ul className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface-1">
             {(remote.data || []).map((pl) => (
-              <li key={pl.id} className="flex items-center justify-between gap-3 px-4 py-3">
+              <li key={pl.id} className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-surface-2/60">
                 <Link to={`/playlists/remote/${tab}/${encodeURIComponent(pl.id)}`} className="group flex min-w-0 flex-1 items-center gap-3">
                   {pl.artwork ? <img src={pl.artwork} alt="" loading="lazy" className="h-11 w-11 shrink-0 rounded-md object-cover" /> : <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-surface-2"><ListMusic className="h-5 w-5 text-subtle" /></div>}
                   <div className="min-w-0">

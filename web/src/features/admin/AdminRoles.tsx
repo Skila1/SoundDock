@@ -45,7 +45,7 @@ export function AdminRoles() {
           <button
             key={r.id}
             type="button"
-            className="rounded-xl border border-border bg-surface-1 p-4 text-left hover:border-accent/40"
+            className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm text-left hover:border-accent/40"
             onClick={() => setSelected(r)}
           >
             <div className="flex items-center justify-between gap-2">

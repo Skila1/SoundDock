@@ -40,7 +40,7 @@ export function PublicProfilePage() {
         />
       )}
       {p?.personal_library_visible && (
-        <div className="rounded-xl border border-border bg-surface-1 p-5">
+        <div className="rounded-2xl border border-border bg-surface-1 p-6 shadow-sm">
           <p className="text-sm text-muted">
             {p.personal_library_track_count === 1
               ? "1 requested song"

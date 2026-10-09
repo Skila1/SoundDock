@@ -95,7 +95,7 @@ function LibrariesTab() {
           const used = quotas.data?.library_usage?.[l.id] || 0;
           const cap = capFor(l.id);
           return (
-            <div key={l.id} className="rounded-xl border border-border bg-surface-1 p-4">
+            <div key={l.id} className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2 font-semibold">
@@ -374,7 +374,7 @@ function StorageTab() {
           const used = s.used_bytes || 0;
           const total = s.total_bytes || 0;
           return (
-            <article key={s.id} className="rounded-xl border border-border bg-surface-1 p-4">
+            <article key={s.id} className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h3 className="font-semibold">{s.name}</h3>

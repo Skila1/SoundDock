@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { SettingsTabs } from "@/components/navigation/SettingsTabs";
 import { Speaker } from "lucide-react";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -69,6 +70,7 @@ export function DevicesPage() {
           ? "Attached session while you are in the bound voice channel. Pause, resume, and skip stay in sync with the bot."
           : "Handoff playback for this browser. Join a voice channel to attach to the Discord session."}
       />
+      <SettingsTabs />
       {queue.isError && (
         <QueryError message={queue.error instanceof Error ? queue.error.message : undefined} onRetry={() => queue.refetch()} />
       )}
@@ -76,12 +78,12 @@ export function DevicesPage() {
         <EmptyState icon={Speaker} title="No playback session" description="Start playing a track to create a web device session." />
       )}
       {q && (
-        <article className="space-y-4 rounded-xl border border-border bg-surface-1 p-5">
+        <article className="space-y-4 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="flex items-center gap-2">
                 <Speaker className="h-4 w-4 text-accent" />
-                <h2 className="font-semibold">{q.kind === "discord_guild" || q.output_pref === "discord" || q.renderer_kind === "discord" || discord ? "Discord" : "Web player"}</h2>
+                <h2 className="text-base font-semibold tracking-tight">{q.kind === "discord_guild" || q.output_pref === "discord" || q.renderer_kind === "discord" || discord ? "Discord" : "Web player"}</h2>
                 <Badge tone={q.status === "playing" ? "success" : "neutral"}>{q.status}</Badge>
               </div>
               <p className="mt-1 text-sm text-muted">

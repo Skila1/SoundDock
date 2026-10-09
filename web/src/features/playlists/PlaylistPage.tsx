@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
-import { ChevronDown, ChevronUp, Copy, Heart, Pencil, Play, Radio as RadioIcon, Shuffle, Trash2 } from "lucide-react";
+import { Camera, ChevronDown, ChevronUp, Copy, Heart, ListPlus, Pencil, Radio as RadioIcon, RefreshCw, Shuffle, Trash2, Wand2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { Artwork } from "@/components/media/Artwork";
+import { HeroIconButton, MediaHero } from "@/components/media/MediaHero";
 import { TrackList } from "@/components/media/TrackList";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -105,38 +106,32 @@ export function PlaylistPage() {
 
   return (
     <div>
-      <div className="mb-8 flex flex-col gap-6 md:flex-row">
-        <div className="h-48 w-48 overflow-hidden rounded-xl">
-          <Artwork src={artworkUrl("playlist", p.id, "page")} id={p.id} name={p.name} kind="playlist" />
-        </div>
-        <div className="flex flex-col justify-end">
-          <p className="text-xs uppercase tracking-widest text-subtle">
-            {p.external ? `${p.external.provider.replace("_", " ")} playlist` : p.is_smart ? "Smart playlist" : p.folder ? `${p.folder} · Playlist` : "Playlist"}
-          </p>
-          <h1 className="text-4xl font-semibold">{p.name}</h1>
-          {p.description && <p className="mt-1 text-muted">{p.description}</p>}
-          <p className="text-sm text-subtle">
+      <MediaHero
+        art={<Artwork src={artworkUrl("playlist", p.id, "page")} id={p.id} name={p.name} kind="playlist" />}
+        backdrop={artworkUrl("playlist", p.id, "thumb")}
+        eyebrow={p.external ? `${p.external.provider.replace("_", " ")} playlist` : p.is_smart ? "Smart playlist" : p.folder ? `${p.folder} · Playlist` : "Playlist"}
+        title={p.name}
+        description={p.description}
+        stats={
+          <>
             {tracks.length} playable
             {p.external ? ` · ${p.external.matched} of ${p.external.matched + p.external.unmatched} in your library` : ""}
-            {" · "}{formatDuration(total)}
-          </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Button onClick={() => play(ids)} disabled={!ids.length}><Play className="fill-current" /> Play</Button>
-            <Button
-              variant="secondary"
-              disabled={!ids.length}
-              onClick={() => add(ids).then(() => toast.success("Queued playlist"))}
-            >
-              Queue
-            </Button>
-            <Button variant="secondary" onClick={() => play([...ids].sort(() => Math.random() - 0.5))}><Shuffle /> Shuffle</Button>
-            <Button variant="secondary" onClick={startRadio} disabled={!ids.length}><RadioIcon /> Radio</Button>
-            {isOwner && <Button variant="ghost" onClick={() => setEdit(true)}><Pencil /> Edit</Button>}
-            <Button variant="ghost" onClick={() => api.post("/api/v1/favourites", { type: "playlist", id: p.id, on: true }).then(() => toast.success("Favourited"))}><Heart /></Button>
-            {isOwner && <Button variant="ghost" onClick={() => setDel(true)}><Trash2 /></Button>}
+            {" · "}
+            {formatDuration(total)}
+          </>
+        }
+        onPlay={() => play(ids)}
+        playDisabled={!ids.length}
+        actions={
+          <>
+            <HeroIconButton label="Shuffle" disabled={!ids.length} onClick={() => play([...ids].sort(() => Math.random() - 0.5))}><Shuffle /></HeroIconButton>
+            <HeroIconButton label="Add to queue" disabled={!ids.length} onClick={() => add(ids).then(() => toast.success("Queued playlist"))}><ListPlus /></HeroIconButton>
+            <HeroIconButton label="Start radio" disabled={!ids.length} onClick={startRadio}><RadioIcon /></HeroIconButton>
+            <HeroIconButton label="Favourite" onClick={() => api.post("/api/v1/favourites", { type: "playlist", id: p.id, on: true }).then(() => toast.success("Favourited"))}><Heart /></HeroIconButton>
             {p.external && (
               <Button
                 variant="secondary"
+                size="sm"
                 onClick={async () => {
                   await api.post(`/api/v1/playlists/${id}/external-sync`);
                   toast.success("Sync queued. Missing songs download from YouTube.");
@@ -145,48 +140,47 @@ export function PlaylistPage() {
                   qc.invalidateQueries({ queryKey: ["sync-diff", id] });
                 }}
               >
-                Sync{p.external.provider === "spotify" ? " from Spotify" : ""}
+                <RefreshCw /> Sync{p.external.provider === "spotify" ? " from Spotify" : ""}
               </Button>
             )}
-            {isOwner && (
-              <Button
-                variant="ghost"
-                onClick={async () => {
-                  const r = await api.post<{ url?: string; path?: string }>(`/api/v1/playlists/${id}/invite`);
-                  const link = r.url || `${location.origin}${r.path || ""}`;
-                  await navigator.clipboard.writeText(link);
-                  toast.success("Invite link copied");
-                  qc.invalidateQueries({ queryKey: ["playlist", id] });
-                }}
-              >
-                <Copy /> Invite
-              </Button>
-            )}
-            {canEdit && (
-              <Button
-                variant="ghost"
-                onClick={async () => {
-                  await api.post(`/api/v1/playlists/${id}/snapshots`);
-                  toast.success("Snapshot saved");
-                  qc.invalidateQueries({ queryKey: ["playlist-snaps", id] });
-                  qc.invalidateQueries({ queryKey: ["playlist", id] });
-                }}
-              >
-                Snapshot
-              </Button>
-            )}
-            {isOwner && (
-              <Button variant="ghost" onClick={() => setSmartOpen(true)}>Smart rules</Button>
-            )}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+        menu={[
+          { label: "Edit details", icon: <Pencil className="h-4 w-4" />, onSelect: () => setEdit(true), hidden: !isOwner },
+          { label: "Smart rules", icon: <Wand2 className="h-4 w-4" />, onSelect: () => setSmartOpen(true), hidden: !isOwner },
+          {
+            label: "Copy invite link",
+            icon: <Copy className="h-4 w-4" />,
+            hidden: !isOwner,
+            onSelect: async () => {
+              const r = await api.post<{ url?: string; path?: string }>(`/api/v1/playlists/${id}/invite`);
+              const link = r.url || `${location.origin}${r.path || ""}`;
+              await navigator.clipboard.writeText(link);
+              toast.success("Invite link copied");
+              qc.invalidateQueries({ queryKey: ["playlist", id] });
+            }
+          },
+          {
+            label: "Save snapshot",
+            icon: <Camera className="h-4 w-4" />,
+            hidden: !canEdit,
+            onSelect: async () => {
+              await api.post(`/api/v1/playlists/${id}/snapshots`);
+              toast.success("Snapshot saved");
+              qc.invalidateQueries({ queryKey: ["playlist-snaps", id] });
+              qc.invalidateQueries({ queryKey: ["playlist", id] });
+            }
+          },
+          "separator",
+          { label: "Delete playlist", icon: <Trash2 className="h-4 w-4" />, onSelect: () => setDel(true), destructive: true, hidden: !isOwner }
+        ]}
+      />
       {p.external && <UnmatchedPanel playlistId={id!} />}
       {p.external && <SyncDiffPanel playlistId={id!} />}
       {(snaps.data?.length || collabs.data?.length) ? (
         <div className="mb-6 grid gap-4 md:grid-cols-2">
           {!!snaps.data?.length && (
-            <section className="rounded-xl border border-border bg-surface-1 p-4">
+            <section className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
               <h2 className="mb-2 font-semibold">Snapshots</h2>
               <ul className="space-y-2 text-sm">
                 {snaps.data.map((s) => (
@@ -211,7 +205,7 @@ export function PlaylistPage() {
             </section>
           )}
           {!!collabs.data?.length && (
-            <section className="rounded-xl border border-border bg-surface-1 p-4">
+            <section className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
               <h2 className="mb-2 font-semibold">Collaborators</h2>
               <ul className="space-y-2 text-sm">
                 {collabs.data.map((c) => (
