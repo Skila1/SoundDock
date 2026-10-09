@@ -19,6 +19,7 @@ const AlbumPage = lazy(() => import("@/features/albums/AlbumPage").then((m) => (
 const TracksPage = lazy(() => import("@/features/tracks/TracksPage").then((m) => ({ default: m.TracksPage })));
 const PlaylistsPage = lazy(() => import("@/features/playlists/PlaylistsPage").then((m) => ({ default: m.PlaylistsPage })));
 const PlaylistPage = lazy(() => import("@/features/playlists/PlaylistPage").then((m) => ({ default: m.PlaylistPage })));
+const ProviderPlaylistPage = lazy(() => import("@/features/playlists/ProviderPlaylistPage").then((m) => ({ default: m.ProviderPlaylistPage })));
 const PlaylistInvitePage = lazy(() => import("@/features/playlists/PlaylistInvitePage").then((m) => ({ default: m.PlaylistInvitePage })));
 const RadioPage = lazy(() => import("@/features/playlists/RadioPage").then((m) => ({ default: m.RadioPage })));
 const RadioStationPage = lazy(() => import("@/features/playlists/RadioPage").then((m) => ({ default: m.RadioStationPage })));
@@ -139,6 +140,7 @@ export function AppRouter() {
           </Route>
           <Route path="/playlists" element={<PlaylistsPage />} />
           <Route path="/playlists/invite" element={<PlaylistInvitePage />} />
+          <Route path="/playlists/remote/:provider/:id" element={<ProviderPlaylistPage />} />
           <Route path="/playlists/:id" element={<PlaylistPage />} />
           <Route path="/radio" element={<RadioPage />} />
           <Route path="/radio/:kind/:seedId" element={<RadioStationPage />} />

@@ -67,7 +67,7 @@ export function MediaCard({
       onDrop={onDrop}
       className={cn("group block min-w-[148px] max-w-[180px]", className)}
     >
-      <div className="relative overflow-hidden rounded-lg bg-surface-2 shadow-card">
+      <div className="relative overflow-hidden rounded-xl bg-surface-2 shadow-card ring-1 ring-inset ring-border transition duration-200 group-hover:-translate-y-0.5 group-hover:shadow-[0_18px_40px_-18px_rgba(0,0,0,0.55)]">
         <div className="aspect-square">
           <Artwork src={src} id={id} name={title} kind={kind} />
         </div>
@@ -93,8 +93,8 @@ export function MediaCard({
           </Button>
         )}
       </div>
-      <div className="mt-2 truncate text-sm font-medium">{title}</div>
-      {subtitle && <div className="truncate text-xs text-muted">{subtitle}</div>}
+      <div className="mt-2.5 truncate text-sm font-semibold">{title}</div>
+      {subtitle && <div className="mt-0.5 truncate text-xs text-muted">{subtitle}</div>}
     </Link>
   );
 }

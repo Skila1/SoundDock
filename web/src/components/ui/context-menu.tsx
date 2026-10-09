@@ -9,7 +9,7 @@ export function ContextMenuContent({ className, onCloseAutoFocus, ...props }: Co
   return (
     <Ctx.Portal>
       <Ctx.Content
-        className={cn("z-50 min-w-48 rounded-lg border border-border bg-surface-1 p-1 shadow-card", className)}
+        className={cn("sd-menu z-[100] min-w-48 rounded-xl border border-border bg-surface-1 p-1 shadow-card", className)}
         onCloseAutoFocus={(e) => {
           e.preventDefault();
           onCloseAutoFocus?.(e);

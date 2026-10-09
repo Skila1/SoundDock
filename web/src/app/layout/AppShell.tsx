@@ -59,8 +59,10 @@ export function AppShell({ user }: { user: User }) {
         <Sidebar user={user} collapsible />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <TopBar user={user} title={title} />
-          <main className="min-h-0 flex-1 overflow-auto px-4 py-5 [overflow-anchor:none] md:px-8">
-            <Outlet />
+          <main className="min-h-0 flex-1 overflow-auto px-4 py-6 [overflow-anchor:none] md:px-8 md:py-8">
+            <div className="mx-auto w-full max-w-[1680px]">
+              <Outlet />
+            </div>
           </main>
         </div>
         {sideOpen && (

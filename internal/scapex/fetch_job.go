@@ -111,6 +111,10 @@ func (s *Service) RunFetchJob(ctx context.Context, opts FetchOpts) ([]uuid.UUID,
 			return fail(fmt.Errorf("not an allowlisted YouTube watch URL or video id"))
 		}
 		if s.dock.HasOriginal(ctx, lib, VideoID(src)) {
+			// Another track already holds this download. Point this job's intents
+			// at it; otherwise their empty stubs never get a file and the job
+			// fails with "produced no audio".
+			s.dock.relinkIntentsToOriginal(ctx, jobID, lib, VideoID(src))
 			continue
 		}
 		got, err := s.download(ctx, src, work, policy)

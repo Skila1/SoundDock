@@ -140,6 +140,7 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 		for i, tr := range tracks {
 			prog := (i * 90) / total
 			touchJob(ctx, pool, job.ID, prog)
+			jobCounts(ctx, pool, job.ID, map[string]any{"done": i, "total": len(tracks), "matched": matched, "unmatched": unmatched + amb})
 			if prog-lastProg >= 10 {
 				lastProg = prog
 				notifyJobProgress(ctx, pool, p.UserID, job.ID, prog)
@@ -240,6 +241,7 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 		if err := tx.Commit(ctx); err != nil {
 			return err
 		}
+		jobCounts(ctx, pool, job.ID, map[string]any{"done": len(tracks), "total": len(tracks), "matched": matched, "unmatched": unmatched + amb, "added": len(keepIDs), "playlist_id": sdID})
 		notifyJobProgress(ctx, pool, p.UserID, job.ID, 100)
 		notifyPlaylistInvalidate(ctx, pool, p.UserID, sdID)
 		if hooks != nil {
@@ -327,6 +329,12 @@ func touchJob(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, progress in
 		progress = 99
 	}
 	_, _ = pool.Exec(ctx, `UPDATE jobs SET locked_until=now()+interval '30 minutes', progress=$2, updated_at=now() WHERE id=$1`, id, progress)
+}
+
+// jobCounts records item counts on the job so the web UI can show "120 / 300
+// matched" instead of a bare percentage.
+func jobCounts(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, counts map[string]any) {
+	_, _ = pool.Exec(ctx, `UPDATE jobs SET result = coalesce(result,'{}'::jsonb) || $2::jsonb WHERE id=$1`, id, counts)
 }
 
 func notifyJobProgress(ctx context.Context, pool *pgxpool.Pool, userID, jobID uuid.UUID, progress int) {

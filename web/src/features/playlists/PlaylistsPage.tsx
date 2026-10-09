@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListMusic, Radio as RadioIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { hasPerm } from "@/lib/perms";
 import { MediaCard } from "@/components/media/MediaCard";
+import { TrackedJobs, useTrackedJobs } from "@/components/ui/job-progress";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input, Textarea } from "@/components/ui/input";
@@ -44,6 +45,8 @@ export function PlaylistsPage() {
   const [ymin, setYmin] = useState("");
   const [ymax, setYmax] = useState("");
   const [busyId, setBusyId] = useState("");
+  const trackJob = useTrackedJobs((s) => s.track);
+  const navigate = useNavigate();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
   const canImport = hasPerm(me.data, "playlists.write") || hasPerm(me.data, "playlists.external_import");
   const q = useQuery({ queryKey: ["playlists"], queryFn: () => api.get<PlaylistListItem[]>("/api/v1/playlists") });
@@ -106,7 +109,7 @@ export function PlaylistsPage() {
         description="Private collections you curate. Sharing stays off unless you mark a playlist public."
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => { location.href = "/radio"; }}><RadioIcon /> Radio</Button>
+            <Button variant="secondary" onClick={() => navigate("/radio")}><RadioIcon /> Radio</Button>
             <Button variant="secondary" onClick={quickMix}>Quick Mix</Button>
             {canImport && <Button variant="secondary" onClick={() => setImp(true)}>Import from URL</Button>}
             {canImport && providerOk && (
@@ -115,8 +118,10 @@ export function PlaylistsPage() {
                 onClick={async () => {
                   setBusyId("all");
                   try {
-                    const r = await api.post<{ count: number }>(`/api/v1/providers/${tab}/import-all`, { mode: "once" });
-                    toast.success(`Queued ${r.count} playlists. Matching your library first.`);
+                    const r = await api.post<{ count: number; job_ids?: string[] }>(`/api/v1/providers/${tab}/import-all`, { mode: "once" });
+                    const ids = r.job_ids || [];
+                    ids.forEach((jid, i) => trackJob(jid, `Importing playlist ${i + 1} of ${ids.length}`));
+                    toast.success(`Importing ${r.count} playlists. Matching your library first.`);
                     qc.invalidateQueries({ queryKey: ["playlists"] });
                   } catch (err: any) {
                     toast.error(err?.message || "Could not import Spotify playlists");
@@ -134,6 +139,7 @@ export function PlaylistsPage() {
           </div>
         }
       />
+      <TrackedJobs className="mb-5" />
       <div className="mb-5 flex flex-wrap gap-1">
         {tabs.map((t) => {
           const row = (providers.data || []).find((p) => p.provider === t.id);
@@ -176,10 +182,13 @@ export function PlaylistsPage() {
           <ul className="divide-y divide-border rounded-xl border border-border bg-surface-1">
             {(remote.data || []).map((pl) => (
               <li key={pl.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                <div className="min-w-0">
-                  <div className="truncate font-medium">{pl.name}</div>
+                <Link to={`/playlists/remote/${tab}/${encodeURIComponent(pl.id)}`} className="group flex min-w-0 flex-1 items-center gap-3">
+                  {pl.artwork ? <img src={pl.artwork} alt="" loading="lazy" className="h-11 w-11 shrink-0 rounded-md object-cover" /> : <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-surface-2"><ListMusic className="h-5 w-5 text-subtle" /></div>}
+                  <div className="min-w-0">
+                  <div className="truncate font-medium group-hover:underline">{pl.name}</div>
                   <div className="text-xs text-muted">{pl.track_count ?? 0} tracks{pl.owner ? ` · ${pl.owner}` : ""}</div>
-                </div>
+                  </div>
+                </Link>
                 <Button
                   size="sm"
                   variant="secondary"
@@ -187,8 +196,9 @@ export function PlaylistsPage() {
                   onClick={async () => {
                     setBusyId(pl.id);
                     try {
-                      await api.post(`/api/v1/providers/${tab}/playlists/${pl.id}/import`, { mode: "once", name: pl.name });
-                      toast.success("Import queued. Matching your library first.");
+                      const r = await api.post<{ job_id?: string }>(`/api/v1/providers/${tab}/playlists/${pl.id}/import`, { mode: "once", name: pl.name });
+                      if (r?.job_id) trackJob(r.job_id, `Importing ${pl.name}`);
+                      toast.success("Import started. Matching your library first.");
                       qc.invalidateQueries({ queryKey: ["playlists"] });
                     } catch (err: any) {
                       toast.error(err?.message || "Import failed");
@@ -296,7 +306,8 @@ export function PlaylistsPage() {
             className="space-y-3"
             onSubmit={async (e) => {
               e.preventDefault();
-              await api.post("/api/v1/providers/import-url", { url, mode, sync_interval: interval, removal_policy: "mirror" });
+              const r = await api.post<{ job_id?: string }>("/api/v1/providers/import-url", { url, mode, sync_interval: interval, removal_policy: "mirror" });
+              if (r?.job_id) trackJob(r.job_id, "Importing playlist from URL");
               toast.success("Import queued. Matching your library first.");
               setImp(false);
               setUrl("");

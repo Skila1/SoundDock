@@ -245,3 +245,25 @@ func (d *Dock) FinalizeDownload(src LocalTrack) (LocalTrack, error) {
 	}
 	return src, nil
 }
+
+// relinkIntentsToOriginal moves a job's intents for videoID off file-less
+// stubs and onto the library track that already has the original download.
+func (d *Dock) relinkIntentsToOriginal(ctx context.Context, jobID, lib uuid.UUID, videoID string) {
+	if d == nil || d.pool == nil || jobID == uuid.Nil || videoID == "" {
+		return
+	}
+	existing, ok, _ := d.findTrack(ctx, lib, videoID)
+	if !ok || existing == uuid.Nil {
+		return
+	}
+	intents, err := ListJobIntents(ctx, d.pool, jobID)
+	if err != nil {
+		return
+	}
+	for _, in := range intents {
+		if in.TrackID == existing || VideoID(in.SourceRef) != videoID {
+			continue
+		}
+		_, _ = d.pool.Exec(ctx, `UPDATE acquisition_intents SET track_id=$2 WHERE id=$1`, in.ID, existing)
+	}
+}

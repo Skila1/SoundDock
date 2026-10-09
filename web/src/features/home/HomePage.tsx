@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
 import { Disc3, Plus } from "lucide-react";
 import { api } from "@/lib/api";
-import { MediaCard } from "@/components/media/MediaCard";
+import { TrackCard } from "@/components/media/TrackActions";
 import { TrackList } from "@/components/media/TrackList";
 import { LayoutToggle } from "@/components/media/LayoutToggle";
 import { EmptyState, QueryError } from "@/components/ui/empty";
@@ -71,44 +71,61 @@ export function HomePage() {
   const playNext = (t: HomeTrack) => add([t.id], true).then(() => toast.success("Playing next"));
 
   return (
-    <div className="space-y-10">
-      <div className="flex items-center justify-end gap-2">
-        <Button size="sm" variant="secondary" onClick={() => nav("/playlists")}>
-          <Plus className="h-4 w-4" /> Create playlist
-        </Button>
-        <LayoutToggle />
+    <div className="space-y-12">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-sm font-medium text-accent">{greeting()}</p>
+          <h1 className="mt-1 text-[1.75rem] font-bold leading-tight tracking-tight md:text-[2rem]">Welcome back</h1>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="secondary" onClick={() => nav("/playlists")}>
+            <Plus className="h-4 w-4" /> Create playlist
+          </Button>
+          <LayoutToggle />
+        </div>
       </div>
       {!!mine.length && (
-        <section>
-          <div className="mb-6 flex min-w-0 items-baseline gap-3">
-            <h1 className="text-3xl font-semibold">Your library</h1>
-            <Link to="/me/library" className="text-sm text-muted hover:underline">See all</Link>
-          </div>
+        <Section title="Your library" to="/me/library">
           <TrackSection tracks={mine} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
-        </section>
+        </Section>
       )}
       {!!recent.length && (
-        <section>
-          <div className="mb-6 flex min-w-0 items-baseline gap-3">
-            <h1 className="text-3xl font-semibold">Recently played</h1>
-            <Link to="/history" className="text-sm text-muted hover:underline">See all</Link>
-          </div>
+        <Section title="Recently played" to="/history">
           <TrackSection tracks={recent} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
-        </section>
+        </Section>
       )}
       {!!added.length && (
-        <section>
-          <h2 className="mb-6 text-2xl font-semibold">Recently added</h2>
+        <Section title="Recently added" to="/library">
           <TrackSection tracks={added} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />
-        </section>
+        </Section>
       )}
       {!!played.length && (
-        <section>
-          <h2 className="mb-6 text-2xl font-semibold">Most played</h2>
+        <Section title="Most played" to="/stats">
           <TrackSection tracks={played} layout={layout} onPlay={play} onQueue={add} onNext={playNext} countLabel />
-        </section>
+        </Section>
       )}
     </div>
+  );
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  return h < 5 ? "Late night listening" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+}
+
+function Section({ title, to, children }: { title: string; to?: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <div className="mb-4 flex items-baseline justify-between gap-3">
+        <h2 className="text-xl font-bold tracking-tight">{title}</h2>
+        {to && (
+          <Link to={to} className="text-xs font-semibold uppercase tracking-wider text-subtle transition-colors hover:text-foreground">
+            See all
+          </Link>
+        )}
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -141,14 +158,10 @@ function TrackSection({
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-6 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7">
       {tracks.map((t, i) => (
-        <MediaCard
+        <TrackCard
           key={t.id}
-          className="max-w-none min-w-0 w-full"
-          to={t.album_id ? `/albums/${t.album_id}` : "/library"}
-          id={t.id}
-          title={t.title}
+          track={t}
           subtitle={countLabel && t.count ? `${t.count} plays` : t.artist || t.album || "Unknown artist"}
-          kind="track"
           onPlay={() => onPlay([ids[i]])}
         />
       ))}

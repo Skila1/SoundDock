@@ -91,7 +91,29 @@ body {
   background: var(--sd-bg);
   color: var(--sd-text);
   font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
+
+::selection {
+  background: color-mix(in srgb, var(--sd-accent) 30%, transparent);
+}
+
+h1, h2, h3 { letter-spacing: -0.015em; }
+
+/* Floating layers (dialogs, menus, selects) ease in instead of popping. */
+@keyframes sd-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sd-pop-in { from { opacity: 0; transform: translate(-50%, -48%) scale(0.98); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }
+@keyframes sd-menu-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+.sd-overlay[data-state="open"] { animation: sd-fade-in 160ms ease-out; }
+.sd-dialog[data-state="open"] { animation: sd-pop-in 180ms cubic-bezier(0.2, 0.9, 0.3, 1); }
+.sd-menu[data-state="open"] { animation: sd-menu-in 120ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .sd-overlay[data-state="open"], .sd-dialog[data-state="open"], .sd-menu[data-state="open"] { animation: none; }
+}
+
+.tabular { font-variant-numeric: tabular-nums; }
 
 .dark body {
   background:

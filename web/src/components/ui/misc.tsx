@@ -9,7 +9,7 @@ export function Badge({ className, tone = "neutral", children }: { className?: s
     danger: "bg-destructive/15 text-destructive",
     accent: "bg-accent/15 text-accent"
   };
-  return <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium", tones[tone], className)}>{children}</span>;
+  return <span className={cn("inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold leading-4", tones[tone], className)}>{children}</span>;
 }
 
 export function Progress({ value }: { value: number }) {
@@ -21,7 +21,7 @@ export function Progress({ value }: { value: number }) {
 }
 
 export function Skeleton({ className }: { className?: string }) {
-  return <div className={cn("animate-pulse rounded-md bg-surface-2", className)} />;
+  return <div className={cn("animate-pulse rounded-lg bg-surface-2/80", className)} />;
 }
 
 export function Separator({ className }: { className?: string }) {

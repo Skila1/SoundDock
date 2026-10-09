@@ -5,7 +5,7 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
-import { Badge } from "@/components/ui/misc";
+import { TaskProgress } from "@/components/ui/task-progress";
 import { EmptyState, PageHeader, QueryError } from "@/components/ui/empty";
 import { toast } from "sonner";
 import { hasPerm } from "@/lib/perms";
@@ -74,17 +74,24 @@ export function ImportPage() {
       </form>}
       <h2 className="mt-8 mb-3 font-semibold">Import jobs</h2>
       {!imports.length && <EmptyState icon={Globe} title="No import jobs yet." />}
-      <ul className="space-y-2">
-        {imports.map((j) => (
-          <li key={j.id} className="flex items-center justify-between rounded-lg border border-border bg-surface-1 px-4 py-3">
-            <div>
-              <div className="text-sm font-medium">{j.count > 1 ? `${j.count} URLs` : j.type}</div>
-              <div className="text-xs text-subtle">{j.last_error || (j.status === "completed" ? "Imported" : j.status === "running" && j.progress ? `${j.progress}%` : j.status || "Running")}</div>
-            </div>
-            <Badge tone={j.status === "failed" ? "danger" : j.status === "completed" ? "success" : "accent"}>{j.status}</Badge>
-          </li>
-        ))}
-      </ul>
+      <div className="space-y-2">
+        {imports.map((j) => {
+          const done = j.status === "completed";
+          const failed = j.status === "failed" || j.status === "dead";
+          return (
+            <TaskProgress
+              key={j.id}
+              task={{
+                label: j.count > 1 ? `Importing ${j.count} files` : "Importing 1 file",
+                done: done ? 100 : Number(j.progress) || 0,
+                total: 100,
+                status: failed ? "error" : done ? "done" : "running",
+                detail: failed ? j.last_error || "Import failed" : done ? "Imported" : j.status === "queued" ? "Waiting for a worker" : `${Number(j.progress) || 0}%`
+              }}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }

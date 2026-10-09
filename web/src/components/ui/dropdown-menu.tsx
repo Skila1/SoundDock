@@ -10,7 +10,7 @@ export function DropdownMenuContent({ className, onCloseAutoFocus, ...props }: C
     <Dropdown.Portal>
       <Dropdown.Content
         sideOffset={6}
-        className={cn("z-50 min-w-44 rounded-lg border border-border bg-surface-1 p-1 shadow-card", className)}
+        className={cn("sd-menu z-[100] min-w-44 rounded-xl border border-border bg-surface-1 p-1 shadow-card", className)}
         onCloseAutoFocus={(e) => {
           e.preventDefault();
           onCloseAutoFocus?.(e);

@@ -16,7 +16,7 @@ export function TopBar({ title, user }: { title?: string; user: User }) {
   const prefs = usePrefs();
   const ui = useUi();
   return (
-      <header className="sd-topbar sticky top-0 z-20 flex h-[calc(3.5rem+env(safe-area-inset-top))] shrink-0 items-center gap-2 border-b border-border bg-background pt-[env(safe-area-inset-top)] px-3 md:px-6">
+      <header className="sd-topbar sticky top-0 z-20 flex h-[calc(3.75rem+env(safe-area-inset-top))] shrink-0 items-center gap-1.5 border-b border-border bg-background/85 pt-[env(safe-area-inset-top)] px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-background/70 md:px-6">
       <PrefsSync />
       <Button size="icon" variant="ghost" className="md:hidden" onClick={() => ui.set({ mobileNav: true })} aria-label="Menu">
         <Menu />
@@ -27,8 +27,8 @@ export function TopBar({ title, user }: { title?: string; user: User }) {
       <Button size="icon" variant="ghost" className="hidden md:inline-flex" onClick={() => nav(1)} aria-label="Forward">
         <ArrowRight />
       </Button>
-      <div className="hidden min-w-0 max-w-[9rem] truncate text-sm font-medium text-muted md:block lg:max-w-xs">{title}</div>
-      <div className="min-w-0 flex-1">
+      <div className="hidden min-w-0 max-w-[9rem] truncate px-1 text-sm font-semibold md:block lg:max-w-xs">{title}</div>
+      <div className="mx-auto min-w-0 max-w-2xl flex-1">
         <CommandSearch />
       </div>
       <DropdownMenu>
@@ -66,7 +66,7 @@ export function TopBar({ title, user }: { title?: string; user: User }) {
       </Button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
-          <Button size="icon" variant="secondary" aria-label="Account">
+          <Button size="icon" variant="secondary" aria-label="Account" className="h-9 w-9 bg-accent/15 text-accent ring-accent/20 hover:bg-accent/25">
             {(user.display_name || user.username).slice(0, 1).toUpperCase()}
           </Button>
         </DropdownMenuTrigger>

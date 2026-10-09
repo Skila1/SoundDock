@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { LucideIcon } from "lucide-react";
+import { AlertTriangle, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "./button";
 
@@ -11,7 +11,10 @@ export function QueryError({
   onRetry?: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border px-6 py-16 text-center">
+    <div className="flex flex-col items-center justify-center rounded-2xl border border-border bg-surface-1/60 px-6 py-14 text-center">
+      <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-destructive/10 text-destructive">
+        <AlertTriangle className="h-5 w-5" />
+      </div>
       <h3 className="text-base font-semibold">Could not load this page.</h3>
       {message && <p className="mt-1 max-w-sm text-sm text-muted">{message}</p>}
       {onRetry && (
@@ -35,9 +38,9 @@ export function EmptyState({
   action?: { label: string; onClick: () => void };
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border px-6 py-16 text-center">
-      <div className="mb-4 rounded-full bg-surface-2 p-3">
-        <Icon className="h-6 w-6 text-muted" />
+    <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border bg-surface-1/40 px-6 py-16 text-center">
+      <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-accent/20 to-accent/5 ring-1 ring-inset ring-accent/20">
+        <Icon className="h-6 w-6 text-accent" />
       </div>
       <h3 className="text-base font-semibold">{title}</h3>
       {description && <p className="mt-1 max-w-sm text-sm text-muted">{description}</p>}
@@ -52,12 +55,12 @@ export function EmptyState({
 
 export function PageHeader({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
   return (
-    <div className={cn("mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between")}>
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight md:text-3xl">{title}</h1>
-        {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+    <div className={cn("mb-7 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between")}>
+      <div className="min-w-0">
+        <h1 className="text-[1.75rem] font-bold leading-tight tracking-tight md:text-[2rem]">{title}</h1>
+        {description && <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-muted">{description}</p>}
       </div>
-      {actions}
+      {actions && <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>}
     </div>
   );
 }

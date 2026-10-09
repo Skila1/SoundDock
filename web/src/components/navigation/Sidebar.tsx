@@ -43,13 +43,13 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
           </Tooltip>
         )}
       </div>
-      <nav className="flex-1 space-y-0.5 overflow-auto px-2 pt-2">
+      <nav className="flex-1 space-y-0.5 overflow-auto px-2.5 pt-3">
         {adminOpen ? (
           <>
             <NavLink
               to="/"
               title={compact ? "Back to app" : undefined}
-              className="flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground"
+              className="relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-2/70 hover:text-foreground"
             >
               <Home className="h-4 w-4 shrink-0" />
               {!compact && "Back to app"}
@@ -68,9 +68,9 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
                     aria-label={compact ? label : undefined}
                     className={({ isActive }) =>
                       cn(
-                        "flex items-center gap-3 rounded-lg px-3 py-1.5 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
+                        "relative flex items-center gap-3 rounded-lg px-3 py-1.5 text-sm text-muted transition-colors hover:bg-surface-2/70 hover:text-foreground",
                         compact && "justify-center px-0 py-2",
-                        isActive && "bg-surface-2 text-foreground"
+                        isActive && "bg-surface-2 text-foreground before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent [&>svg]:text-accent"
                       )
                     }
                   >
@@ -91,9 +91,9 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
                 title={compact ? it.label : undefined}
                 className={({ isActive }) =>
                   cn(
-                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
+                    "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-2/70 hover:text-foreground",
                     compact && "justify-center px-0",
-                    isActive && "bg-surface-2 text-foreground"
+                    isActive && "bg-surface-2 text-foreground before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent [&>svg]:text-accent"
                   )
                 }
               >
@@ -103,13 +103,13 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
             ))}
             {!compact && (
               <div className="pt-4">
-                <div className="px-3 pb-1 text-[11px] text-subtle">Listening</div>
+                <div className="px-3 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-subtle">Listening</div>
                 {listening.map((it) => (
                   <NavLink
                     key={it.to}
                     to={it.to}
                     className={({ isActive }) =>
-                      cn("block rounded-lg px-3 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-foreground", isActive && "bg-surface-2 text-foreground")
+                      cn("block rounded-lg px-3 py-1.5 text-xs text-muted hover:bg-surface-2 hover:text-foreground", isActive && "bg-surface-2 text-foreground before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent [&>svg]:text-accent")
                     }
                   >
                     {it.label}
@@ -123,9 +123,9 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
                 title={compact ? "Administration" : undefined}
                 className={({ isActive }) =>
                   cn(
-                    "flex items-center gap-3 rounded-lg px-3 py-2 text-sm text-muted hover:bg-surface-2 hover:text-foreground",
+                    "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-muted transition-colors hover:bg-surface-2/70 hover:text-foreground",
                     compact ? "justify-center px-0" : "mt-4",
-                    isActive && "bg-surface-2 text-foreground"
+                    isActive && "bg-surface-2 text-foreground before:absolute before:left-0 before:top-1/2 before:h-5 before:w-[3px] before:-translate-y-1/2 before:rounded-full before:bg-accent [&>svg]:text-accent"
                   )
                 }
               >
@@ -145,7 +145,7 @@ export function Sidebar({ user, collapsed, className, collapsible = false }: { u
           </Tooltip>
         </div>
       )}
-      <NavLink to="/profile" className={cn("m-3 flex items-center gap-3 rounded-lg bg-surface-2 px-3 py-2", compact && "justify-center px-2")}>
+      <NavLink to="/profile" className={cn("m-3 flex items-center gap-3 rounded-xl bg-surface-2/70 px-3 py-2 ring-1 ring-inset ring-border transition hover:bg-surface-2", compact && "justify-center px-2")}>
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/20 text-xs font-bold text-accent">
           {(user.display_name || user.username).slice(0, 1).toUpperCase()}
         </div>
