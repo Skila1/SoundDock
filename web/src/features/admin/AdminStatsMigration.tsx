@@ -7,7 +7,7 @@ import { StatsRebuildPanel } from "./StatsRebuild";
 export function AdminStatsMigration() {
   return (
     <div>
-      <PageHeader title="Stats migration" description="A one-time step that moves Home, Stats, and Wrapped onto the new listening data." />
+      <PageHeader title="Stats migration" description="A one-time step that moves Home and Stats onto the new listening data." />
       <AdminTabs
         fallback="rebuild"
         tabs={[

@@ -71,7 +71,7 @@ export function StatsRebuildPanel() {
           Cutover
         </div>
         <p className="text-muted">
-          New listening data is recorded in a more detailed format in the background. Home, Stats, and Wrapped keep using the
+          New listening data is recorded in a more detailed format in the background. Home and Stats keep using the
           older history until this one-time rebuild finishes and switches them over. Let the rebuild finish once it starts.
         </p>
         <p className="mt-2 text-muted">
@@ -97,7 +97,7 @@ export function StatsRebuildPanel() {
             <dd className="font-medium">{mode}</dd>
           </div>
           <div className="flex items-start justify-between gap-4">
-            <dt className="text-muted">Home, Stats, and Wrapped read from</dt>
+            <dt className="text-muted">Home and Stats read from</dt>
             <dd className="font-medium">{onEvents ? "New listening data" : "Older history"}</dd>
           </div>
         </dl>

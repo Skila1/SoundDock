@@ -134,7 +134,7 @@ func (s *Service) Select(ctx context.Context, req Request) (Result, error) {
 		}
 		ids, err = s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
-			WHERE t.library_id=$1 AND t.library_id = ANY($2)
+			WHERE t.library_id=$1 AND t.library_id = ANY($2) AND t.archived_at IS NULL
 			ORDER BY random() LIMIT $3`, req.SeedID, libs, limit)
 	case "artist":
 		if req.SeedID == uuid.Nil {
@@ -162,7 +162,7 @@ func (s *Service) Select(ctx context.Context, req Request) (Result, error) {
 		d = DecadeStart(d)
 		ids, err = s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
-			WHERE t.library_id = ANY($1) AND t.year >= $2 AND t.year < $3
+			WHERE t.library_id = ANY($1) AND t.archived_at IS NULL AND t.year >= $2 AND t.year < $3
 			ORDER BY random() LIMIT $4`, libs, d, d+10, limit)
 	case "quick_mix":
 		ids, err = s.quickMix(ctx, req.UserID, libs, limit)
@@ -179,7 +179,7 @@ func (s *Service) artistRadio(ctx context.Context, artistID uuid.UUID, libs []uu
 	ids, err := s.queryIDs(ctx, `
 		SELECT t.id FROM tracks t
 		JOIN track_artists ta ON ta.track_id=t.id
-		WHERE ta.artist_id=$1 AND t.library_id = ANY($2)
+		WHERE ta.artist_id=$1 AND t.library_id = ANY($2) AND t.archived_at IS NULL
 		ORDER BY random() LIMIT $3`, artistID, libs, limit)
 	if err != nil || len(ids) >= limit {
 		return ids, err
@@ -187,7 +187,7 @@ func (s *Service) artistRadio(ctx context.Context, artistID uuid.UUID, libs []uu
 	more, err := s.queryIDs(ctx, `
 		SELECT t.id FROM tracks t
 		JOIN track_genres tg ON tg.track_id=t.id
-		WHERE t.library_id = ANY($1)
+		WHERE t.library_id = ANY($1) AND t.archived_at IS NULL
 		  AND tg.genre_id IN (
 			SELECT tg2.genre_id FROM track_genres tg2
 			JOIN track_artists ta ON ta.track_id=tg2.track_id
@@ -204,7 +204,7 @@ func (s *Service) artistRadio(ctx context.Context, artistID uuid.UUID, libs []uu
 func (s *Service) albumRadio(ctx context.Context, albumID uuid.UUID, libs []uuid.UUID, limit int) ([]uuid.UUID, error) {
 	ids, err := s.queryIDs(ctx, `
 		SELECT t.id FROM tracks t
-		WHERE t.album_id=$1 AND t.library_id = ANY($2)
+		WHERE t.album_id=$1 AND t.library_id = ANY($2) AND t.archived_at IS NULL
 		ORDER BY t.disc_number, t.track_number, random() LIMIT $3`, albumID, libs, limit)
 	if err != nil || len(ids) >= limit {
 		return ids, err
@@ -212,7 +212,7 @@ func (s *Service) albumRadio(ctx context.Context, albumID uuid.UUID, libs []uuid
 	more, err := s.queryIDs(ctx, `
 		SELECT t.id FROM tracks t
 		JOIN track_artists ta ON ta.track_id=t.id
-		WHERE t.library_id = ANY($1)
+		WHERE t.library_id = ANY($1) AND t.archived_at IS NULL
 		  AND ta.artist_id IN (SELECT artist_id FROM album_artists WHERE album_id=$2)
 		  AND t.id <> ALL($3)
 		ORDER BY random() LIMIT $4`, libs, albumID, idsOrDummy(ids), limit-len(ids))
@@ -328,7 +328,7 @@ func (s *Service) similarFromSeed(ctx context.Context, trackID uuid.UUID, libs [
 			SELECT t.id FROM tracks t
 			JOIN track_artists ta ON ta.track_id=t.id
 			WHERE ta.artist_id = ANY($1) AND ta.role='primary'
-			  AND t.library_id = ANY($2) AND t.id <> ALL($3)
+			  AND t.library_id = ANY($2) AND t.archived_at IS NULL AND t.id <> ALL($3)
 			ORDER BY random() LIMIT $4`, artistIDs, libs, blocked, limit)
 		if err != nil {
 			return nil, err
@@ -339,7 +339,7 @@ func (s *Service) similarFromSeed(ctx context.Context, trackID uuid.UUID, libs [
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
 			JOIN track_genres tg ON tg.track_id=t.id
-			WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
+			WHERE t.library_id = ANY($1) AND t.archived_at IS NULL AND t.id <> ALL($2)
 			  AND tg.genre_id = ANY($3)
 			GROUP BY t.id
 			ORDER BY COUNT(*) DESC, random()
@@ -352,7 +352,7 @@ func (s *Service) similarFromSeed(ctx context.Context, trackID uuid.UUID, libs [
 	if len(ids) < limit && meta.AlbumID != nil && *meta.AlbumID != uuid.Nil {
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
-			WHERE t.album_id=$1 AND t.library_id = ANY($2) AND t.id <> ALL($3)
+			WHERE t.album_id=$1 AND t.library_id = ANY($2) AND t.archived_at IS NULL AND t.id <> ALL($3)
 			ORDER BY t.disc_number, t.track_number, random()
 			LIMIT $4`, *meta.AlbumID, libs, idsOrDummy(append(blocked, ids...)), limit-len(ids))
 		if err != nil {
@@ -565,7 +565,7 @@ func (s *Service) genreRadio(ctx context.Context, seed uuid.UUID, name string, l
 		ids, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
 			JOIN track_genres tg ON tg.track_id=t.id
-			WHERE tg.genre_id=$1 AND t.library_id = ANY($2)
+			WHERE tg.genre_id=$1 AND t.library_id = ANY($2) AND t.archived_at IS NULL
 			ORDER BY random() LIMIT $3`, seed, libs, limit)
 		if err != nil || len(ids) > 0 {
 			return ids, err
@@ -577,7 +577,7 @@ func (s *Service) genreRadio(ctx context.Context, seed uuid.UUID, name string, l
 	}
 	return s.queryIDs(ctx, `
 		SELECT t.id FROM tracks t
-		WHERE t.library_id = ANY($1)
+		WHERE t.library_id = ANY($1) AND t.archived_at IS NULL
 		  AND (t.genre_text ILIKE $2 OR EXISTS (
 			SELECT 1 FROM track_genres tg JOIN genres g ON g.id=tg.genre_id
 			WHERE tg.track_id=t.id AND g.name ILIKE $2
@@ -591,7 +591,7 @@ func (s *Service) quickMix(ctx context.Context, userID uuid.UUID, libs []uuid.UU
 		fav, err := s.queryIDs(ctx, `
 			SELECT t.id FROM favourites f
 			JOIN tracks t ON t.id=f.entity_id
-			WHERE f.user_id=$1 AND f.entity_type='track' AND t.library_id = ANY($2)
+			WHERE f.user_id=$1 AND f.entity_type='track' AND t.library_id = ANY($2) AND t.archived_at IS NULL
 			ORDER BY random() LIMIT $3`, userID, libs, limit)
 		if err != nil {
 			return nil, err
@@ -601,7 +601,7 @@ func (s *Service) quickMix(ctx context.Context, userID uuid.UUID, libs []uuid.UU
 			played, err := s.queryIDs(ctx, `
 				SELECT t.id FROM play_counts pc
 				JOIN tracks t ON t.id=pc.track_id
-				WHERE pc.user_id=$1 AND t.library_id = ANY($2) AND t.id <> ALL($3)
+				WHERE pc.user_id=$1 AND t.library_id = ANY($2) AND t.archived_at IS NULL AND t.id <> ALL($3)
 				ORDER BY pc.count DESC, random() LIMIT $4`, userID, libs, idsOrDummy(ids), limit-len(ids))
 			if err != nil {
 				return ids, err
@@ -612,7 +612,7 @@ func (s *Service) quickMix(ctx context.Context, userID uuid.UUID, libs []uuid.UU
 	if len(ids) < limit {
 		recent, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
-			WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
+			WHERE t.library_id = ANY($1) AND t.archived_at IS NULL AND t.id <> ALL($2)
 			ORDER BY t.created_at DESC, random() LIMIT $3`, libs, idsOrDummy(ids), limit-len(ids))
 		if err != nil {
 			return ids, err
@@ -622,7 +622,7 @@ func (s *Service) quickMix(ctx context.Context, userID uuid.UUID, libs []uuid.UU
 	if len(ids) < limit {
 		more, err := s.queryIDs(ctx, `
 			SELECT t.id FROM tracks t
-			WHERE t.library_id = ANY($1) AND t.id <> ALL($2)
+			WHERE t.library_id = ANY($1) AND t.archived_at IS NULL AND t.id <> ALL($2)
 			ORDER BY random() LIMIT $3`, libs, idsOrDummy(ids), limit-len(ids))
 		if err != nil {
 			return ids, err
@@ -644,7 +644,7 @@ func (s *Service) Seeds(ctx context.Context, libs []uuid.UUID) (map[string]any, 
 	libraries := scanPairs(libRows)
 	gRows, err := s.pool.Query(ctx, `
 		SELECT g.id::text, g.name FROM genres g
-		WHERE EXISTS (SELECT 1 FROM track_genres tg JOIN tracks t ON t.id=tg.track_id WHERE tg.genre_id=g.id AND t.library_id = ANY($1))
+		WHERE EXISTS (SELECT 1 FROM track_genres tg JOIN tracks t ON t.id=tg.track_id WHERE tg.genre_id=g.id AND t.library_id = ANY($1) AND t.archived_at IS NULL)
 		UNION
 		SELECT '', genre_text FROM tracks WHERE library_id = ANY($1) AND genre_text<>''
 		ORDER BY 2`, libs)

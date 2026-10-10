@@ -609,6 +609,10 @@ func (s *Server) postPartyVote(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if err := s.Play.PartyAllowed(r.Context(), sid, u.ID, "vote"); errors.Is(err, playback.ErrPartyForbidden) {
+		partyErr(w, err)
+		return
+	}
 	if err := s.Play.Vote(r.Context(), sid, u.ID, body.TrackID); err != nil {
 		writeErr(w, 403, "party", err.Error())
 		return
@@ -930,6 +934,11 @@ func (s *Server) resolvePlayTracks(ctx context.Context, refs []string) ([]uuid.U
 			}
 			out = append(out, ids...)
 		}
+	}
+	if len(youtube) > 0 {
+		var reused []uuid.UUID
+		youtube, reused = s.reuseLibraryCopies(ctx, youtube)
+		out = append(out, reused...)
 	}
 	if len(youtube) == 0 {
 		return out, nil

@@ -65,7 +65,7 @@ export function TrackPage() {
 
   const toggleFav = async () => {
     await api.post("/api/v1/favourites", { type: "track", id: t.id, on: !fav });
-    qc.invalidateQueries({ queryKey: ["favourites"] });
+    qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "favourites" || q.queryKey[0] === "home" });
     qc.invalidateQueries({ queryKey: ["track-meta", id] });
     toast.success(fav ? "Removed from favourites" : "Favourited");
   };

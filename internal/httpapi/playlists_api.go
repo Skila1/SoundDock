@@ -180,7 +180,7 @@ func (s *Server) getPlaylist(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	rows, _ := s.Pool.Query(r.Context(), `SELECT e.id, e.position, t.id, t.title FROM playlist_entries e JOIN tracks t ON t.id=e.track_id WHERE e.playlist_id=$1 ORDER BY e.position`, id)
+	rows, _ := s.Pool.Query(r.Context(), `SELECT e.id, e.position, t.id, t.title FROM playlist_entries e JOIN tracks t ON t.id=e.track_id WHERE e.playlist_id=$1 AND t.archived_at IS NULL ORDER BY e.position`, id)
 	defer rows.Close()
 	tracks := scanMaps(rows, "entry_id", "position", "track_id", "title")
 	out := map[string]any{

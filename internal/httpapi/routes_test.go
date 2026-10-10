@@ -65,7 +65,6 @@ func TestWave1RoutesRegistered(t *testing.T) {
 		"GET /api/v1/me/history",
 		"GET /api/v1/me/never-played",
 		"GET /api/v1/me/stats",
-		"GET /api/v1/me/wrapped",
 		"GET /api/v1/tracks/{id}/waveform",
 		"GET /api/v1/tracks/{id}/playability",
 		"GET /api/v1/tracks/{id}/lyrics",

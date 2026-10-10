@@ -47,7 +47,7 @@ export function AlbumPage() {
 
   const toggleFav = async () => {
     await api.post("/api/v1/favourites", { type: "album", id: a.id, on: !fav });
-    qc.invalidateQueries({ queryKey: ["favourites"] });
+    qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "favourites" || q.queryKey[0] === "home" });
     toast.success(fav ? "Removed from favourites" : "Favourited");
   };
 

@@ -28,7 +28,6 @@ const HistoryPage = lazy(() => import("@/features/history/HistoryPage").then((m)
 const NeverPlayedPage = lazy(() => import("@/features/history/NeverPlayedPage").then((m) => ({ default: m.NeverPlayedPage })));
 const RediscoveryPage = lazy(() => import("@/features/history/RediscoveryPage").then((m) => ({ default: m.RediscoveryPage })));
 const StatsPage = lazy(() => import("@/features/stats/StatsPage").then((m) => ({ default: m.StatsPage })));
-const WrappedPage = lazy(() => import("@/features/wrapped/WrappedPage").then((m) => ({ default: m.WrappedPage })));
 const DevicesPage = lazy(() => import("@/features/devices/DevicesPage").then((m) => ({ default: m.DevicesPage })));
 const AdminLayout = lazy(() => import("@/features/admin/AdminLayout").then((m) => ({ default: m.AdminLayout })));
 const AdminDashboard = lazy(() => import("@/features/admin/AdminDashboard").then((m) => ({ default: m.AdminDashboard })));
@@ -42,6 +41,7 @@ const AdminDiscord = lazy(() => import("@/features/admin/AdminDiscord").then((m)
 const AdminLibraries = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminLibraries })));
 const AdminCatalog = lazy(() => import("@/features/admin/AdminCatalog").then((m) => ({ default: m.AdminCatalog })));
 const AdminMediaSettings = lazy(() => import("@/features/admin/AdminMediaSettings").then((m) => ({ default: m.AdminMediaSettings })));
+const AdminArchive = lazy(() => import("@/features/admin/AdminArchive").then((m) => ({ default: m.AdminArchive })));
 const AdminRetention = lazy(() => import("@/features/admin/AdminRetention").then((m) => ({ default: m.AdminRetention })));
 const AdminStatsMigration = lazy(() => import("@/features/admin/AdminStatsMigration").then((m) => ({ default: m.AdminStatsMigration })));
 const PartyPage = lazy(() => import("@/features/devices/PartyPage").then((m) => ({ default: m.PartyPage })));
@@ -149,7 +149,7 @@ export function AppRouter() {
           <Route path="/history/never-played" element={<NeverPlayedPage />} />
           <Route path="/history/rediscovery" element={<RediscoveryPage />} />
           <Route path="/stats" element={<StatsPage />} />
-          <Route path="/wrapped" element={<WrappedPage />} />
+          <Route path="/wrapped" element={<Navigate to="/stats" replace />} />
           <Route path="/settings/connected" element={<ConnectedServicesPage />} />
           <Route path="/profile" element={<ProfilePage user={user} onRefresh={() => me.refetch()} />} />
           <Route path="/profile/devices" element={<DevicesPage />} />
@@ -169,6 +169,7 @@ export function AppRouter() {
             <Route path="catalog" element={<AdminCatalog />} />
             <Route path="media-settings" element={<AdminMediaSettings />} />
             <Route path="retention" element={<AdminRetention />} />
+            <Route path="archive" element={<AdminArchive />} />
             <Route path="stats-migration" element={<AdminStatsMigration />} />
             {Object.entries(legacyAdminRedirects).map(([from, to]) => (
               <Route key={from} path={from} element={<Navigate to={to} replace />} />

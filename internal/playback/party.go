@@ -26,6 +26,10 @@ type PartyState struct {
 	ExpiresAt  *time.Time       `json:"expires_at"`
 	Members    []map[string]any `json:"members"`
 	Votes      []map[string]any `json:"votes"`
+	// Permissions are what guests may do; DJs and the host may do everything.
+	Permissions PartyPermissions `json:"permissions"`
+	// Current is the song playing on the host's session.
+	Current map[string]any `json:"current,omitempty"`
 }
 
 func (e *Engine) GetParty(ctx context.Context, sid uuid.UUID) (PartyState, error) {
@@ -49,18 +53,31 @@ func (e *Engine) GetParty(ctx context.Context, sid uuid.UUID) (PartyState, error
 	st.Enabled = true
 	st.HostUserID = host
 	st.ExpiresAt = exp
-	mrows, err := e.pool.Query(ctx, `SELECT user_id, role FROM party_members WHERE session_id=$1 ORDER BY joined_at`, sid)
+	st.Permissions = e.partyPermissions(ctx, sid)
+	var curID *uuid.UUID
+	var curTitle, curArtist, status string
+	if err := e.pool.QueryRow(ctx, `
+		SELECT s.current_track_id, coalesce(t.title,''), coalesce((SELECT string_agg(ar.name, ', ' ORDER BY ta.position)
+		  FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id WHERE ta.track_id=t.id AND ta.role='primary'),''), s.status
+		FROM playback_sessions s LEFT JOIN tracks t ON t.id=s.current_track_id
+		WHERE s.id=$1`, sid).Scan(&curID, &curTitle, &curArtist, &status); err == nil && curID != nil {
+		st.Current = map[string]any{"track_id": *curID, "title": curTitle, "artist": curArtist, "status": status}
+	}
+	mrows, err := e.pool.Query(ctx, `
+		SELECT m.user_id, m.role, coalesce(nullif(u.display_name,''), u.username, '')
+		FROM party_members m LEFT JOIN users u ON u.id=m.user_id
+		WHERE m.session_id=$1 ORDER BY m.joined_at`, sid)
 	if err != nil {
 		return st, err
 	}
 	defer mrows.Close()
 	for mrows.Next() {
 		var uid uuid.UUID
-		var role string
-		if err := mrows.Scan(&uid, &role); err != nil {
+		var role, name string
+		if err := mrows.Scan(&uid, &role, &name); err != nil {
 			return st, err
 		}
-		st.Members = append(st.Members, map[string]any{"user_id": uid, "role": role})
+		st.Members = append(st.Members, map[string]any{"user_id": uid, "role": role, "name": name})
 	}
 	vrows, err := e.pool.Query(ctx, `SELECT user_id, track_id, created_at FROM party_votes WHERE session_id=$1 ORDER BY created_at`, sid)
 	if err != nil {
@@ -179,7 +196,7 @@ func (e *Engine) JoinParty(ctx context.Context, sid, actor uuid.UUID) error {
 	}
 	_, err := e.pool.Exec(ctx, `
 		INSERT INTO party_members (session_id, user_id, role) VALUES ($1,$2,$3)
-		ON CONFLICT (session_id, user_id) DO UPDATE SET role=EXCLUDED.role`, sid, actor, role)
+		ON CONFLICT (session_id, user_id) DO UPDATE SET role=CASE WHEN EXCLUDED.role='host' THEN 'host' ELSE party_members.role END`, sid, actor, role)
 	return err
 }
 

@@ -200,17 +200,29 @@ export function PlaylistsPage() {
           <ul className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface-1">
             {(remote.data || []).map((pl) => (
               <li key={pl.id} className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-surface-2/60">
-                <Link to={`/playlists/remote/${tab}/${encodeURIComponent(pl.id)}`} className="group flex min-w-0 flex-1 items-center gap-3">
+                <Link
+                  to={pl.readable === false ? "#" : `/playlists/remote/${tab}/${encodeURIComponent(pl.id)}`}
+                  onClick={(e) => {
+                    if (pl.readable === false) {
+                      e.preventDefault();
+                      toast.message("Spotify only shares songs from playlists you own or collaborate on. Copy this one into your own Spotify playlist to open it here.");
+                    }
+                  }}
+                  className={`group flex min-w-0 flex-1 items-center gap-3 ${pl.readable === false ? "opacity-60" : ""}`}
+                >
                   {pl.artwork ? <img src={pl.artwork} alt="" loading="lazy" className="h-11 w-11 shrink-0 rounded-md object-cover" /> : <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-surface-2"><ListMusic className="h-5 w-5 text-subtle" /></div>}
                   <div className="min-w-0">
                   <div className="truncate font-medium group-hover:underline">{pl.name}</div>
-                  <div className="text-xs text-muted">{pl.track_count ?? 0} tracks{pl.owner ? ` · ${pl.owner}` : ""}</div>
+                  <div className="flex items-center gap-1.5 text-xs text-muted">
+                    {pl.track_count ?? 0} tracks{pl.owner ? ` · ${pl.owner}` : ""}
+                    {pl.readable === false && <Badge>Followed · can&apos;t open</Badge>}
+                  </div>
                   </div>
                 </Link>
                 <Button
                   size="sm"
                   variant="secondary"
-                  disabled={busyId === pl.id}
+                  disabled={busyId === pl.id || pl.readable === false}
                   onClick={async () => {
                     setBusyId(pl.id);
                     try {

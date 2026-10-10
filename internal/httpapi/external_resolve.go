@@ -178,3 +178,35 @@ func (s *Server) myJob(w http.ResponseWriter, r *http.Request) {
 		"error": lastErr, "result": json.RawMessage(result),
 	})
 }
+
+// myUIPrefs returns the caller's saved UI preferences (layouts, sorts,
+// collapsed sections) so they follow the account across devices.
+func (s *Server) myUIPrefs(w http.ResponseWriter, r *http.Request) {
+	var raw []byte
+	err := s.Pool.QueryRow(r.Context(), `SELECT prefs FROM user_ui_prefs WHERE user_id=$1`, currentUser(r).ID).Scan(&raw)
+	if err != nil || len(raw) == 0 {
+		raw = []byte("{}")
+	}
+	writeJSON(w, 200, json.RawMessage(raw))
+}
+
+func (s *Server) putMyUIPrefs(w http.ResponseWriter, r *http.Request) {
+	var body map[string]any
+	if err := decodeJSON(r, &body); err != nil {
+		writeErr(w, 400, "invalid", err.Error())
+		return
+	}
+	b, err := json.Marshal(body)
+	if err != nil || len(b) > 64<<10 {
+		writeErr(w, 400, "invalid", "preferences too large")
+		return
+	}
+	_, err = s.Pool.Exec(r.Context(), `
+		INSERT INTO user_ui_prefs (user_id, prefs, updated_at) VALUES ($1, $2::jsonb, now())
+		ON CONFLICT (user_id) DO UPDATE SET prefs=EXCLUDED.prefs, updated_at=now()`, currentUser(r).ID, b)
+	if err != nil {
+		writeErr(w, 500, "db", err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}

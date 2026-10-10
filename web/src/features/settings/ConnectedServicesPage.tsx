@@ -77,20 +77,20 @@ export function ConnectedServicesPage() {
   const presence = !!sc.data?.presence_enabled;
 
   return (
-    <div className="max-w-2xl">
+    <div className="max-w-6xl">
       <PageHeader
         title="Connected Services"
         description="Connect accounts your administrator has configured. Spotify can import playlists into SoundDock. YouTube, SoundCloud, and Apple Music import playlist metadata; they are not a substitute for those catalogues."
       />
       <SettingsTabs />
       {q.isError && <QueryError message={q.error instanceof Error ? q.error.message : undefined} onRetry={() => q.refetch()} />}
-      <div className="space-y-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {(q.data || []).map((p) => (
-          <article key={p.provider} className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
-            <div className="flex items-start justify-between gap-3">
+          <article key={p.provider} className="flex h-full flex-col rounded-2xl border border-border bg-surface-1 p-5 shadow-sm transition-colors hover:border-accent/30">
+            <div className="flex flex-1 flex-col items-start gap-4">
               <div>
-                <div className="flex items-center gap-2">
-                  <Link2 className="h-4 w-4 text-accent" />
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent"><Link2 className="h-4 w-4" /></span>
                   <h2 className="text-base font-semibold tracking-tight">{labels[p.provider] || p.provider}</h2>
                   {p.status === "needs_reconnect" ? <Badge tone="warning">Needs reconnect</Badge> : p.connected ? <Badge tone="success">Connected</Badge> : <Badge>Not connected</Badge>}
                 </div>
@@ -99,7 +99,7 @@ export function ConnectedServicesPage() {
                 {p.scopes?.length ? <p className="text-xs text-subtle">{p.scopes.join(", ")}</p> : null}
                 {p.last_error ? <p className="text-xs text-destructive">{p.last_error}</p> : null}
               </div>
-              <div className="flex gap-2">
+              <div className="mt-auto flex flex-wrap gap-2 self-stretch border-t border-border/60 pt-4">
                 {p.provider === "apple_music" && p.enabled && p.users_may_connect && p.configured && canConnect && !p.connected && null}
                 {p.enabled && p.users_may_connect && p.configured && canConnect && p.provider !== "apple_music" && (
                   <Button
@@ -164,11 +164,11 @@ export function ConnectedServicesPage() {
           </article>
         ))}
 
-        <article className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
+        <article className="flex h-full flex-col rounded-2xl border border-border bg-surface-1 p-5 shadow-sm transition-colors hover:border-accent/30">
+          <div className="flex flex-1 flex-col items-start gap-4">
             <div>
-              <div className="flex items-center gap-2">
-                <Radio className="h-4 w-4 text-accent" />
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent"><Radio className="h-4 w-4" /></span>
                 <h2 className="text-base font-semibold tracking-tight">Last.fm</h2>
                 {sc.data?.lastfm_connected ? <Badge tone="success">Connected</Badge> : <Badge>Not connected</Badge>}
               </div>
@@ -224,11 +224,11 @@ export function ConnectedServicesPage() {
           )}
         </article>
 
-        <article className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
+        <article className="flex h-full flex-col rounded-2xl border border-border bg-surface-1 p-5 shadow-sm transition-colors hover:border-accent/30">
+          <div className="flex flex-1 flex-col items-start gap-4">
             <div>
-              <div className="flex items-center gap-2">
-                <Radio className="h-4 w-4 text-accent" />
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent"><Radio className="h-4 w-4" /></span>
                 <h2 className="text-base font-semibold tracking-tight">ListenBrainz</h2>
                 {sc.data?.listenbrainz_connected ? <Badge tone="success">Connected</Badge> : <Badge>Not connected</Badge>}
               </div>
@@ -284,11 +284,11 @@ export function ConnectedServicesPage() {
           )}
         </article>
 
-        <article className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
+        <article className="flex h-full flex-col rounded-2xl border border-border bg-surface-1 p-5 shadow-sm transition-colors hover:border-accent/30">
+          <div className="flex flex-1 flex-col items-start gap-4">
             <div>
-              <div className="flex items-center gap-2">
-                <Radio className="h-4 w-4 text-accent" />
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-accent/10 text-accent"><Radio className="h-4 w-4" /></span>
                 <h2 className="text-base font-semibold tracking-tight">Discord Rich Presence</h2>
                 {presence ? <Badge tone="success">On</Badge> : <Badge>Off</Badge>}
               </div>

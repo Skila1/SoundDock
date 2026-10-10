@@ -119,7 +119,7 @@ func buildSmartSQL(owner uuid.UUID, libs []uuid.UUID, rules Rules) (string, []an
 		parts = append(parts, frag)
 		args = append(args, extra...)
 	}
-	where := "t.library_id = ANY($1)"
+	where := "t.library_id = ANY($1) AND t.archived_at IS NULL"
 	if len(parts) > 0 {
 		join := " AND "
 		if strings.EqualFold(rules.Match, "any") {

@@ -270,7 +270,7 @@ export function QueuePanel({
     }
     const on = !favSet.has(t.id);
     await api.post("/api/v1/favourites", { type: "track", id: t.id, on });
-    qc.invalidateQueries({ queryKey: ["favourites"] });
+    qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "favourites" || q.queryKey[0] === "home" });
     toast.success(on ? "Favourited" : "Removed from favourites");
   };
 

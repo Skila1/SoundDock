@@ -24,7 +24,7 @@ func explainJobError(jobType, raw string) string {
 		return "The connected account token expired or was revoked. Reconnect the provider in Connected Services and try again."
 	case code == 403 || strings.Contains(low, "forbidden"):
 		if strings.Contains(jobType, "playlist") || strings.Contains(low, "spotify") || strings.Contains(low, "playlist") {
-			return "Spotify refused access to this playlist. Reconnect Spotify in Connected Services, or the playlist may be private, collaborative, or region-locked."
+			return "Spotify refused access to this playlist. Spotify only lets SoundDock read playlists you own or collaborate on, so followed playlists and Spotify-made mixes such as Discover Weekly cannot be opened. Copy it into a playlist you own in Spotify and open that one, or reconnect Spotify if this is your own playlist."
 		}
 		return "The remote service refused this request. Reconnect the account or check provider settings."
 	case code == 404:

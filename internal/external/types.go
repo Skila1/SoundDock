@@ -40,6 +40,9 @@ type Playlist struct {
 	Snapshot    string    `json:"snapshot"`
 	Modified    time.Time `json:"modified,omitempty"`
 	Public      bool      `json:"public"`
+	// Readable is false when the provider will refuse this playlist's songs
+	// (Spotify: followed playlists the user neither owns nor collaborates on).
+	Readable *bool `json:"readable,omitempty"`
 }
 
 type Token struct {

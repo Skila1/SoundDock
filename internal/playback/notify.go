@@ -122,7 +122,7 @@ var playlistKeys = []string{"playlists", "playlist"}
 // or nil when the job does not touch data users browse.
 func JobInvalidateKeys(jobType string) []string {
 	switch jobType {
-	case "ingest.url", "ingest.zip", "library.scan", "library.delete", "library.merge", "library.migrate",
+	case "maintenance.archive", "ingest.url", "ingest.zip", "library.scan", "library.delete", "library.merge", "library.migrate",
 		"library.cleanup_files", "metadata.refresh", "tracks.metadata", "tracks.bulk_delete", "scapex.fetch":
 		return catalogKeys
 	case "external.playlist.import", "smart_playlist.refresh":

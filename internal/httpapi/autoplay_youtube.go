@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"github.com/sounddock/sounddock/internal/auth"
 	"strings"
 
 	"github.com/google/uuid"
@@ -130,4 +131,37 @@ func artistDisplay(a string) string {
 		a = strings.TrimSpace(strings.TrimSuffix(a, "VEVO"))
 	}
 	return a
+}
+
+// reuseLibraryCopies swaps YouTube refs for songs the library already has
+// (the same song from a different upload, or an archived copy), so they are
+// not downloaded again. Only confident matches are reused; the rest are
+// returned for download.
+func (s *Server) reuseLibraryCopies(ctx context.Context, refs []string) (remaining []string, reused []uuid.UUID) {
+	u, _ := ctx.Value(userKey).(*auth.User)
+	if u == nil || s.Pool == nil {
+		return refs, nil
+	}
+	libs := s.libraryIDs(ctx, u)
+	if len(libs) == 0 {
+		return refs, nil
+	}
+	for _, ref := range refs {
+		h := hintForRef(ctx, ref)
+		title, artist := strings.TrimSpace(h.Title), strings.TrimSpace(h.Artist)
+		if i := strings.Index(title, " - "); i > 0 && (artist == "" || strings.EqualFold(artistDisplay(artist), strings.TrimSpace(title[:i]))) {
+			artist, title = strings.TrimSpace(title[:i]), strings.TrimSpace(title[i+3:])
+		}
+		if title == "" || artist == "" {
+			remaining = append(remaining, ref)
+			continue
+		}
+		m := matcher.Match(ctx, s.Pool, libs, matcher.Query{Title: title, Artists: []string{artistDisplay(artist)}, DurationMS: h.DurationMS})
+		if m.TrackID != nil && (m.Status == "exact" || m.Status == "high") {
+			reused = append(reused, *m.TrackID)
+			continue
+		}
+		remaining = append(remaining, ref)
+	}
+	return remaining, reused
 }

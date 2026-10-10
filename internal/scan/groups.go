@@ -1,6 +1,9 @@
 package scan
 
 import (
+	"regexp"
+
+	"github.com/sounddock/sounddock/internal/matcher"
 	"sort"
 	"strconv"
 	"strings"
@@ -48,8 +51,39 @@ func NormalizeBlockingPart(s string) string {
 }
 
 // ArtistTitleBlockingKey is the scan blocking key: normalised artist + title.
+// It strips what makes the same song look different across sources, mostly
+// YouTube: "Artist - Topic" / "ArtistVEVO" channels, "Artist - Title" uploads,
+// bracketed tags such as "(Official Video)" and "feat." credits. Groups are
+// only offered for review, and durations still have to agree.
 func ArtistTitleBlockingKey(artist, title string) string {
-	return NormalizeBlockingPart(artist) + "\t" + NormalizeBlockingPart(title)
+	a := primaryArtist(artist)
+	t := title
+	if i := strings.Index(t, " - "); i > 0 {
+		if left := primaryArtist(t[:i]); left != "" && (left == a || a == "") {
+			t = t[i+3:]
+			if a == "" {
+				a = left
+			}
+		}
+	}
+	if nt := matcher.NormaliseTitle(t); nt != "" {
+		t = nt
+	}
+	return a + "\t" + NormalizeBlockingPart(t)
+}
+
+var artistSplitRe = regexp.MustCompile(`(?i)\s*(,|&|\band\b|\bfeat\.?|\bft\.?|\bfeaturing\b|\bx\b|\bvs\.?)\s*`)
+
+// primaryArtist normalises the lead artist and drops YouTube channel suffixes.
+func primaryArtist(s string) string {
+	low := strings.ToLower(strings.TrimSpace(s))
+	low = strings.TrimSuffix(low, " - topic")
+	low = strings.TrimSuffix(low, "vevo")
+	low = strings.TrimSuffix(low, " official")
+	if parts := artistSplitRe.Split(low, 2); len(parts) > 0 {
+		low = parts[0]
+	}
+	return NormalizeBlockingPart(low)
 }
 
 func skipArtistTitleBlock(artist, title string) bool {

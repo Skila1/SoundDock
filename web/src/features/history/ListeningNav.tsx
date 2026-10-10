@@ -5,8 +5,7 @@ const items = [
   { to: "/history", label: "Recently played", end: true },
   { to: "/history/never-played", label: "Never played" },
   { to: "/history/rediscovery", label: "Rediscovery" },
-  { to: "/stats", label: "Stats" },
-  { to: "/wrapped", label: "Wrapped" }
+  { to: "/stats", label: "Stats" }
 ];
 
 export function ListeningNav() {

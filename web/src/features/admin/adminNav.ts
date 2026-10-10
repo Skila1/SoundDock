@@ -1,5 +1,6 @@
 import {
   Activity,
+  Archive,
   ArchiveRestore,
   Disc3,
   HardDrive,
@@ -56,7 +57,8 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
       { to: "libraries", label: "Libraries & Storage", icon: HardDrive },
       { to: "catalog", label: "Catalog", icon: Disc3 },
       { to: "media-settings", label: "Media Settings", icon: SlidersHorizontal },
-      { to: "retention", label: "Retention", icon: Timer }
+      { to: "retention", label: "Retention", icon: Timer },
+      { to: "archive", label: "Archive", icon: Archive }
     ]
   }
 ];

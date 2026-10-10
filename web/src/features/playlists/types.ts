@@ -60,6 +60,8 @@ export type ProviderPlaylist = {
   owner?: string;
   track_count?: number;
   artwork?: string;
+  /** false when the provider refuses this playlist's songs (followed, not owned). */
+  readable?: boolean;
 };
 
 export type SmartRules = {

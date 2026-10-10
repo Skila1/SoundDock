@@ -299,6 +299,7 @@ func (e *Engine) Replace(ctx context.Context, sid uuid.UUID, tracks []uuid.UUID,
 	m := e.lock(sid.String())
 	m.Lock()
 	defer m.Unlock()
+	e.unarchive(ctx, tracks)
 	tx, err := e.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -363,6 +364,7 @@ func (e *Engine) AddLocked(ctx context.Context, sid uuid.UUID, tracks []uuid.UUI
 	if e == nil || len(tracks) == 0 {
 		return nil
 	}
+	e.unarchive(ctx, tracks)
 	tx, err := e.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -441,4 +443,14 @@ func ReplayGainMultiplier(mode string, trackGain, albumGain *float64, targetLUFS
 		// keep as stored gain
 	}
 	return math.Pow(10, db/20)
+}
+
+// unarchive returns archived songs to listings when someone plays or queues
+// them again (a search hit, a playlist, autoplay or Discord /play), so the
+// existing copy is reused instead of downloading the song again.
+func (e *Engine) unarchive(ctx context.Context, tracks []uuid.UUID) {
+	if e == nil || e.pool == nil || len(tracks) == 0 {
+		return
+	}
+	_, _ = e.pool.Exec(ctx, `UPDATE tracks SET archived_at=NULL WHERE id = ANY($1) AND archived_at IS NOT NULL`, tracks)
 }

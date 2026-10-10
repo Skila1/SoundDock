@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.4
+
+- A redesigned interface: a new player bar and full-screen Now Playing, grouped sidebar, shared headers for albums, artists, playlists and songs, song tables with a playing indicator, and a cleaner Home.
+- Home starts with your Favourites. Favourite songs from any right-click menu, the player bar or Now Playing. Home sections can be collapsed, and Home, library views and sorting are remembered for your account on every device.
+- Songs nobody has played for two weeks are archived: hidden from lists, never deleted. Searching for and playing one brings it back everywhere it was, without downloading it again. Admins manage this under Administration, Archive.
+- Duplicate detection now recognises the same song across YouTube uploads, and playing a YouTube result reuses a copy you already have instead of downloading it again.
+- Party hosts choose what guests can do (add songs, skip, pause, vote), can make members DJs or remove them, and can share an invite link.
+- Spotify playlists you follow but don't own are labelled, with a clear explanation, since Spotify only shares songs from playlists you own or collaborate on.
+- Open Spotify playlists inside SoundDock to play, queue or save their songs, with progress shown for imports.
+- Stats lists follow the list or grid layout, no longer track the playing song live, and now include top genres, most skipped and your busiest day. Wrapped has been folded into Stats.
+- Connected Services is laid out as a grid.
+- Skipping to the same song queued twice now restarts it, in the browser and on Discord.
+- Autoplay plays songs similar to what's playing instead of searching YouTube by name.
+
 ## 0.1.3
 
 - The original SoundDock logo is back in the sidebar, sign-in screens, favicon and app icons.

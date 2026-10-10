@@ -135,6 +135,7 @@ var typePools = map[string]ID{
 	"lyrics.fetch":             PoolMaintenance,
 	"scan.duplicates":          PoolMaintenance,
 	"maintenance.retention":    PoolMaintenance,
+	"maintenance.archive":      PoolMaintenance,
 	"maintenance.gc-cache":     PoolMaintenance,
 	"backup.run":               PoolMaintenance,
 	"app.update.apply":         PoolMaintenance,

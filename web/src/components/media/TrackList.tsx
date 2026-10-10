@@ -97,7 +97,8 @@ export function TrackList({
   onFav,
   showAlbum = true,
   currentId,
-  onSelectionChange
+  onSelectionChange,
+  live = true
 }: {
   tracks: TrackChrome[];
   onPlay: (index: number) => void;
@@ -107,11 +108,13 @@ export function TrackList({
   showAlbum?: boolean;
   currentId?: string;
   onSelectionChange?: (ids: string[]) => void;
+  /** Follow the player to highlight the playing row. Off for static reports. */
+  live?: boolean;
 }) {
   const parent = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
-  const playingId = usePlayer((s) => s.current?.id);
-  const isPlaying = usePlayer((s) => s.playing);
+  const playingId = usePlayer((s) => (live ? s.current?.id : undefined));
+  const isPlaying = usePlayer((s) => (live ? s.playing : false));
   const activeId = currentId ?? playingId;
   const qc = useQueryClient();
   const virtual = tracks.length > 80;
@@ -197,7 +200,7 @@ export function TrackList({
     }
     const on = !favSet.has(t.id);
     await api.post("/api/v1/favourites", { type: "track", id: t.id, on });
-    qc.invalidateQueries({ queryKey: ["favourites"] });
+    qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "favourites" || q.queryKey[0] === "home" });
     toast.success(on ? "Favourited" : "Removed from favourites");
   };
 

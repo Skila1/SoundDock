@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/sounddock/sounddock/internal/archive"
 	"log/slog"
 	"net/http"
 	"os"
@@ -201,6 +202,7 @@ func main() {
 	runner.Register("fingerprint.generate", fingerprint.New(pool, srv.ProviderFor).Handler())
 	runner.Register("integrity.scan", integrity.New(pool, srv.ProviderFor).Handler())
 	runner.Register("radio.refresh", radio.RefreshHandler(pool))
+	runner.Register(archive.JobType, archive.Handler(pool))
 	runner.Register("smart_playlist.refresh", radio.SmartRefreshHandler(pool))
 	srv.RegisterJobs()
 
@@ -225,6 +227,9 @@ func main() {
 					_, _ = runner.Enqueue(ctx, "external.playlist.tick", map[string]any{})
 					_, _ = retention.EnqueueUnlessBusy(ctx, pool, runner.Enqueue, retention.Payload{Scheduled: true})
 					update.Tick(ctx, pool)
+					if archive.Due(ctx, pool) {
+						_, _ = runner.Enqueue(ctx, archive.JobType, map[string]any{})
+					}
 					if bk.ShouldRunScheduled(ctx) {
 						_, _ = runner.Enqueue(ctx, "backup.run", map[string]any{"scheduled": true})
 					}

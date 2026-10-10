@@ -52,7 +52,31 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		"recently_added": s.homeRecentlyAdded(r, u),
 		"most_played":    s.homeMostPlayed(r, u),
 		"my_library":     s.homeMyLibrary(r, u),
+		"favourites":     s.homeFavourites(r, u),
 	})
+}
+
+// homeFavourites lists the user's favourite songs, newest first.
+func (s *Server) homeFavourites(r *http.Request, u *auth.User) []map[string]any {
+	rows, err := s.Pool.Query(r.Context(), `
+		SELECT t.id, t.title, t.duration_ms, t.album_id, coalesce(al.title,'') AS album, `+listenArtistSQL+` AS artist
+		FROM favourites f
+		JOIN tracks t ON t.id = f.entity_id
+		LEFT JOIN albums al ON al.id = t.album_id
+		WHERE f.user_id=$1 AND f.entity_type='track'
+		  AND t.library_id = ANY($2)
+		  AND `+trackPlayablePred+`
+		ORDER BY f.created_at DESC
+		LIMIT 30`, u.ID, s.libraryIDs(r.Context(), u))
+	if err != nil {
+		return []map[string]any{}
+	}
+	defer rows.Close()
+	out := scanMaps(rows, "id", "title", "duration_ms", "album_id", "album", "artist")
+	if out == nil {
+		out = []map[string]any{}
+	}
+	return out
 }
 
 func homeRecentlyAddedSQL() string {

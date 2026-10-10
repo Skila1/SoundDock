@@ -181,7 +181,7 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"query": q, "results": out})
 }
 
-const trackPlayablePred = `NOT (
+const trackPlayablePred = `t.archived_at IS NULL AND NOT (
 		    coalesce(t.acquisition,'') IN ('youtube','scapex')
 		    AND NOT EXISTS (
 		      SELECT 1 FROM track_files tf
@@ -714,7 +714,7 @@ func (s *Server) getAlbum(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	libs := s.libraryIDs(r.Context(), currentUser(r))
-	rows, _ := s.Pool.Query(r.Context(), `SELECT id, title, disc_number, track_number, duration_ms FROM tracks WHERE album_id=$1 AND library_id = ANY($2) ORDER BY disc_number, track_number`, id, libs)
+	rows, _ := s.Pool.Query(r.Context(), `SELECT id, title, disc_number, track_number, duration_ms FROM tracks WHERE album_id=$1 AND library_id = ANY($2) AND archived_at IS NULL ORDER BY disc_number, track_number`, id, libs)
 	defer rows.Close()
 	tracks := scanMaps(rows, "id", "title", "disc_number", "track_number", "duration_ms")
 	discsMap := map[int][]map[string]any{}
@@ -820,7 +820,7 @@ func (s *Server) getArtist(w http.ResponseWriter, r *http.Request) {
 		SELECT t.id, t.title, t.duration_ms, coalesce(al.title,'')
 		FROM tracks t JOIN track_artists ta ON ta.track_id=t.id
 		LEFT JOIN albums al ON al.id=t.album_id
-		WHERE ta.artist_id=$1 AND t.library_id = ANY($2)
+		WHERE ta.artist_id=$1 AND t.library_id = ANY($2) AND t.archived_at IS NULL
 		  AND NOT (
 		    coalesce(t.acquisition,'') IN ('youtube','scapex')
 		    AND NOT EXISTS (

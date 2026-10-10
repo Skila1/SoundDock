@@ -14,7 +14,7 @@ import { activeLyricIndex, hasPlainBody, karaokeLines, lyricsQueryKey } from "@/
 import { usePlayer } from "@/stores/player";
 import { useUi } from "@/stores/ui";
 import { api } from "@/lib/api";
-import { toast } from "sonner";
+import { useFavouriteTrack } from "@/lib/favourites";
 import type { TrackLyrics } from "@/types/api";
 
 export { activeLyricIndex };
@@ -29,6 +29,7 @@ export function NowPlaying() {
   const ui = useUi();
   const p = usePlayer();
   const t = p.current;
+  const fav = useFavouriteTrack(t?.id);
   const [scrub, setScrub] = useState<number | null>(null);
   const pos = scrub ?? Math.min(p.position, p.duration || p.position || 0);
   const progress = p.duration ? Math.min(100, Math.max(0, (pos / p.duration) * 100)) : 0;
@@ -117,13 +118,8 @@ export function NowPlaying() {
                   <p className="truncate text-base text-muted">{artist}</p>
                 </div>
                 {t && (
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label="Favourite"
-                    onClick={() => api.post("/api/v1/favourites", { type: "track", id: t.id, on: true }).then(() => toast.success("Favourited"))}
-                  >
-                    <Heart className="!size-5" />
+                  <Button size="icon" variant="ghost" aria-label="Favourite" aria-pressed={fav.fav} className={fav.fav ? "text-accent" : ""} onClick={() => void fav.toggle()}>
+                    <Heart className={`!size-5 ${fav.fav ? "fill-current" : ""}`} />
                   </Button>
                 )}
               </div>

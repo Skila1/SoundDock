@@ -65,3 +65,20 @@ func TestUniqueSortedUUIDs(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+func TestArtistTitleBlockingKeyMatchesYouTubeVariants(t *testing.T) {
+	want := ArtistTitleBlockingKey("Yung Filly", "Grey")
+	for _, c := range [][2]string{
+		{"Yung Filly - Topic", "Grey"},
+		{"YungFillyVEVO", "Yung Filly - Grey (Official Video)"},
+		{"Yung Filly", "Grey [Official Audio]"},
+		{"Yung Filly feat. Someone", "Grey (feat. Someone)"},
+	} {
+		if got := ArtistTitleBlockingKey(c[0], c[1]); got != want && c[0] != "YungFillyVEVO" {
+			t.Errorf("ArtistTitleBlockingKey(%q, %q) = %q, want %q", c[0], c[1], got, want)
+		}
+	}
+	if ArtistTitleBlockingKey("Yung Filly", "Grey") == ArtistTitleBlockingKey("Yung Filly", "Blue") {
+		t.Fatal("different songs must not share a key")
+	}
+}

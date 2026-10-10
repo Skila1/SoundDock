@@ -23,6 +23,10 @@ func listPlaylists(ctx context.Context, provider string, tok *accessToken, extra
 	case "spotify":
 		next := spotifyAPIBase + "/me/playlists?limit=50"
 		out := []Playlist{}
+		var me struct {
+			ID string `json:"id"`
+		}
+		_ = httpJSONAuth(ctx, "GET", spotifyAPIBase+"/me", tok, nil, &me)
 		for next != "" {
 			var raw struct {
 				Next  string
@@ -31,10 +35,12 @@ func listPlaylists(ctx context.Context, provider string, tok *accessToken, extra
 					SnapshotID            string `json:"snapshot_id"`
 					Images                []struct{ URL string }
 					Owner                 struct {
+						ID          string `json:"id"`
 						DisplayName string `json:"display_name"`
 					}
-					Tracks json.RawMessage `json:"tracks"`
-					Items  json.RawMessage `json:"items"`
+					Collaborative bool            `json:"collaborative"`
+					Tracks        json.RawMessage `json:"tracks"`
+					Items         json.RawMessage `json:"items"`
 				}
 			}
 			if err := httpJSONAuth(ctx, "GET", next, tok, nil, &raw); err != nil {
@@ -47,6 +53,10 @@ func listPlaylists(ctx context.Context, provider string, tok *accessToken, extra
 				}
 				if len(it.Images) > 0 {
 					p.Artwork = it.Images[0].URL
+				}
+				if me.ID != "" {
+					readable := it.Owner.ID == me.ID || it.Collaborative
+					p.Readable = &readable
 				}
 				out = append(out, p)
 			}

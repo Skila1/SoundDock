@@ -44,24 +44,8 @@ export type StatsResponse = {
   top_tracks: ListenTrack[];
   top_artists: RankedArtist[];
   top_albums: RankedAlbum[];
-  by_bucket: TrendBucket[];
-};
-
-export type WrappedResponse = {
-  year: number;
-  month: number;
-  from: string;
-  to: string;
-  sources: string[];
-  include_import: boolean;
-  totals: ListenTotals;
-  imported: ImportedTotals;
-  top_tracks: ListenTrack[];
-  top_artists: RankedArtist[];
-  top_albums: RankedAlbum[];
-  top_genres: RankedGenre[];
-  most_skipped: ListenTrack[];
-  first_listen?: ListenTrack | null;
+  top_genres?: RankedGenre[];
+  most_skipped?: ListenTrack[];
   peak_day?: { day: string; plays: number; minutes: number } | null;
   by_bucket: TrendBucket[];
 };

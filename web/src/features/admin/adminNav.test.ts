@@ -11,7 +11,7 @@ describe("admin navigation", () => {
       ["Overview", ["Dashboard", "Activity"]],
       ["Server", ["Backups", "Updates", "Integrations"]],
       ["People", ["Users", "Groups", "Discord"]],
-      ["Media", ["Libraries & Storage", "Catalog", "Media Settings", "Retention"]]
+      ["Media", ["Libraries & Storage", "Catalog", "Media Settings", "Retention", "Archive"]]
     ]);
   });
 

@@ -27,9 +27,8 @@ import { VolumeControl } from "@/components/player/VolumeControl";
 import { cn, formatDuration, artworkUrl } from "@/lib/utils";
 import { usePlayer } from "@/stores/player";
 import { useUi } from "@/stores/ui";
-import { api } from "@/lib/api";
+import { useFavouriteTrack } from "@/lib/favourites";
 import { discordOptionVisible, discordReady } from "@/lib/device";
-import { toast } from "sonner";
 
 function nextRepeat(mode: string) {
   if (mode === "off") return "queue";
@@ -72,6 +71,7 @@ export function PlayerBar() {
   const p = usePlayer();
   const ui = useUi();
   const t = p.current;
+  const fav = useFavouriteTrack(t?.id);
   const [scrub, setScrub] = useState<number | null>(null);
   const pos = scrub ?? Math.min(p.position, p.duration || p.position || 0);
 
@@ -131,17 +131,16 @@ export function PlayerBar() {
           <div className="truncate text-xs text-muted">{t?.artists?.map((a) => a.name).join(", ") || t?.artist || ""}</div>
         </div>
         {t && !tiny && (
-          <Tooltip label="Favourite">
+          <Tooltip label={fav.fav ? "Remove from favourites" : "Favourite"}>
             <Button
               size="icon"
               variant="ghost"
-              className="hidden h-8 w-8 shrink-0 md:inline-flex"
+              className={cn("hidden h-8 w-8 shrink-0 md:inline-flex", fav.fav && "text-accent")}
               aria-label="Favourite"
-              onClick={() => {
-                api.post("/api/v1/favourites", { type: "track", id: t.id, on: true }).then(() => toast.success("Added to favourites"));
-              }}
+              aria-pressed={fav.fav}
+              onClick={() => void fav.toggle()}
             >
-              <Heart className="h-4 w-4" />
+              <Heart className={cn("h-4 w-4", fav.fav && "fill-current")} />
             </Button>
           </Tooltip>
         )}

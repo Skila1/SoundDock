@@ -83,26 +83,6 @@ func parsePeriod(r *http.Request) (name string, from, to time.Time) {
 	return name, from, to
 }
 
-func parseWrappedWindow(r *http.Request) (year int, month int, from, to time.Time) {
-	now := time.Now().UTC()
-	year = now.Year()
-	if y, err := strconv.Atoi(r.URL.Query().Get("year")); err == nil && y >= 2000 && y <= 2100 {
-		year = y
-	}
-	month = 0
-	if m, err := strconv.Atoi(r.URL.Query().Get("month")); err == nil && m >= 1 && m <= 12 {
-		month = m
-	}
-	if month > 0 {
-		from = time.Date(year, time.Month(month), 1, 0, 0, 0, 0, time.UTC)
-		to = from.AddDate(0, 1, 0)
-		return year, month, from, to
-	}
-	from = time.Date(year, 1, 1, 0, 0, 0, 0, time.UTC)
-	to = from.AddDate(1, 0, 0)
-	return year, 0, from, to
-}
-
 type listenTotals struct {
 	Plays            int64  `json:"plays"`
 	UniqueTracks     int64  `json:"unique_tracks"`
@@ -365,38 +345,6 @@ func listenTrendSQL(events bool) string {
 		ORDER BY 1`
 }
 
-func listenUniqueArtistsSQL(events bool) string {
-	r := listenReadFor(events)
-	return `SELECT count(DISTINCT ta.artist_id)
-		FROM ` + r.table + ` h
-		JOIN track_artists ta ON ta.track_id = h.track_id AND ta.role = 'primary'
-		WHERE h.user_id=$1 AND h.source = ANY($2)` + r.qualPred + `
-			AND h.` + r.timeCol + ` >= $3 AND h.` + r.timeCol + ` < $4`
-}
-
-func listenUniqueAlbumsSQL(events bool) string {
-	r := listenReadFor(events)
-	return `SELECT count(DISTINCT t.album_id)
-		FROM ` + r.table + ` h
-		JOIN tracks t ON t.id = h.track_id
-		WHERE h.user_id=$1 AND h.source = ANY($2)` + r.qualPred + `
-			AND h.` + r.timeCol + ` >= $3 AND h.` + r.timeCol + ` < $4
-			AND t.album_id IS NOT NULL`
-}
-
-func listenWrappedSkipsSQL(events bool) string {
-	r := listenReadFor(events)
-	return `SELECT coalesce(sum(pc.skip_count), 0)
-		FROM play_counts pc
-		WHERE pc.user_id=$1 AND pc.skip_count > 0
-			AND EXISTS (
-				SELECT 1 FROM ` + r.table + ` h
-				WHERE h.user_id=$1 AND h.track_id=pc.track_id
-					AND h.source = ANY($2)` + r.qualPred + `
-					AND h.` + r.timeCol + ` >= $3 AND h.` + r.timeCol + ` < $4
-			)`
-}
-
 func recapReaderSQLs(events bool) []string {
 	return []string{
 		homeContinueSQL(events),
@@ -412,9 +360,6 @@ func recapReaderSQLs(events bool) []string {
 		listenFirstSQL(events),
 		listenPeakDaySQL(events),
 		listenTrendSQL(events),
-		listenUniqueArtistsSQL(events),
-		listenUniqueAlbumsSQL(events),
-		listenWrappedSkipsSQL(events),
 	}
 }
 
@@ -515,67 +460,13 @@ func (s *Server) listeningStats(w http.ResponseWriter, r *http.Request) {
 		"imported": listenTotalsJSON(imported, map[string]any{
 			"labelled": true,
 		}),
-		"top_tracks":  topTracks,
-		"top_artists": topArtists,
-		"top_albums":  topAlbums,
-		"by_bucket":   trend,
-	})
-}
-
-func (s *Server) wrapped(w http.ResponseWriter, r *http.Request) {
-	u := currentUser(r)
-	year, month, from, to := parseWrappedWindow(r)
-	mixImport := includeImport(r)
-	sources := append([]string{}, localListenSources...)
-	if mixImport {
-		sources = append(sources, "import")
-	}
-	events := s.listenReaderEvents(r.Context())
-	totals, err := queryListenTotals(r.Context(), s.Pool, u.ID, sources, from, to, events)
-	if err != nil {
-		writeErr(w, 500, "db", err.Error())
-		return
-	}
-	imported, err := queryListenTotals(r.Context(), s.Pool, u.ID, []string{"import"}, from, to, events)
-	if err != nil {
-		writeErr(w, 500, "db", err.Error())
-		return
-	}
-
-	var uniqueArtists, uniqueAlbums int64
-	_ = s.Pool.QueryRow(r.Context(), listenUniqueArtistsSQL(events), u.ID, sources, from, to).Scan(&uniqueArtists)
-	_ = s.Pool.QueryRow(r.Context(), listenUniqueAlbumsSQL(events), u.ID, sources, from, to).Scan(&uniqueAlbums)
-
-	var skips int64
-	_ = s.Pool.QueryRow(r.Context(), listenWrappedSkipsSQL(events), u.ID, sources, from, to).Scan(&skips)
-
-	bucket := "month"
-	if month > 0 {
-		bucket = "day"
-	}
-	writeJSON(w, 200, map[string]any{
-		"year":           year,
-		"month":          month,
-		"from":           from,
-		"to":             to,
-		"sources":        sources,
-		"include_import": mixImport,
-		"totals": listenTotalsJSON(totals, map[string]any{
-			"unique_artists": uniqueArtists,
-			"unique_albums":  uniqueAlbums,
-			"skips":          skips,
-		}),
-		"imported": listenTotalsJSON(imported, map[string]any{
-			"labelled": true,
-		}),
-		"top_tracks":   s.listenTopTracks(r.Context(), u.ID, sources, from, to, 10, events),
-		"top_artists":  s.listenTopArtists(r.Context(), u.ID, sources, from, to, 10, events),
-		"top_albums":   s.listenTopAlbums(r.Context(), u.ID, sources, from, to, 10, events),
+		"top_tracks":   topTracks,
+		"top_artists":  topArtists,
+		"top_albums":   topAlbums,
 		"top_genres":   s.listenTopGenres(r.Context(), u.ID, sources, from, to, 8, events),
 		"most_skipped": s.listenMostSkipped(r.Context(), u.ID, sources, from, to, 10, events),
-		"first_listen": s.listenFirst(r.Context(), u.ID, sources, from, to, events),
 		"peak_day":     s.listenPeakDay(r.Context(), u.ID, sources, from, to, events),
-		"by_bucket":    s.listenTrend(r.Context(), u.ID, sources, from, to, bucket, events),
+		"by_bucket":    trend,
 	})
 }
 
@@ -622,19 +513,6 @@ func (s *Server) listenMostSkipped(ctx context.Context, userID uuid.UUID, source
 	}
 	defer rows.Close()
 	return scanMaps(rows, "id", "title", "duration_ms", "album_id", "album", "artist", "skip_count")
-}
-
-func (s *Server) listenFirst(ctx context.Context, userID uuid.UUID, sources []string, from, to time.Time, events bool) map[string]any {
-	rows, err := s.Pool.Query(ctx, listenFirstSQL(events), userID, sources, from, to)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	out := scanMaps(rows, "track_id", "played_at", "source", "id", "title", "duration_ms", "album_id", "album", "artist")
-	if len(out) == 0 {
-		return nil
-	}
-	return out[0]
 }
 
 func (s *Server) listenPeakDay(ctx context.Context, userID uuid.UUID, sources []string, from, to time.Time, events bool) map[string]any {

@@ -176,7 +176,7 @@ export function TrackMenuItems({
     }
     try {
       await api.post("/api/v1/favourites", { type: "track", id: track.id, on: !fav });
-      void qc.invalidateQueries({ queryKey: ["favourites"] });
+      void qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "favourites" || q.queryKey[0] === "home" });
       toast.success(fav ? "Removed from favourites" : "Favourited");
     } catch {
       toast.error("Could not update favourites");

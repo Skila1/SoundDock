@@ -34,7 +34,6 @@ const titles: Record<string, string> = {
   "/profile": "Profile",
   "/history": "History",
   "/stats": "Stats",
-  "/wrapped": "Wrapped",
   "/settings/connected": "Connected Services",
   "/admin": "Administration"
 };
