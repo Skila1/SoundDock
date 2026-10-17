@@ -23,7 +23,16 @@ import { useUi } from "@/stores/ui";
 import { usePrefs } from "@/stores/prefs";
 import { createCommandClient, newCommandId } from "@/stores/commandClient";
 import { useArtworkVersion } from "@/stores/artwork";
-import { attachMediaRemote, bindMediaSession, claimPlaybackSession, updateMediaPosition } from "@/stores/mediaSession";
+import {
+  attachMediaRemote,
+  bindMediaSession,
+  claimPlaybackSession,
+  clearMediaSession,
+  mediaKeyAction,
+  runRemote,
+  updateMediaPosition,
+  type MediaRemoteHandlers
+} from "@/stores/mediaSession";
 import { interpolatePosition, parseTimeMs, sampleClock, type ClockSample } from "@/stores/playhead";
 import {
   applyBindResult,
@@ -461,6 +470,11 @@ function markProgress(id: string, pos: number, dur: number) {
 
 function publishMediaPosition() {
   const s = usePlayer.getState();
+  // Media keys and the OS overlay are for browser playback only, not Discord.
+  if (usingDiscord() || (!s.current && !session.queue?.current_track_id)) {
+    clearMediaSession();
+    return;
+  }
   updateMediaPosition({
     duration: s.duration,
     playbackRate: s.playbackRate,
@@ -1639,6 +1653,39 @@ function onEnded(el: HTMLAudioElement) {
   beginNext(true, looksGapless(currentMeta, nextMeta), (s.queue?.crossfade_seconds || 0) * 1000);
 }
 
+// Hardware media keys, OS media overlays, headsets and lock screens all land
+// here and use the same controls as the player bar. They only drive browser
+// playback; while output is Discord they do nothing.
+const browserOnly =
+  <A extends unknown[]>(fn: (...args: A) => void) =>
+  (...args: A) => {
+    if (!usingDiscord()) fn(...args);
+  };
+
+const mediaRemote: MediaRemoteHandlers = {
+  play: browserOnly(() => {
+    // Start audio inside the key's own task so a background tab keeps its
+    // permission to play, then let the server catch up.
+    const p = usePlayer.getState();
+    const id = p.current?.id;
+    if (id && tabOwnsBrowserLease(session.queue, tabId()) && isMediaReady(itemMediaState(session.queue, id))) {
+      playActive().catch(() => undefined);
+    }
+    void p.control("resume");
+  }),
+  pause: browserOnly(() => void usePlayer.getState().control("pause")),
+  toggle: browserOnly(() => (usePlayer.getState().playing ? mediaRemote.pause() : mediaRemote.play())),
+  next: browserOnly(() => void usePlayer.getState().control("skip")),
+  previous: browserOnly(() => void usePlayer.getState().control("previous")),
+  stop: browserOnly(() => void usePlayer.getState().control("stop")),
+  seekTo: browserOnly((ms: number) => usePlayer.getState().seek(ms)),
+  seekBy: browserOnly((delta: number) => {
+    const p = usePlayer.getState();
+    const max = p.duration > 0 ? p.duration : Number.POSITIVE_INFINITY;
+    p.seek(Math.max(0, Math.min(max, p.position + delta)));
+  })
+};
+
 export function attachAudioListeners() {
   const keysOn = usePrefs.getState().keyboardShortcuts === true;
   if (usePlayer.getState().keyboardShortcuts !== keysOn) {
@@ -1689,13 +1736,7 @@ export function attachAudioListeners() {
     if (sink) applySink(sink);
   }
 
-  attachMediaRemote({
-    play: () => usePlayer.getState().control("resume"),
-    pause: () => usePlayer.getState().control("pause"),
-    next: () => usePlayer.getState().control("skip"),
-    previous: () => usePlayer.getState().control("previous"),
-    seekTo: (ms) => usePlayer.getState().seek(ms)
-  });
+  attachMediaRemote(mediaRemote);
   if (!playbackHoldBound) {
     playbackHoldBound = true;
     claimPlaybackSession(() => {
@@ -1714,6 +1755,14 @@ export function attachAudioListeners() {
 
   if (!keysBound) {
     keysBound = true;
+    // Foreground fallback for hardware media keys the browser hands to the page
+    // instead of its Media Session (for example when its key handling is off).
+    window.addEventListener("keydown", (e) => {
+      const media = mediaKeyAction(e);
+      if (!media || usingDiscord()) return;
+      e.preventDefault();
+      if (!e.repeat) runRemote(media, "keyboard", mediaRemote);
+    });
     window.addEventListener("keydown", (e) => {
       if (useUi.getState().commandOpen) return;
       if (typingTarget(e.target)) return;

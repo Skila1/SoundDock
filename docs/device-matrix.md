@@ -15,5 +15,6 @@ This agent environment cannot open a phone, PWA install, laptop sleep cycle, or 
 | Stale Browser wakes after another Browser took renderer | NOT RUN | Reducer + BroadcastChannel unit tests |
 | Browser → Discord → Browser | NOT RUN | Bind keep + `applySwitchToBrowser` unit tests |
 | Discord disconnect while playing | NOT RUN | Server unbind/leave covered in Go; no live bot here |
+| Hardware media keys, background tab (Windows 11) | NOT RUN | Steps in `media-keys.md`; logic in `mediaSession.test.ts` |
 
 Last updated: 2026-08-29. All rows remain **NOT RUN** until a person fills them in against a running app.

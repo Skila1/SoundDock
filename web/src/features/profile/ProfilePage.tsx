@@ -110,7 +110,7 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
       </form>
       <section className="mt-6 space-y-3 rounded-2xl border border-border bg-surface-1 p-6 shadow-sm">
         <h2 className="text-base font-semibold tracking-tight">Keyboard shortcuts</h2>
-        <p className="text-sm text-muted">Space, arrows, and media keys for the player. Off by default. Ctrl+K search stays available.</p>
+        <p className="text-sm text-muted">Space, arrows, N, P and M for the player. Off by default. Hardware media keys always work, and Ctrl+K search stays available.</p>
         <label className="flex items-center justify-between gap-3 text-sm">
           Enable player shortcuts
           <Switch checked={keysOn} onCheckedChange={setKeys} />
