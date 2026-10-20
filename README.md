@@ -73,6 +73,5 @@ go run ./cmd/sounddock all
 - [API](docs/api.md)
 - [Docker](docs/docker.md)
 - [Environment](docs/environment.md)
-- [Security](SECURITY.md)
 - [Discord](docs/discord.md)
 - [Wiki](https://github.com/Skila1/SoundDock/wiki)
