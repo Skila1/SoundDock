@@ -1,19 +1,30 @@
 /**
- * Puts Home sections in the user's saved order. Sections missing from the saved
- * order (new ones, or none saved yet) keep their default place after it.
+ * Puts Home sections in the user's saved order. A section missing from the saved
+ * order (new, or nothing saved yet) goes right after the section that precedes it
+ * by default (or last, when it is last by default), so a new section lands
+ * where it was designed to sit.
  */
 export function orderSections<T extends { id: string }>(sections: T[], saved?: string[]): T[] {
   if (!saved?.length) return sections;
-  const rank = new Map(saved.map((id, i) => [id, i]));
-  return sections
-    .map((s, i) => ({ s, i, r: rank.get(s.id) }))
-    .sort((a, b) => {
-      if (a.r !== undefined && b.r !== undefined) return a.r - b.r;
-      if (a.r !== undefined) return -1;
-      if (b.r !== undefined) return 1;
-      return a.i - b.i;
-    })
-    .map((x) => x.s);
+  const byId = new Map(sections.map((s) => [s.id, s]));
+  const out = saved.filter((id, i) => byId.has(id) && saved.indexOf(id) === i);
+  sections.forEach((s, i) => {
+    if (out.includes(s.id)) return;
+    if (i === sections.length - 1) {
+      out.push(s.id);
+      return;
+    }
+    let at = 0;
+    for (let j = i - 1; j >= 0; j--) {
+      const k = out.indexOf(sections[j].id);
+      if (k >= 0) {
+        at = k + 1;
+        break;
+      }
+    }
+    out.splice(at, 0, s.id);
+  });
+  return out.map((id) => byId.get(id)!);
 }
 
 /**

@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { ChevronLeft, ChevronRight, Disc3, GripVertical, Heart, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Disc3, GripVertical, Heart, ListPlus, Loader2, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import { TrackCard } from "@/components/media/TrackActions";
 import { TrackList } from "@/components/media/TrackList";
@@ -12,7 +12,9 @@ import { Button } from "@/components/ui/button";
 import { usePlayer } from "@/stores/player";
 import { useLibraryView } from "@/stores/libraryView";
 import { cn } from "@/lib/utils";
-import type { Track } from "@/types/api";
+import type { Track, TrackPage, User } from "@/types/api";
+import { MediaCard } from "@/components/media/MediaCard";
+import type { PlaylistListItem } from "@/features/playlists/types";
 import { moveSection, orderSections } from "./homeOrder";
 import { toast } from "sonner";
 
@@ -38,14 +40,29 @@ export function HomePage() {
   const layout = view.layout;
   const home = useQuery({ queryKey: ["home"], queryFn: () => api.get<any>("/api/v1/home") });
 
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
+  const playlists = useQuery({ queryKey: ["playlists"], queryFn: () => api.get<PlaylistListItem[]>("/api/v1/playlists") });
   const favourites = useMemo(() => asTracks(home.data?.favourites).slice(0, 30), [home.data]);
-  const mine = useMemo(() => asTracks(home.data?.my_library).slice(0, 15), [home.data]);
   const recent = useMemo(() => asTracks(home.data?.continue).slice(0, 15), [home.data]);
-  const added = useMemo(() => asTracks(home.data?.recently_added).slice(0, 15), [home.data]);
-  const played = useMemo(() => asTracks(home.data?.most_played).slice(0, 15), [home.data]);
+  const myPlaylists = useMemo(() => (playlists.data || []).filter((p) => !p.user_id || p.user_id === me.data?.id), [playlists.data, me.data]);
   // Section being dragged and the section it would land before (null = last).
   const [drag, setDrag] = useState<{ id: string; before: string | null } | null>(null);
   const sectionEls = useRef(new Map<string, HTMLElement>());
+  const isOpen = (id: string, fallback: boolean) => view.sections?.[id] ?? fallback;
+  // The full library loads only once its section is opened, a page at a time.
+  const fullOpen = isOpen("full", false);
+  const full = useInfiniteQuery({
+    queryKey: ["tracks", { q: "", sort: "" }],
+    enabled: fullOpen,
+    queryFn: ({ pageParam }) => {
+      const p = new URLSearchParams({ limit: "100" });
+      if (pageParam) p.set("cursor", pageParam);
+      return api.get<TrackPage>(`/api/v1/tracks?${p}`);
+    },
+    initialPageParam: "",
+    getNextPageParam: (last) => last.next_cursor || undefined
+  });
+  const fullTracks = useMemo(() => asTracks(full.data?.pages.flatMap((p) => p.items || [])), [full.data]);
 
   if (home.isLoading) {
     return (
@@ -65,7 +82,8 @@ export function HomePage() {
     return <QueryError message={home.error instanceof Error ? home.error.message : undefined} onRetry={() => home.refetch()} />;
   }
 
-  if (!favourites.length && !mine.length && !recent.length && !added.length && !played.length) {
+  const libraryEmpty = !asTracks(home.data?.recently_added).length && !asTracks(home.data?.my_library).length;
+  if (!favourites.length && !recent.length && !myPlaylists.length && libraryEmpty) {
     return (
       <EmptyState
         icon={Disc3}
@@ -78,23 +96,64 @@ export function HomePage() {
   }
 
   const playNext = (t: HomeTrack) => add([t.id], true).then(() => toast.success("Playing next"));
-  // Favourites and Your library start open; the other shelves start collapsed.
+  // Favourites and Your Playlists start open; the other sections start collapsed.
   // Whatever the user toggles is remembered for their account.
-  const isOpen = (id: string, fallback: boolean) => view.sections?.[id] ?? fallback;
   const toggle = (id: string, fallback: boolean) => patchView({ sections: { ...view.sections, [id]: !isOpen(id, fallback) } });
-  const sections: { id: string; title: string; to?: string; tracks: HomeTrack[]; open: boolean; countLabel?: boolean }[] = [
-    { id: "favourites", title: "Favourites", to: "/library/favourites", tracks: favourites, open: true },
-    { id: "library", title: "Your library", to: "/me/library", tracks: mine, open: true },
-    { id: "recent", title: "Recently played", to: "/history", tracks: recent, open: false },
-    { id: "added", title: "Recently added", to: "/library", tracks: added, open: false },
-    { id: "most", title: "Most played", to: "/stats", tracks: played, open: false, countLabel: true }
+  const queuePlaylist = async (p: PlaylistListItem) => {
+    try {
+      const detail = await api.get<{ tracks?: { track_id: string }[] }>(`/api/v1/playlists/${p.id}`);
+      const ids = (detail.tracks || []).map((t) => t.track_id).filter(Boolean);
+      if (!ids.length) {
+        toast.message(`${p.name} has no songs yet.`);
+        return;
+      }
+      await add(ids);
+      toast.success(ids.length === 1 ? `Added 1 song from ${p.name}` : `Added ${ids.length} songs from ${p.name}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not queue the playlist");
+    }
+  };
+  const trackSection = (tracks: HomeTrack[]) => <TrackSection tracks={tracks} layout={layout} onPlay={play} onQueue={add} onNext={playNext} />;
+  const sections: { id: string; title: string; to?: string; count: React.ReactNode; show: boolean; open: boolean; content: React.ReactNode }[] = [
+    { id: "favourites", title: "Favourites", to: "/library/favourites", count: favourites.length, show: favourites.length > 0, open: true, content: trackSection(favourites) },
+    {
+      id: "playlists",
+      title: "Your Playlists",
+      to: "/playlists",
+      count: myPlaylists.length,
+      show: myPlaylists.length > 0,
+      open: true,
+      content: <PlaylistShelf playlists={myPlaylists} onQueue={queuePlaylist} />
+    },
+    { id: "recent", title: "Recently played", to: "/history", count: recent.length, show: recent.length > 0, open: false, content: trackSection(recent) },
+    {
+      id: "full",
+      title: "Full Library",
+      to: "/library",
+      count: fullOpen && full.data ? `${fullTracks.length}${full.hasNextPage ? "+" : ""}` : "",
+      show: !libraryEmpty,
+      open: false,
+      content: (
+        <FullLibrary
+          tracks={fullTracks}
+          layout={layout}
+          loading={full.isLoading}
+          hasMore={!!full.hasNextPage}
+          loadingMore={full.isFetchingNextPage}
+          onMore={() => void full.fetchNextPage()}
+          onPlay={(i) => play(fullTracks.map((t) => t.id), i)}
+          onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
+          onNext={playNext}
+        />
+      )
+    }
   ];
 
   // Sections are dragged by their grip (mouse, touch or pen) and the order is
   // remembered for the account, like the open/closed state.
   const ordered = orderSections(sections, view.order);
   const fullOrder = ordered.map((s) => s.id);
-  const visible = ordered.filter((sec) => sec.tracks.length > 0);
+  const visible = ordered.filter((sec) => sec.show);
   const visibleIds = visible.map((s) => s.id);
   const nextVisible = (id: string) => visibleIds[visibleIds.indexOf(id) + 1] ?? null;
   const commitMove = (id: string, before: string | null) => {
@@ -164,7 +223,7 @@ export function HomePage() {
               <Section
                 title={sec.title}
                 to={sec.to}
-                count={sec.tracks.length}
+                count={sec.count}
                 open={open}
                 onToggle={() => toggle(sec.id, sec.open)}
                 dragging={drag?.id === sec.id}
@@ -187,7 +246,7 @@ export function HomePage() {
                   </button>
                 }
               >
-                <TrackSection tracks={sec.tracks} layout={layout} onPlay={play} onQueue={add} onNext={playNext} countLabel={sec.countLabel} />
+                {sec.content}
               </Section>
             </div>
           );
@@ -226,7 +285,7 @@ function Section({
 }: {
   title: string;
   to?: string;
-  count: number;
+  count: React.ReactNode;
   open: boolean;
   onToggle: () => void;
   grip?: React.ReactNode;
@@ -304,6 +363,85 @@ function TrackSection({
   );
 }
 
+
+/** Your playlists as album-style covers, each with Add to queue. Ignores the grid/list toggle. */
+function PlaylistShelf({ playlists, onQueue }: { playlists: PlaylistListItem[]; onQueue: (p: PlaylistListItem) => Promise<void> }) {
+  const [busy, setBusy] = useState("");
+  return (
+    <Shelf>
+      {playlists.map((p) => (
+        <div key={p.id} className="flex w-[148px] shrink-0 snap-start flex-col gap-2 sm:w-[168px]">
+          <MediaCard className="max-w-none min-w-0" to={`/playlists/${p.id}`} id={p.id} title={p.name} kind="playlist" />
+          <Button
+            size="sm"
+            variant="secondary"
+            className="w-full"
+            disabled={busy === p.id}
+            onClick={async () => {
+              setBusy(p.id);
+              await onQueue(p);
+              setBusy("");
+            }}
+          >
+            {busy === p.id ? <Loader2 className="animate-spin" /> : <ListPlus />} Add to queue
+          </Button>
+        </div>
+      ))}
+    </Shelf>
+  );
+}
+
+/** Every song in the catalogue, loaded a page at a time. */
+function FullLibrary({
+  tracks,
+  layout,
+  loading,
+  hasMore,
+  loadingMore,
+  onMore,
+  onPlay,
+  onQueue,
+  onNext
+}: {
+  tracks: HomeTrack[];
+  layout: "grid" | "list";
+  loading: boolean;
+  hasMore: boolean;
+  loadingMore: boolean;
+  onMore: () => void;
+  onPlay: (i: number) => void;
+  onQueue: (t: HomeTrack) => void;
+  onNext: (t: HomeTrack) => void;
+}) {
+  if (loading) {
+    return (
+      <div className="space-y-2">
+        {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
+      </div>
+    );
+  }
+  if (!tracks.length) return <p className="text-sm text-muted">No songs in the library yet.</p>;
+  return (
+    <div className="space-y-4">
+      {layout === "list" ? (
+        <TrackList tracks={tracks} onPlay={onPlay} onQueue={onQueue} onNext={onNext} />
+      ) : (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+          {tracks.map((t, i) => (
+            <TrackCard key={t.id} track={t} subtitle={t.artist || t.album || "Unknown artist"} onPlay={() => onPlay(i)} />
+          ))}
+        </div>
+      )}
+      {hasMore && (
+        <div className="flex justify-center">
+          <Button variant="secondary" size="sm" onClick={onMore} disabled={loadingMore}>
+            {loadingMore && <Loader2 className="animate-spin" />} Load more songs
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Horizontal, snap-scrolling row with arrow buttons on hover. */
 function Shelf({ children }: { children: React.ReactNode }) {
