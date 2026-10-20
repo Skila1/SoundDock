@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Mic2, PanelRightClose, X } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Loader2, Mic2, PanelRightClose, Sparkles, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { Artwork } from "@/components/media/Artwork";
@@ -207,6 +208,41 @@ export function LyricsPrefetch() {
   return null;
 }
 
+function generating(l: TrackLyrics | undefined) {
+  return l?.generate?.status === "queued" || l?.generate?.status === "running";
+}
+
+/** Asks the server to transcribe the track with whisper.cpp. Shown only when the server offers it. */
+export function GenerateLyricsButton({ trackId, lyrics, regenerate }: { trackId: string; lyrics: TrackLyrics; regenerate?: boolean }) {
+  const qc = useQueryClient();
+  const [sending, setSending] = useState(false);
+  const gen = lyrics.generate;
+  if (!gen?.available) return null;
+  const busy = sending || generating(lyrics);
+  return (
+    <Button
+      size="sm"
+      variant={regenerate ? "ghost" : "secondary"}
+      disabled={busy}
+      onClick={async () => {
+        setSending(true);
+        try {
+          await api.post(`/api/v1/tracks/${encodeURIComponent(trackId)}/lyrics/generate`, {});
+          toast.success("Generating lyrics. This can take a few minutes.");
+          await qc.invalidateQueries({ queryKey: lyricsQueryKey(trackId) });
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Could not start lyrics generation");
+        } finally {
+          setSending(false);
+        }
+      }}
+    >
+      {busy ? <Loader2 className="animate-spin" /> : <Sparkles />}
+      {busy ? (gen.status === "running" ? "Listening to the song…" : "Waiting to start…") : regenerate ? "Regenerate" : "Generate lyrics"}
+    </Button>
+  );
+}
+
 export function LyricsPanel({ onCollapse, onClose }: { onCollapse?: () => void; onClose?: () => void }) {
   const p = usePlayer();
   const t = p.current;
@@ -215,7 +251,8 @@ export function LyricsPanel({ onCollapse, onClose }: { onCollapse?: () => void; 
     queryKey: lyricsQueryKey(t?.id || ""),
     queryFn: () => api.get<TrackLyrics>(`/api/v1/tracks/${encodeURIComponent(t!.id)}/lyrics`),
     enabled: Boolean(t?.id),
-    staleTime: 10 * 60_000
+    staleTime: 10 * 60_000,
+    refetchInterval: (query) => (generating(query.state.data) ? 4000 : false)
   });
   const lyrics = q.data;
   const showKaraoke = Boolean(lyrics && (karaokeLines(lyrics).length || hasPlainBody(lyrics)));
@@ -248,7 +285,15 @@ export function LyricsPanel({ onCollapse, onClose }: { onCollapse?: () => void; 
       {q.isLoading && t ? (
         <div className="flex flex-1 items-center justify-center px-4 text-sm text-muted">Loading lyrics…</div>
       ) : showKaraoke && lyrics ? (
-        <LyricsKaraoke lyrics={lyrics} positionMs={positionMs} onSeek={(ms) => p.seek(ms)} />
+        <>
+          <LyricsKaraoke lyrics={lyrics} positionMs={positionMs} onSeek={(ms) => p.seek(ms)} />
+          {lyrics.source === "whisper" && t && (
+            <div className="flex items-center justify-between gap-2 border-t border-border px-4 py-2 text-xs text-muted">
+              <span>Generated from the audio by whisper.cpp</span>
+              <GenerateLyricsButton trackId={t.id} lyrics={lyrics} regenerate />
+            </div>
+          )}
+        </>
       ) : (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
           <div className="rounded-full bg-surface-2 p-3">
@@ -257,9 +302,15 @@ export function LyricsPanel({ onCollapse, onClose }: { onCollapse?: () => void; 
           <p className="text-sm font-semibold">{t ? "No lyrics for this track" : "Nothing playing"}</p>
           <p className="text-xs text-muted">
             {t
-              ? "Cached, embedded, and on-disk lyrics are used first. LRCLIB is used when enabled in Admin."
+              ? lyrics?.generate?.available
+                ? "SoundDock can listen to the song and write timed lyrics with whisper.cpp."
+                : "Cached, embedded, and on-disk lyrics are used first. LRCLIB is used when enabled in Admin."
               : "Play a song, then open lyrics again."}
           </p>
+          {t && lyrics && <GenerateLyricsButton trackId={t.id} lyrics={lyrics} />}
+          {lyrics?.generate?.status === "failed" && !generating(lyrics) && (
+            <p className="max-w-xs text-xs text-destructive">Last attempt failed: {lyrics.generate.error || "unknown error"}</p>
+          )}
         </div>
       )}
     </div>

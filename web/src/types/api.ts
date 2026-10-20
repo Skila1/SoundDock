@@ -418,11 +418,19 @@ export type LyricsLine = {
   words?: LyricsWord[];
 };
 
+export type LyricsGenerateState = {
+  available: boolean;
+  status: "idle" | "queued" | "running" | "failed";
+  error?: string;
+};
+
 export type TrackLyrics = {
   body: string;
   timed: boolean;
   source?: string;
   lines?: LyricsLine[];
+  /** Present only for admins when whisper.cpp generation is on. */
+  generate?: LyricsGenerateState;
 };
 
 export type LyricsProviderConfig = {
@@ -430,6 +438,15 @@ export type LyricsProviderConfig = {
   external_enabled?: boolean;
   enabled: boolean;
   provider_url: string;
+  generate_enabled?: boolean;
+  generate_language?: string;
+};
+
+export type LyricsGeneratorStatus = {
+  configured: boolean;
+  status: "ok" | "loading" | "unreachable" | "not_configured";
+  url?: string;
+  error?: string;
 };
 
 /** Scoped ACL row on a library. Capabilities (upload, merge, …) remain HasPerm. */

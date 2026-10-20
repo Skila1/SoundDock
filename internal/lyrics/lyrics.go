@@ -26,6 +26,9 @@ const (
 	SourceEmbedded = "embedded"
 	SourceLocal    = "local"
 	SourceLRCLIB   = "lrclib"
+	// SourceWhisper marks lyrics transcribed from the audio by whisper.cpp.
+	// They are generated on this server, so they show even with LRCLIB off.
+	SourceWhisper = "whisper"
 
 	AllowedHost = "lrclib.net"
 )
@@ -66,6 +69,10 @@ type Config struct {
 	ExternalEnabled bool   `json:"external_enabled"`
 	Enabled         bool   `json:"enabled"` // same as ExternalEnabled for older clients
 	ProviderURL     string `json:"provider_url"`
+	// GenerateEnabled lets editors transcribe lyrics with whisper.cpp.
+	GenerateEnabled bool `json:"generate_enabled"`
+	// GenerateLanguage is an ISO 639-1 code, or "auto" to detect per song.
+	GenerateLanguage string `json:"generate_language"`
 }
 
 // Service reads the lyrics table and, when enabled, LRCLIB.
@@ -109,8 +116,8 @@ func New(pool *pgxpool.Pool, log *slog.Logger) *Service {
 }
 
 // GetLyrics returns lyrics for meta. Lookup order: manual/user (never overwritten)
-// > local (embedded + on-disk files) > cached provider (only when ExternalEnabled)
-// > optional LRCLIB fetch. Provider cache is left in place when external is off.
+// > local (embedded + on-disk files) > generated (whisper.cpp) > cached provider
+// (only when ExternalEnabled) > optional LRCLIB fetch. Provider cache is left in place when external is off.
 func (s *Service) GetLyrics(ctx context.Context, meta Meta) Result {
 	if s == nil {
 		return Result{}
@@ -130,6 +137,9 @@ func (s *Service) GetLyrics(ctx context.Context, meta Meta) Result {
 		if hit := s.lookupLocal(meta); hit.Body != "" {
 			return hit
 		}
+	}
+	if hit := pickGenerated(rows); hit.Source != "" {
+		return hit
 	}
 	if !s.externalOn(ctx) {
 		return Result{}
@@ -183,9 +193,18 @@ func pickEmbedded(rows []Result) Result {
 	return Result{}
 }
 
+func pickGenerated(rows []Result) Result {
+	for _, row := range rows {
+		if row.Source == SourceWhisper && strings.TrimSpace(row.Body) != "" {
+			return row
+		}
+	}
+	return Result{}
+}
+
 func pickProvider(rows []Result) Result {
 	for _, row := range rows {
-		if !isProtected(row.Source) && row.Source != SourceEmbedded && row.Source != SourceLocal && row.Source != "" {
+		if !isProtected(row.Source) && row.Source != SourceEmbedded && row.Source != SourceLocal && row.Source != SourceWhisper && row.Source != "" {
 			return row
 		}
 	}
@@ -197,6 +216,9 @@ func pickCached(rows []Result) Result {
 		return hit
 	}
 	if hit := pickEmbedded(rows); hit.Source != "" {
+		return hit
+	}
+	if hit := pickGenerated(rows); hit.Source != "" {
 		return hit
 	}
 	return pickProvider(rows)

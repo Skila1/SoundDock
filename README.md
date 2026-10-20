@@ -75,3 +75,8 @@ go run ./cmd/sounddock all
 - [Environment](docs/environment.md)
 - [Discord](docs/discord.md)
 - [Wiki](https://github.com/Skila1/SoundDock/wiki)
+- [Lyrics generation](docs/lyrics-generation.md)
+
+## Special Thanks
+
+- **[whisper.cpp](https://github.com/ggml-org/whisper.cpp)** by the ggml-org team (MIT licence). SoundDock uses it to write timed lyrics for songs no lyrics service knows about, such as music you or your friends made. It runs as its own optional container, and SoundDock sends it the song's audio and turns what it hears into synced `.lrc` lyrics.

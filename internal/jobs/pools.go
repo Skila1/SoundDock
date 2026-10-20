@@ -133,6 +133,7 @@ var typePools = map[string]ID{
 	"tracks.metadata":          PoolMaintenance,
 	"metadata.refresh":         PoolMaintenance,
 	"lyrics.fetch":             PoolMaintenance,
+	"lyrics.generate":          PoolMaintenance,
 	"scan.duplicates":          PoolMaintenance,
 	"maintenance.retention":    PoolMaintenance,
 	"maintenance.archive":      PoolMaintenance,

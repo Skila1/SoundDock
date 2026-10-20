@@ -28,6 +28,7 @@ import (
 	"github.com/sounddock/sounddock/internal/ingest"
 	"github.com/sounddock/sounddock/internal/integrity"
 	"github.com/sounddock/sounddock/internal/jobs"
+	"github.com/sounddock/sounddock/internal/lyrics"
 	"github.com/sounddock/sounddock/internal/mediabusy"
 	"github.com/sounddock/sounddock/internal/oplog"
 	"github.com/sounddock/sounddock/internal/playback"
@@ -44,6 +45,7 @@ import (
 	"github.com/sounddock/sounddock/internal/watch"
 	"github.com/sounddock/sounddock/internal/waveform"
 	"github.com/sounddock/sounddock/internal/webhooks"
+	"github.com/sounddock/sounddock/internal/whisper"
 	"github.com/sounddock/sounddock/openapi"
 	"github.com/sounddock/sounddock/web"
 )
@@ -161,6 +163,13 @@ func main() {
 		srv.Web = fsys
 	}
 	srv.OpenAPI = openapi.Spec
+	if cfg.WhisperURL != "" {
+		if wc, err := whisper.New(cfg.WhisperURL); err != nil {
+			log.Warn("SD_WHISPER_URL ignored", "err", err)
+		} else {
+			srv.Whisper = wc
+		}
+	}
 	_ = update.WriteHostRunner()
 
 	_ = fingerprint.EnsureSchema(ctx, pool)
@@ -198,6 +207,11 @@ func main() {
 		return err
 	})
 	runner.Register("party.expire", playback.ExpireHandler(play))
+	var transcriber lyrics.Transcriber
+	if srv.Whisper != nil {
+		transcriber = lyrics.WhisperTranscriber{Client: srv.Whisper}
+	}
+	runner.Register(lyrics.GenerateJob, lyrics.NewGenerator(pool, transcriber, srv.ProviderFor).Handler())
 	runner.Register("waveform.generate", waveform.New(pool, srv.ProviderFor).Handler())
 	runner.Register("fingerprint.generate", fingerprint.New(pool, srv.ProviderFor).Handler())
 	runner.Register("integrity.scan", integrity.New(pool, srv.ProviderFor).Handler())

@@ -22,14 +22,14 @@ const (
 
 // Extra is optional runtime state for cancel decisions.
 type Extra struct {
-	FetchStage        string // acquisition_intents status; empty if unknown
-	RetentionDeleted  int    // tracks already deleted this run
-	StatsSwapStarted  bool   // play_counts rebuild / reader flip in progress
+	FetchStage       string // acquisition_intents status; empty if unknown
+	RetentionDeleted int    // tracks already deleted this run
+	StatsSwapStarted bool   // play_counts rebuild / reader flip in progress
 }
 
 func typeAllowlisted(typ string) bool {
 	switch strings.TrimSpace(typ) {
-	case "scapex.fetch", "tracks.metadata", "library.scan", "scan.duplicates", "lyrics.fetch",
+	case "scapex.fetch", "tracks.metadata", "library.scan", "scan.duplicates", "lyrics.fetch", "lyrics.generate",
 		"maintenance.retention", "stats.rebuild", "metadata.refresh":
 		return true
 	default:
@@ -66,7 +66,7 @@ func AllowCancel(typ, status string, progress int, extra Extra) bool {
 			return false
 		}
 		return true
-	case "library.scan", "tracks.metadata", "scan.duplicates", "lyrics.fetch", "metadata.refresh":
+	case "library.scan", "tracks.metadata", "scan.duplicates", "lyrics.fetch", "lyrics.generate", "metadata.refresh":
 		return true
 	case "maintenance.retention":
 		if status == "queued" || status == "retry" {
@@ -126,4 +126,3 @@ func (r *Runner) cancelExtra(ctx context.Context, typ string, id uuid.UUID) Extr
 	}
 	return ex
 }
-

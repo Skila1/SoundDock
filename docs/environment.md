@@ -11,6 +11,8 @@ See `.env.example`. The installer only writes what is needed to boot. Discord cl
 | `SD_IMAGE` | Image to pull (`ghcr.io/skila1/sounddock:latest`) |
 | `SD_LIBRARY_HOST` | Host folder mounted at `/libraries` |
 | `SD_SCAPEX_URL` | **Deprecated.** Leave empty. YouTube search and fetch run in-process (yt-dlp). If set, SoundDock still talks to that leftover sidecar. The sidecar is not in Compose. |
+| `SD_WHISPER_URL` | Optional whisper.cpp server for lyrics generation, normally `http://whisper:8080` with the Compose `lyrics` profile. Empty turns the feature off. See [Lyrics generation](lyrics-generation.md). |
+| `SD_WHISPER_MODEL` / `SD_WHISPER_THREADS` | Model and CPU threads for the `whisper` container (default `small`, `4`). |
 | `SD_OPENSUBSONIC` | OpenSubsonic adapter is a stub. Leave `false`. |
 
 CORS allows `http://localhost:5173`, `http://127.0.0.1:5173`, and the origin of `SD_PUBLIC_URL`. It does not allow arbitrary browser origins.

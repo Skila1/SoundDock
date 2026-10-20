@@ -71,6 +71,8 @@ func TestWave1RoutesRegistered(t *testing.T) {
 		"GET /api/v1/tracks/{id}/metadata",
 		"GET /api/v1/admin/lyrics",
 		"PUT /api/v1/admin/lyrics",
+		"GET /api/v1/admin/lyrics/generator",
+		"POST /api/v1/tracks/{id}/lyrics/generate",
 		"GET /api/v1/me/tokens",
 		"GET /api/v1/admin/health/detail",
 		"GET /api/v1/admin/maintenance",

@@ -43,6 +43,7 @@ type Config struct {
 	MeiliURL        string
 	MeiliKey        string
 	ScapeXURL       string
+	WhisperURL      string
 	ShutdownWait    time.Duration
 }
 
@@ -81,6 +82,7 @@ func Load() Config {
 		MeiliURL:        env("SD_MEILISEARCH_URL", ""),
 		MeiliKey:        env("SD_MEILISEARCH_KEY", ""),
 		ScapeXURL:       strings.TrimRight(env("SD_SCAPEX_URL", ""), "/"),
+		WhisperURL:      strings.TrimRight(env("SD_WHISPER_URL", ""), "/"),
 		ShutdownWait:    40 * time.Second,
 	}
 }

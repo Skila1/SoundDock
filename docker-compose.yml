@@ -105,11 +105,43 @@ services:
     networks:
       - sounddock
 
+  # Optional lyrics generation (compose profile: lyrics). Runs the official
+  # whisper.cpp server (MIT, https://github.com/ggml-org/whisper.cpp) as its
+  # own container; SoundDock only calls its HTTP API. Set
+  # SD_WHISPER_URL=http://whisper:8080 in .env to connect it. The image tag is
+  # pinned to the v1.9.5 release commit. The speech model and the Silero
+  # voice activity model (which skips instrumental parts so whisper does not
+  # invent lyrics over them) are downloaded once into whisper_models.
+  whisper:
+    image: ${SD_WHISPER_IMAGE:-ghcr.io/ggml-org/whisper.cpp:main-d1be6fde11ac6e0407606b4e42fe72d34add8037}
+    restart: unless-stopped
+    profiles: ["lyrics"]
+    environment:
+      WHISPER_MODEL: ${SD_WHISPER_MODEL:-small}
+      WHISPER_THREADS: ${SD_WHISPER_THREADS:-4}
+    command:
+      - |
+        set -e
+        ./models/download-ggml-model.sh "$$WHISPER_MODEL" /models
+        ./models/download-vad-model.sh silero-v6.2.0 /models
+        exec whisper-server --host 0.0.0.0 --port 8080 -m "/models/ggml-$$WHISPER_MODEL.bin" -t "$$WHISPER_THREADS" -l auto --vad -vm /models/ggml-silero-v6.2.0.bin
+    volumes:
+      - whisper_models:/models
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 10m
+    networks:
+      - sounddock
+
 volumes:
   postgres_data:
   sounddock_data:
   redis_data:
   meili_data:
+  whisper_models:
 
 networks:
   sounddock:

@@ -46,6 +46,7 @@ import (
 	"github.com/sounddock/sounddock/internal/transcode"
 	"github.com/sounddock/sounddock/internal/version"
 	"github.com/sounddock/sounddock/internal/webhooks"
+	"github.com/sounddock/sounddock/internal/whisper"
 )
 
 type Server struct {
@@ -73,6 +74,8 @@ type Server struct {
 	OpenAPI   []byte
 	ScapeX    *scapex.Client
 	Retention *retention.Engine
+	// Whisper is the optional whisper.cpp server used to generate lyrics.
+	Whisper *whisper.Client
 
 	hubOnce sync.Once
 	hub     *sessionHub
@@ -159,6 +162,7 @@ func (s *Server) Router() http.Handler {
 			r.Get("/tracks/{id}", s.requirePerm("tracks.read", s.getTrack))
 			r.Get("/tracks/{id}/playability", s.requirePerm("tracks.read", s.getTrackPlayability))
 			r.Get("/tracks/{id}/lyrics", s.requirePerm("tracks.read", s.getTrackLyrics))
+			r.Post("/tracks/{id}/lyrics/generate", s.generateTrackLyrics)
 			r.Patch("/tracks/{id}", s.notifyOnSuccess(s.patchTrack, catalogInvalidateKeys))
 			r.Get("/tracks/{id}/metadata", s.requirePerm("tracks.read", s.getTrackMetadata))
 			r.Patch("/tracks/{id}/metadata", s.notifyOnSuccess(s.patchTrackMetadata, catalogInvalidateKeys))
@@ -302,6 +306,7 @@ func (s *Server) Router() http.Handler {
 					r.Put("/acquisition-policy", s.adminPutAcquisitionPolicy)
 					r.Get("/lyrics", s.requirePerm("lyrics.configure", s.adminGetLyrics))
 					r.Put("/lyrics", s.requirePerm("lyrics.configure", s.adminPutLyrics))
+					r.Get("/lyrics/generator", s.requirePerm("lyrics.configure", s.adminLyricsGenerator))
 					r.Get("/library/health", s.libraryHealth)
 					r.Get("/library/settings", s.libraryIngestSettings)
 					r.Put("/library/settings", s.libraryPutIngestSettings)

@@ -52,6 +52,12 @@ func LoadConfig(ctx context.Context, pool *pgxpool.Pool) Config {
 	if v, ok := bag["provider_url"]; ok {
 		_ = json.Unmarshal(v, &cfg.ProviderURL)
 	}
+	if v, ok := bag["generate_enabled"]; ok {
+		_ = json.Unmarshal(v, &cfg.GenerateEnabled)
+	}
+	if v, ok := bag["generate_language"]; ok {
+		_ = json.Unmarshal(v, &cfg.GenerateLanguage)
+	}
 	return normalizeConfig(cfg)
 }
 
@@ -72,7 +78,12 @@ func StoreConfig(ctx context.Context, pool *pgxpool.Pool, cfg Config) error {
 }
 
 func normalizeConfig(cfg Config) Config {
-	out := Config{LocalEnabled: cfg.LocalEnabled, ExternalEnabled: cfg.ExternalEnabled || cfg.Enabled}
+	out := Config{
+		LocalEnabled:     cfg.LocalEnabled,
+		ExternalEnabled:  cfg.ExternalEnabled || cfg.Enabled,
+		GenerateEnabled:  cfg.GenerateEnabled,
+		GenerateLanguage: NormalizeLanguage(cfg.GenerateLanguage),
+	}
 	url := strings.TrimSpace(cfg.ProviderURL)
 	if !out.ExternalEnabled {
 		out.Enabled = false
@@ -183,4 +194,19 @@ func (s *Service) lyricsLocked(ctx context.Context, trackID uuid.UUID) bool {
 		SELECT 1 FROM metadata_locks
 		WHERE entity_type='track' AND entity_id=$1 AND field='lyrics'`, trackID).Scan(&n)
 	return err == nil
+}
+
+// NormalizeLanguage returns a lowercase ISO 639 code, or "auto" for anything
+// empty or malformed.
+func NormalizeLanguage(raw string) string {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if len(raw) < 2 || len(raw) > 3 {
+		return "auto"
+	}
+	for _, r := range raw {
+		if r < 'a' || r > 'z' {
+			return "auto"
+		}
+	}
+	return raw
 }
