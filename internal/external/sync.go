@@ -26,6 +26,10 @@ type ImportPayload struct {
 	PlaylistUUID uuid.UUID   `json:"sounddock_playlist_id"`
 	LibraryIDs   []uuid.UUID `json:"library_ids"`
 	FillYouTube  *bool       `json:"fill_youtube,omitempty"`
+	// Copy is "Create playlist based on": songs still downloading join the
+	// playlist straight away and the provider's cover becomes the playlist cover.
+	Copy    bool   `json:"copy,omitempty"`
+	Artwork string `json:"artwork,omitempty"`
 }
 
 func (p ImportPayload) shouldFill() bool {
@@ -33,10 +37,14 @@ func (p ImportPayload) shouldFill() bool {
 }
 
 func (p ImportPayload) CoalesceKey() string {
-	return "external.playlist.import|" + p.UserID.String() + "|" + p.Provider + "|" + p.ExternalID
+	key := "external.playlist.import|" + p.UserID.String() + "|" + p.Provider + "|" + p.ExternalID
+	if p.Copy {
+		key += "|copy"
+	}
+	return key
 }
 
-func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Filler) jobs.Handler {
+func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Filler, art ArtSaver) jobs.Handler {
 	return func(ctx context.Context, job jobs.Job) error {
 		var p ImportPayload
 		if err := json.Unmarshal(job.Payload, &p); err != nil {
@@ -111,7 +119,11 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 			return err
 		}
 
-		if snapshotUnchanged(prevSnap, prevStatus, meta.Snapshot) && sdID != uuid.Nil {
+		if p.Copy && copyPlaylistCover(ctx, pool, art, sdID, meta.Artwork, p.Artwork) {
+			notifyPlaylistInvalidate(ctx, pool, p.UserID, sdID)
+		}
+
+		if !p.Copy && snapshotUnchanged(prevSnap, prevStatus, meta.Snapshot) && sdID != uuid.Nil {
 			_, _ = pool.Exec(ctx, `UPDATE external_playlists SET last_sync_at=now(), last_sync_status='ok', last_error='', last_sync_attempt_at=now() WHERE id=$1`, epid)
 			notifyPlaylistInvalidate(ctx, pool, p.UserID, sdID)
 			return nil
@@ -178,7 +190,9 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 				}
 			}
 			if res.TrackID != nil {
-				if id, ok := keepMembership(*res.TrackID, trackPlayable(ctx, pool, *res.TrackID)); ok && (status == "exact" || status == "high") {
+				// A copy keeps songs that are still downloading; they play once the file lands.
+				playable := trackPlayable(ctx, pool, *res.TrackID) || (p.Copy && res.Source == "youtube")
+				if id, ok := keepMembership(*res.TrackID, playable); ok && (status == "exact" || status == "high") {
 					matched++
 					keepIDs = append(keepIDs, id)
 					_, _ = pool.Exec(ctx, `INSERT INTO external_track_mappings (provider, provider_track_id, isrc, sounddock_track_id, mapping_source, confidence)

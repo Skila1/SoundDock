@@ -174,7 +174,7 @@ func main() {
 	srv.Retention = retention.New(pool, runner, srv.Audit, cfg.ManagedDir, srv.PurgeTrackMedia)
 	srv.Retention.SetLive(busy)
 	runner.Register("maintenance.retention", retention.Handler(srv.Retention))
-	runner.Register("external.playlist.import", external.Handler(pool, box, hooks, srv.YouTube()))
+	runner.Register("external.playlist.import", external.Handler(pool, box, hooks, srv.YouTube(), art))
 	runner.Register("external.playlist.tick", external.TickHandler(pool, runner.EnqueueCoalesced))
 	runner.Register("backup.run", func(ctx context.Context, job jobs.Job) error {
 		_, err := bk.Run(ctx)

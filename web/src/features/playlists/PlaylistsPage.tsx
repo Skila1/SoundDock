@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Link2, ListMusic, Plus, Radio as RadioIcon, Shuffle, Wand2 } from "lucide-react";
+import { CopyPlus, Download, Link2, ListMusic, Plus, Radio as RadioIcon, Shuffle, Wand2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { hasPerm } from "@/lib/perms";
 import { MediaCard } from "@/components/media/MediaCard";
@@ -19,6 +19,7 @@ import { usePlayer } from "@/stores/player";
 import type { User } from "@/types/api";
 import type { PlaylistFolder, PlaylistListItem, ProviderCapabilities, ProviderPlaylist, RadioResponse } from "./types";
 import { capabilityBlurb } from "./types";
+import { createPlaylistBasedOn } from "./createBasedOn";
 
 const allTabs = [
   { id: "all", label: "SoundDock" },
@@ -219,6 +220,27 @@ export function PlaylistsPage() {
                   </div>
                   </div>
                 </Link>
+                <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  size="sm"
+                  disabled={busyId === pl.id || pl.readable === false}
+                  title="Copy the name, songs and cover into a new SoundDock playlist. Missing songs are downloaded."
+                  onClick={async () => {
+                    setBusyId(pl.id);
+                    try {
+                      const jid = await createPlaylistBasedOn(tab, pl);
+                      if (jid) trackJob(jid, `Creating playlist based on ${pl.name}`);
+                      toast.success("Creating your playlist. Missing songs download in the background.");
+                      qc.invalidateQueries({ queryKey: ["playlists"] });
+                    } catch (err: any) {
+                      toast.error(err?.message || "Could not create the playlist");
+                    } finally {
+                      setBusyId("");
+                    }
+                  }}
+                >
+                  <CopyPlus /> <span className="hidden sm:inline">Create Playlist Based On</span><span className="sm:hidden">Copy</span>
+                </Button>
                 <Button
                   size="sm"
                   variant="secondary"
@@ -239,6 +261,7 @@ export function PlaylistsPage() {
                 >
                   {busyId === pl.id ? "Queued…" : "Import"}
                 </Button>
+                </div>
               </li>
             ))}
           </ul>

@@ -254,15 +254,20 @@ func (s *Server) importProviderPlaylist(w http.ResponseWriter, r *http.Request) 
 		Interval    string `json:"sync_interval"`
 		Removal     string `json:"removal_policy"`
 		FillYouTube *bool  `json:"fill_youtube"`
+		Copy        bool   `json:"copy"`
+		Artwork     string `json:"artwork"`
 	}
 	_ = decodeJSON(r, &body)
 	if body.Mode == "" {
 		body.Mode = "once"
 	}
+	if len(body.Artwork) > 2048 {
+		body.Artwork = ""
+	}
 	jid, err := s.enqueuePlaylistImport(r, external.ImportPayload{
 		UserID: u.ID, Provider: prov, ExternalID: extID, Mode: body.Mode, Name: body.Name,
 		Interval: body.Interval, Removal: body.Removal, LibraryIDs: s.libraryIDs(r.Context(), u),
-		FillYouTube: body.FillYouTube,
+		FillYouTube: body.FillYouTube, Copy: body.Copy, Artwork: body.Artwork,
 	})
 	if err != nil {
 		s.writeJobErr(w, err)

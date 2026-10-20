@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, ListMusic, ListPlus, Loader2, Play, Plus } from "lucide-react";
+import { CopyPlus, Download, ListMusic, ListPlus, Loader2, Play, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { cn, formatDuration } from "@/lib/utils";
@@ -12,6 +12,8 @@ import { EmptyState, QueryError } from "@/components/ui/empty";
 import { TaskProgress, type TaskState } from "@/components/ui/task-progress";
 import { LocalSearch } from "@/components/media/LibraryToolbar";
 import { MediaHero } from "@/components/media/MediaHero";
+import { useTrackedJobs } from "@/components/ui/job-progress";
+import { createPlaylistBasedOn } from "./createBasedOn";
 
 type ExtTrack = {
   provider_track_id: string;
@@ -155,6 +157,23 @@ export function ProviderPlaylistPage() {
     }
   };
 
+  const trackJob = useTrackedJobs((s) => s.track);
+  const [copying, setCopying] = useState(false);
+  const createBasedOn = async () => {
+    setCopying(true);
+    try {
+      const name = q.data?.playlist?.name;
+      const jid = await createPlaylistBasedOn(provider, { id, name, artwork: q.data?.playlist?.artwork });
+      if (jid) trackJob(jid, `Creating playlist based on ${name || "playlist"}`);
+      toast.success("Creating your playlist. Track its progress on My Playlists.");
+      void qc.invalidateQueries({ queryKey: ["playlists"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create the playlist");
+    } finally {
+      setCopying(false);
+    }
+  };
+
   const rowAction = async (i: number, fn: (idx: number[]) => Promise<void>) => {
     setBusyRow(i);
     try {
@@ -199,6 +218,9 @@ export function ProviderPlaylistPage() {
             playDisabled={!tracks.length}
             actions={
               <>
+                <Button size="sm" onClick={() => void createBasedOn()} disabled={copying || !tracks.length} title="Copy the name, songs and cover into a new SoundDock playlist. Missing songs are downloaded.">
+                  <CopyPlus /> Create Playlist Based On
+                </Button>
                 <Button variant="secondary" size="sm" onClick={() => void queue(targets())} disabled={running || !tracks.length}>
                   <ListPlus /> Queue {scope}
                 </Button>
