@@ -44,13 +44,25 @@ ARG YT_DLP_SHA256=1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4
 ARG DENO_VERSION=2.9.7
 ARG DENO_SHA256_AMD64=c6527f24f4b16031d3ae4fa9f658d5f11534c8d84ce7dc8502420280919c3490
 ARG DENO_SHA256_ARM64=c832298b1ad4422481334855f6003e0f54145762c5a134f20a489511d2f65bbf
+# pg_dump must match the server's major version (Compose runs postgres:16):
+# an older pg_dump refuses a newer server, and a newer one writes settings
+# Postgres 16 rejects on restore. Debian bookworm only ships 15, so the
+# client comes from the PostgreSQL apt repository (key pinned below).
+ARG PG_MAJOR=16
+ARG PGDG_KEY_SHA256=0144068502a1eddd2a0280ede10ef607d1ec592ce819940991203941564e8e76
 ARG TARGETARCH
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean \
     && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/keep-cache \
     && apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates ffmpeg wget unzip libopus0 python3 postgresql-client \
+        ca-certificates ffmpeg wget unzip libopus0 python3 \
+    && wget -qO /usr/share/keyrings/pgdg.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "${PGDG_KEY_SHA256}  /usr/share/keyrings/pgdg.asc" | sha256sum -c - \
+    && . /etc/os-release \
+    && echo "deb [signed-by=/usr/share/keyrings/pgdg.asc] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update && apt-get install -y --no-install-recommends postgresql-client-${PG_MAJOR} \
+    && pg_dump --version | grep -q " ${PG_MAJOR}\." \
     && wget -qO /tmp/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp" \
     && echo "${YT_DLP_SHA256}  /tmp/yt-dlp" | sha256sum -c - \
     && install -m 0755 /tmp/yt-dlp /usr/local/bin/yt-dlp \
