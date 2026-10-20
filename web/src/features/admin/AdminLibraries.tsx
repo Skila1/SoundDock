@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightLeft, Combine, KeyRound, Pencil, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -52,6 +52,7 @@ type StorageRow = {
 
 export function AdminLibraries() {
   const [params] = useSearchParams();
+  if (params.get("tab") === "storage") return <Navigate to="/admin/storage" replace />;
   return (
     <div>
       <PageHeader title="Libraries" description="Your music libraries and who can use them. Scan them from the Scan page. Removing a library never deletes files on network or local folders." />

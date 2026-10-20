@@ -174,6 +174,7 @@ export function AppRouter() {
             <Route path="media-settings" element={<AdminMediaSettings />} />
             <Route path="retention" element={<AdminRetention />} />
             <Route path="archive" element={<AdminArchive />} />
+            <Route path="connected" element={<ConnectedServicesPage inAdmin />} />
             <Route path="stats-migration" element={<AdminStatsMigration />} />
             {Object.entries(legacyAdminRedirects).map(([from, to]) => (
               <Route key={from} path={from} element={<Navigate to={to} replace />} />

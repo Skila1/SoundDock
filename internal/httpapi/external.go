@@ -497,10 +497,28 @@ func (s *Server) youtubeFillExternalItem(w http.ResponseWriter, r *http.Request)
 			artists = append(artists, a)
 		}
 	}
-	tid, err := external.FillTrack(r.Context(), s.YouTube(), prov, extID, title, artists)
-	if err != nil {
-		writeErr(w, 502, "youtube", err.Error())
-		return
+	// A video picked by hand in Needs review is fetched as is; otherwise the
+	// matcher searches YouTube itself.
+	var body struct {
+		VideoID string `json:"video_id"`
+	}
+	_ = decodeJSON(r, &body)
+	var tid uuid.UUID
+	if v := strings.TrimSpace(body.VideoID); v != "" {
+		got, ferr := s.YouTube().Fetch(r.Context(), []string{v})
+		if ferr != nil {
+			writeErr(w, 502, "youtube", ferr.Error())
+			return
+		}
+		if len(got) > 0 {
+			tid = got[0]
+		}
+	} else {
+		tid, err = external.FillTrack(r.Context(), s.YouTube(), prov, extID, title, artists)
+		if err != nil {
+			writeErr(w, 502, "youtube", err.Error())
+			return
+		}
 	}
 	if tid == uuid.Nil {
 		writeErr(w, 404, "not_found", "no matching YouTube track")

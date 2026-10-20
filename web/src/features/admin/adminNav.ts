@@ -8,6 +8,7 @@ import {
   KeyRound,
   LayoutDashboard,
   Library,
+  Link2,
   MessageCircle,
   Plug,
   RefreshCw,
@@ -68,7 +69,8 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
     links: [
       { to: "users", label: "Users", icon: Users },
       { to: "groups", label: "Groups", icon: UsersRound },
-      { to: "discord", label: "Discord", icon: MessageCircle }
+      { to: "discord", label: "Discord", icon: MessageCircle },
+      { to: "connected", label: "Connected Services", icon: Link2 }
     ]
   },
   {
@@ -102,7 +104,6 @@ export const legacyAdminRedirects: Readonly<Record<string, string>> = {
   roles: "/admin/groups",
   grants: "/admin/libraries?tab=access",
   "duplicate-review": "/admin/scan?tab=duplicates",
-  connected: "/settings/connected",
   metadata: "/admin/media-settings",
   lyrics: "/admin/media-settings",
   transcoding: "/admin/media-settings",

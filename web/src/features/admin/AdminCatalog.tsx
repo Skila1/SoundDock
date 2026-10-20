@@ -1,3 +1,4 @@
+import { Navigate, useSearchParams } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Trash2 } from "lucide-react";
@@ -528,6 +529,11 @@ function AlbumEditForm({
 }
 
 export function AdminCatalog() {
+  // Old Catalog tabs moved to the Scan page; keep bookmarks working.
+  const [params] = useSearchParams();
+  const tab = params.get("tab");
+  if (tab === "duplicates") return <Navigate to="/admin/scan?tab=duplicates" replace />;
+  if (tab === "cleanup") return <Navigate to="/admin/scan?tab=metadata" replace />;
   return (
     <div>
       <PageHeader title="Catalog" description="Edit albums and songs across every library. Find duplicates and fill in missing details from the Scan page." />

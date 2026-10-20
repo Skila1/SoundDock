@@ -3,9 +3,10 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { api } from "@/lib/api";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
+import { artworkUrl, cn, formatDuration } from "@/lib/utils";
 import { toast } from "sonner";
-import type { SearchHit } from "@/types/api";
+import { hasPerm } from "@/lib/perms";
+import type { SearchHit, User, YoutubeSearchResponse } from "@/types/api";
 
 type UnmatchedItem = {
   id: string;
@@ -38,15 +39,23 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = items.find((it) => it.id === activeId) || items[0];
 
+  const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
+  const canYouTube = hasPerm(me.data, "playlists.external_import");
+
   if (!active) return null;
 
-  const pick = async (it: UnmatchedItem, trackId: string) => {
+  const pick = async (it: UnmatchedItem, hit: SearchHit) => {
     // Drop it from the list at once; the server catches up in the background.
     qc.setQueryData<UnmatchedItem[]>(key, (old) => (old || []).filter((x) => x.id !== it.id));
     setActiveId(null);
     try {
-      await api.post(`/api/v1/playlists/${playlistId}/items/${it.id}/match`, { track_id: trackId });
-      toast.success(`Matched ${it.title}`);
+      if (hit.type === "youtube") {
+        await api.post(`/api/v1/playlists/${playlistId}/items/${it.id}/youtube`, { video_id: hit.id });
+        toast.success(`Downloading ${it.title}`);
+      } else {
+        await api.post(`/api/v1/playlists/${playlistId}/items/${it.id}/match`, { track_id: hit.id });
+        toast.success(`Matched ${it.title}`);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not match");
       qc.invalidateQueries({ queryKey: key });
@@ -61,7 +70,7 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
       <p className="mb-4 text-sm text-muted">
         {items.length} {items.length === 1 ? "song was" : "songs were"} not found automatically. Pick one and choose the right song.
       </p>
-      <MatchSearch key={active.id} item={active} onPick={(id) => pick(active, id)} />
+      <MatchSearch key={active.id} item={active} youtube={canYouTube} onPick={(h) => pick(active, h)} />
       <ul className="mt-4 space-y-1">
         {items.map((it) => (
           <li key={it.id}>
@@ -86,19 +95,46 @@ export function UnmatchedPanel({ playlistId }: { playlistId: string }) {
   );
 }
 
-function MatchSearch({ item, onPick }: { item: UnmatchedItem; onPick: (id: string) => void }) {
+function MatchSearch({ item, youtube, onPick }: { item: UnmatchedItem; youtube: boolean; onPick: (h: SearchHit) => void }) {
   const [text, setText] = useState(() => [firstArtist(item.artists), item.title].filter(Boolean).join(" "));
   const [debounced, setDebounced] = useState(text);
   useEffect(() => {
-    const t = setTimeout(() => setDebounced(text.trim()), 250);
+    const t = setTimeout(() => setDebounced(text.trim()), 300);
     return () => clearTimeout(t);
   }, [text]);
-  const hits = useQuery({
+  const ready = debounced.length > 1;
+  const lib = useQuery({
     queryKey: ["unmatched-search", debounced],
-    enabled: debounced.length > 1,
+    enabled: ready,
     queryFn: () => api.get<{ results: SearchHit[] }>(`/api/v1/search?q=${encodeURIComponent(debounced)}&type=track`)
   });
-  const results = (hits.data?.results || []).slice(0, 8);
+  const yt = useQuery({
+    queryKey: ["unmatched-search-yt", debounced],
+    enabled: ready && youtube,
+    staleTime: 60_000,
+    queryFn: () => api.get<YoutubeSearchResponse>(`/api/v1/search/youtube?q=${encodeURIComponent(debounced)}&limit=6`)
+  });
+  const libHits = (lib.data?.results || []).slice(0, 5);
+  const ytHits = (yt.data?.results || []).filter((h) => h.type === "youtube").slice(0, 6);
+  const row = (h: SearchHit) => (
+    <li key={h.type + h.id}>
+      <button
+        type="button"
+        className="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-2"
+        onClick={() => onPick(h)}
+      >
+        {h.type === "youtube" && (
+          <img src={h.artwork_url || artworkUrl("youtube", h.id, "thumb")} alt="" className="h-8 w-12 shrink-0 rounded object-cover" />
+        )}
+        <span className="min-w-0 flex-1 truncate">
+          <span className="font-medium">{h.title}</span>
+          {h.artist ? <span className="text-muted"> · {h.artist}</span> : null}
+          {h.duration_ms ? <span className="text-subtle"> · {formatDuration(h.duration_ms)}</span> : null}
+        </span>
+        <span className="shrink-0 text-xs text-accent">{h.type === "youtube" ? "Download this" : "Use this"}</span>
+      </button>
+    </li>
+  );
   return (
     <div className="rounded-xl border border-border bg-surface-2/60 p-2">
       <div className="relative">
@@ -109,29 +145,24 @@ function MatchSearch({ item, onPick }: { item: UnmatchedItem; onPick: (id: strin
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder={`Search for "${item.title}"`}
-          aria-label="Search your library"
+          aria-label="Search your library and YouTube"
         />
       </div>
-      <ul className="mt-1 max-h-72 overflow-auto">
-        {results.map((h) => (
-          <li key={h.id}>
-            <button
-              type="button"
-              className="flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm hover:bg-surface-2"
-              onClick={() => onPick(h.id)}
-            >
-              <span className="min-w-0 truncate">
-                <span className="font-medium">{h.title}</span>
-                {h.artist ? <span className="text-muted"> · {h.artist}</span> : null}
-              </span>
-              <span className="shrink-0 text-xs text-accent">Use this</span>
-            </button>
-          </li>
-        ))}
-        {debounced.length > 1 && !hits.isLoading && !results.length && (
-          <li className="px-3 py-3 text-sm text-muted">No songs in your library match. Add it from YouTube with the main search, then pick it here.</li>
-        )}
-      </ul>
+      {ready && (
+        <div className="mt-1 max-h-96 overflow-auto">
+          <p className="px-3 pt-2 text-[11px] font-semibold uppercase tracking-wider text-subtle">Library</p>
+          <ul>{libHits.map(row)}</ul>
+          {!lib.isLoading && !libHits.length && <p className="px-3 py-2 text-sm text-muted">Nothing in your library.</p>}
+          {youtube && (
+            <>
+              <p className="px-3 pt-3 text-[11px] font-semibold uppercase tracking-wider text-subtle">YouTube</p>
+              {yt.isLoading && <p className="px-3 py-2 text-sm text-muted">Searching YouTube…</p>}
+              <ul>{ytHits.map(row)}</ul>
+              {!yt.isLoading && !ytHits.length && <p className="px-3 py-2 text-sm text-muted">{yt.isError ? "YouTube search failed." : "No YouTube results."}</p>}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
