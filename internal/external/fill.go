@@ -2,7 +2,11 @@ package external
 
 import (
 	"context"
+	"errors"
+	"log/slog"
+	"net"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/matcher"
@@ -16,73 +20,243 @@ type Filler interface {
 	Fetch(ctx context.Context, refs []string) ([]uuid.UUID, error)
 }
 
-func pickYouTubeID(hits []scapex.Hit, title string, artists []string) string {
-	wantT := matcher.NormaliseTitle(title)
-	if wantT == "" {
-		return ""
+type inlineSearchKey struct{}
+
+// WithInlineSearch lets a Filler run searches on the caller's worker
+// instead of the interactive search pool (playlist import jobs).
+func WithInlineSearch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, inlineSearchKey{}, true)
+}
+
+func InlineSearch(ctx context.Context) bool {
+	v, _ := ctx.Value(inlineSearchKey{}).(bool)
+	return v
+}
+
+const (
+	ytSearchLimit   = 10
+	ytInlineTimeout = 45 * time.Second
+	ytPickThreshold = 0.65
+)
+
+// Words in a video title that mean a different recording, unless the
+// requested title has them too.
+var ytNoise = []string{"live", "remix", "cover", "karaoke", "sped up", "speed up", "nightcore", "slowed", "8d", "instrumental", "reverb", "bass boosted"}
+
+func containsWord(hay, needle string) bool {
+	return strings.Contains(" "+hay+" ", " "+needle+" ")
+}
+
+func artistInHit(artists []string, title, channel string) bool {
+	ch := matcher.CleanArtist(channel)
+	chFlat := strings.ReplaceAll(ch, " ", "")
+	for _, a := range artists {
+		ca := matcher.CleanArtist(a)
+		if ca == "" {
+			continue
+		}
+		if containsWord(title, ca) || ch == ca {
+			return true
+		}
+		if flat := strings.ReplaceAll(ca, " ", ""); chFlat != "" && strings.Contains(chFlat, flat) {
+			return true
+		}
 	}
-	wantA := ""
-	if len(artists) > 0 {
-		wantA = matcher.NormaliseTitle(artists[0])
+	return false
+}
+
+func scoreYouTubeHit(h scapex.Hit, want []string, rawTitle string, artists []string, durationMS int) float64 {
+	vt := matcher.Fold(h.Title)
+	have := map[string]bool{}
+	for _, w := range strings.Fields(vt) {
+		if w == "pt" {
+			w = "part"
+		}
+		have[w] = true
 	}
+	n := 0
+	for _, w := range want {
+		if have[w] {
+			n++
+		}
+	}
+	overlap := float64(n) / float64(len(want))
+	if overlap < 0.6 {
+		return 0
+	}
+	score := overlap * 0.6
+	hasArtists := false
+	for _, a := range artists {
+		if strings.TrimSpace(a) != "" {
+			hasArtists = true
+		}
+	}
+	artistHit := artistInHit(artists, vt, h.Artist)
+	if artistHit {
+		score += 0.3
+	} else if !hasArtists {
+		score += 0.1
+	} else if hasArtists && len(want) <= 2 {
+		return 0
+	}
+	if strings.HasSuffix(strings.TrimSpace(h.Artist), " - Topic") {
+		score += 0.05
+	}
+	if durationMS > 0 && h.DurationMS > 0 {
+		d := durationMS - h.DurationMS
+		if d < 0 {
+			d = -d
+		}
+		switch {
+		case d <= 8000:
+			score += 0.15
+		case d <= 20000:
+			score += 0.05
+		case d > 45000:
+			score -= 0.3
+		}
+	}
+	rt := matcher.Fold(rawTitle)
+	for _, w := range ytNoise {
+		if containsWord(vt, w) && !containsWord(rt, w) {
+			score -= 0.35
+		}
+	}
+	return score
+}
+
+func pickYouTubeID(hits []scapex.Hit, title string, artists []string, durationMS int) (string, float64) {
+	want := matcher.Words(title)
+	if len(want) == 0 {
+		return "", 0
+	}
+	best, bestScore := "", 0.0
 	for _, h := range hits {
 		if h.ID == "" {
 			continue
 		}
-		nt := matcher.NormaliseTitle(h.Title + " " + h.Artist)
-		titleHit := strings.Contains(nt, wantT) || strings.Contains(wantT, matcher.NormaliseTitle(h.Title))
-		artistHit := wantA == "" || strings.Contains(nt, wantA)
-		if titleHit && artistHit {
-			return h.ID
+		if s := scoreYouTubeHit(h, want, title, artists, durationMS); s >= ytPickThreshold && s > bestScore {
+			best, bestScore = h.ID, s
 		}
 	}
-	return ""
+	return best, bestScore
 }
 
-func youtubeQuery(title string, artists []string) string {
-	parts := make([]string, 0, len(artists)+1)
+func youtubeQueries(title string, artists []string, album string) []string {
+	base := matcher.BaseTitle(title)
+	if base == "" {
+		base = strings.TrimSpace(title)
+	}
+	if base == "" {
+		return nil
+	}
+	first := ""
 	for _, a := range artists {
-		a = strings.TrimSpace(a)
-		if a != "" {
-			parts = append(parts, a)
+		if a = strings.TrimSpace(a); a != "" {
+			first = a
+			break
 		}
 	}
-	title = strings.TrimSpace(title)
-	if title != "" {
-		parts = append(parts, title)
+	var qs []string
+	add := func(q string) {
+		q = strings.TrimSpace(q)
+		for _, x := range qs {
+			if strings.EqualFold(x, q) {
+				return
+			}
+		}
+		if q != "" {
+			qs = append(qs, q)
+		}
 	}
-	return strings.TrimSpace(strings.Join(parts, " "))
+	if first != "" {
+		add(first + " - " + base)
+		add(base + " " + first)
+	} else {
+		add(base)
+	}
+	if album = strings.TrimSpace(album); album != "" && matcher.CleanTitle(album) != matcher.CleanTitle(base) {
+		add(base + " " + album)
+	}
+	return qs
 }
 
-func fillFromYouTube(ctx context.Context, sx Filler, title string, artists []string) (uuid.UUID, error) {
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "timeout")
+}
+
+func searchYouTube(ctx context.Context, sx Filler, q string) ([]scapex.Hit, error) {
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		sctx, cancel := ctx, context.CancelFunc(func() {})
+		if InlineSearch(ctx) {
+			sctx, cancel = context.WithTimeout(ctx, ytInlineTimeout)
+		}
+		var hits []scapex.Hit
+		hits, err = sx.Search(sctx, q, ytSearchLimit)
+		cancel()
+		if err == nil {
+			return hits, nil
+		}
+		if ctx.Err() != nil || !isTimeout(err) {
+			break
+		}
+	}
+	slog.Warn("youtube fill search", "query", q, "err", err)
+	return nil, err
+}
+
+func fillFromYouTube(ctx context.Context, sx Filler, title string, artists []string, album string, durationMS int) (uuid.UUID, error) {
 	if sx == nil {
 		return uuid.Nil, nil
 	}
-	q := youtubeQuery(title, artists)
-	if q == "" {
-		return uuid.Nil, nil
+	qs := youtubeQueries(title, artists, album)
+	var lastErr error
+	searched := false
+	for _, q := range qs {
+		hits, err := searchYouTube(ctx, sx, q)
+		if err != nil {
+			lastErr = err
+			if ctx.Err() != nil {
+				return uuid.Nil, ctx.Err()
+			}
+			continue
+		}
+		searched = true
+		id, _ := pickYouTubeID(scapex.RankHits(q, hits), title, artists, durationMS)
+		if id == "" {
+			continue
+		}
+		got, err := sx.Fetch(ctx, []string{id})
+		if err != nil || len(got) == 0 {
+			return uuid.Nil, err
+		}
+		return got[0], nil
 	}
-	hits, err := sx.Search(ctx, q, 8)
-	if err != nil || len(hits) == 0 {
-		return uuid.Nil, err
+	if !searched {
+		return uuid.Nil, lastErr
 	}
-	hits = scapex.RankHits(q, hits)
-	id := pickYouTubeID(hits, title, artists)
-	if id == "" {
-		return uuid.Nil, nil
-	}
-	got, err := sx.Fetch(ctx, []string{id})
-	if err != nil || len(got) == 0 {
-		return uuid.Nil, err
-	}
-	return got[0], nil
+	return uuid.Nil, nil
 }
 
 func FillTrack(ctx context.Context, sx Filler, provider, videoID, title string, artists []string) (uuid.UUID, error) {
+	return FillTrackInfo(ctx, sx, provider, Track{ID: videoID, Title: title, Artists: artists})
+}
+
+// FillTrackInfo is FillTrack with album and duration, which improve the
+// YouTube pick.
+func FillTrackInfo(ctx context.Context, sx Filler, provider string, tr Track) (uuid.UUID, error) {
 	if provider == "youtube" {
-		return fillFromVideo(ctx, sx, videoID)
+		return fillFromVideo(ctx, sx, tr.ID)
 	}
-	return fillFromYouTube(ctx, sx, title, artists)
+	return fillFromYouTube(ctx, sx, tr.Title, tr.Artists, tr.Album, tr.DurationMS)
 }
 
 func fillFromVideo(ctx context.Context, sx Filler, videoID string) (uuid.UUID, error) {

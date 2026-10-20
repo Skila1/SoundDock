@@ -7,10 +7,6 @@ import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Field } from "@/components/ui/field";
 import { PageHeader } from "@/components/ui/empty";
-import { AdminTabs } from "./adminUi";
-import { DuplicateReview } from "./DuplicateReview";
-import { CatalogCleanup } from "./CatalogCleanup";
-import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import type { Track, TrackPage } from "@/types/api";
 
@@ -40,7 +36,6 @@ type TrackMeta = {
 function CatalogEditor() {
   const qc = useQueryClient();
   const [albumQ, setAlbumQ] = useState("");
-  const [singles, setSingles] = useState(true);
   const [trackQ, setTrackQ] = useState("");
   const [pickedAlbums, setPickedAlbums] = useState<Set<string>>(new Set());
   const [pickedTracks, setPickedTracks] = useState<Set<string>>(new Set());
@@ -54,10 +49,10 @@ function CatalogEditor() {
   const [moveNewTitle, setMoveNewTitle] = useState("");
 
   const albums = useQuery({
-    queryKey: ["admin-catalog-albums", albumQ, singles],
+    queryKey: ["admin-catalog-albums", albumQ],
     queryFn: () =>
       api.get<CatalogAlbum[]>(
-        `/api/v1/albums?limit=400&singles=${singles ? "1" : "0"}&q=${encodeURIComponent(albumQ)}`
+        `/api/v1/albums?limit=400&q=${encodeURIComponent(albumQ)}`
       )
   });
   const tracks = useQuery({
@@ -208,7 +203,7 @@ function CatalogEditor() {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">Edit albums and track details. Merge the one-track albums that imports often create.</p>
+        <p className="text-sm text-muted">Edit albums and track details. Albums can be empty and filled later.</p>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="h-4 w-4" /> New album
         </Button>
@@ -218,10 +213,6 @@ function CatalogEditor() {
         <section>
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <h2 className="text-base font-semibold tracking-tight">Albums</h2>
-            <label className="ml-auto flex items-center gap-2 text-sm text-muted">
-              One-track albums
-              <Switch checked={singles} onCheckedChange={setSingles} />
-            </label>
           </div>
           <Input
             className="mb-3"
@@ -259,7 +250,7 @@ function CatalogEditor() {
             ))}
             {!albumList.length && (
               <p className="px-3 py-8 text-center text-sm text-muted">
-                {singles ? "No one-track albums." : "No albums match."}
+                No albums match.
               </p>
             )}
           </div>
@@ -539,15 +530,8 @@ function AlbumEditForm({
 export function AdminCatalog() {
   return (
     <div>
-      <PageHeader title="Catalog" description="Tidy up albums, tracks, duplicates, and metadata across every library." />
-      <AdminTabs
-        fallback="edit"
-        tabs={[
-          { id: "edit", label: "Albums & tracks", content: <CatalogEditor /> },
-          { id: "duplicates", label: "Duplicates", content: <DuplicateReview /> },
-          { id: "cleanup", label: "Cleanup", content: <CatalogCleanup /> }
-        ]}
-      />
+      <PageHeader title="Catalog" description="Edit albums and songs across every library. Find duplicates and fill in missing details from the Scan page." />
+      <CatalogEditor />
     </div>
   );
 }

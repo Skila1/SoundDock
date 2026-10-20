@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { adminNavGroups, adminNavPaths, adminPath, legacyAdminRedirects } from "./adminNav";
+import { adminGroupFor, adminNavGroups, adminNavPaths, adminPath, legacyAdminRedirects } from "./adminNav";
 
 const routerSource = readFileSync(resolve(__dirname, "../../app/router.tsx"), "utf8");
 
@@ -9,10 +9,10 @@ describe("admin navigation", () => {
   it("matches the agreed structure", () => {
     expect(adminNavGroups.map((g) => [g.label, g.links.map((l) => l.label)])).toEqual([
       ["Overview", ["Dashboard", "Activity"]],
-      ["Server", ["Backups", "Updates", "Integrations"]],
-      ["People", ["Users", "Groups", "Discord"]],
-      ["Media", ["Libraries & Storage", "Catalog", "Media Settings", "Retention", "Archive"]],
-      ["Account", ["Connected Services"]]
+      ["Library", ["Libraries", "Scan", "Catalog", "Media Settings"]],
+      ["Storage", ["Storage", "Retention", "Archive", "Backups"]],
+      ["IAM", ["Users", "Groups", "Discord"]],
+      ["System", ["Updates", "Integrations"]]
     ]);
   });
 
@@ -32,6 +32,14 @@ describe("admin navigation", () => {
     }
   });
 
+  it("finds the bar button for a page", () => {
+    expect(adminGroupFor("/admin").id).toBe("overview");
+    expect(adminGroupFor("/admin/scan").id).toBe("library");
+    expect(adminGroupFor("/admin/backups").id).toBe("storage");
+    expect(adminGroupFor("/admin/users/1/library").id).toBe("iam");
+    expect(adminGroupFor("/admin/updates").id).toBe("system");
+  });
+
   it("builds admin paths", () => {
     expect(adminPath(".")).toBe("/admin");
     expect(adminPath("activity")).toBe("/admin/activity");
@@ -39,13 +47,13 @@ describe("admin navigation", () => {
   });
 
   it("redirects every retired page to a current page", () => {
-    const current = new Set([...adminNavPaths(), "/admin/stats-migration"]);
+    const current = new Set([...adminNavPaths(), "/admin/stats-migration", "/settings/connected"]);
     const navSegments = new Set(adminNavGroups.flatMap((g) => g.links.map((l) => l.to)));
     for (const [from, to] of Object.entries(legacyAdminRedirects)) {
       expect(navSegments.has(from), `${from} collides with a live page`).toBe(false);
       expect(current.has(to.split("?")[0]), `${from} -> ${to}`).toBe(true);
     }
-    for (const retired of ["health", "diagnostics", "database", "workers", "inspect", "logs", "security", "storage", "grants", "quotas", "metadata", "lyrics", "transcoding", "acquisition-policy", "duplicate-review", "listen-compare", "stats-rebuild"]) {
+    for (const retired of ["health", "diagnostics", "database", "workers", "inspect", "logs", "security", "grants", "connected", "quotas", "metadata", "lyrics", "transcoding", "acquisition-policy", "duplicate-review", "listen-compare", "stats-rebuild"]) {
       expect(legacyAdminRedirects[retired], retired).toBeTruthy();
     }
   });

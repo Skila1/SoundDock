@@ -269,6 +269,7 @@ export function TrackList({
       toast.success(ids.length === 1 ? "Updated" : `Updated ${ids.length} tracks`);
       if (bulkWriteBack) await callWriteBack(ids);
       setBulkOpen(false);
+      setSelected(new Set());
       refreshCatalogue(qc);
     } catch {
       toast.error("Could not update tracks");
@@ -286,12 +287,19 @@ export function TrackList({
             "group grid cursor-pointer items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-surface-2/80",
             showAlbum ? "grid-cols-[20px_32px_minmax(0,1fr)_auto_auto] md:grid-cols-[20px_32px_minmax(0,1fr)_minmax(0,1fr)_auto_auto]" : "grid-cols-[20px_32px_minmax(0,1fr)_auto_auto]",
             activeId === t.id && "text-accent",
+            selected.size > 0 && "hover:ring-1 hover:ring-inset hover:ring-accent/40",
             selected.has(t.id) && "bg-accent/10 hover:bg-accent/15"
           )}
           onClick={(e) => {
             if ((e.target as HTMLElement).closest("a,button,input,[role='menu']")) return;
             if (e.shiftKey || e.ctrlKey || e.metaKey) {
               handleSelect(t, i, e);
+              return;
+            }
+            // While anything is ticked the whole row is the checkbox, so a
+            // miss between boxes never starts playback.
+            if (selected.size) {
+              toggleOne(t, i);
               return;
             }
             onPlay(i);
@@ -508,10 +516,10 @@ export function TrackList({
           <Button size="sm" variant="secondary" onClick={() => { setPendingIds([...selected]); setPlOpen(true); }}>
             Add to playlist
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => saveTracksOffline([...selected])}>
+          <Button size="sm" variant="secondary" onClick={() => { saveTracksOffline([...selected]); setSelected(new Set()); }}>
             Save offline
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => selected.forEach((id) => { const t = tracks.find((x) => x.id === id); if (t) downloadTrack(t); })}>
+          <Button size="sm" variant="secondary" onClick={() => { selected.forEach((id) => { const t = tracks.find((x) => x.id === id); if (t) downloadTrack(t); }); setSelected(new Set()); }}>
             Download
           </Button>
           {admin && (
@@ -547,6 +555,7 @@ export function TrackList({
                 onClick={async () => {
                   await addTracksToPlaylist(p.id, pendingIds);
                   setPlOpen(false);
+                  setSelected(new Set());
                 }}
               >
                 {p.name}

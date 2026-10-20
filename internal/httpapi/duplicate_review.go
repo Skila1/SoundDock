@@ -38,6 +38,10 @@ func (s *Server) MountDuplicateReview(r chi.Router) {
 	r.Get("/duplicate-review", s.adminDuplicateReviewList)
 	r.Post("/duplicate-review/{id}/merge", s.adminDuplicateReviewMerge)
 	r.Post("/duplicate-review/{id}/ignore", s.adminDuplicateReviewIgnore)
+	r.Get("/duplicates/scan", s.adminDuplicateScanResult)
+	r.Post("/duplicates/scan", s.adminDuplicateScan)
+	r.Post("/duplicates/merge", s.adminDuplicateMerge)
+	r.Post("/duplicates/ignore", s.adminDuplicateIgnore)
 }
 
 func (s *Server) requireTracksMerge(w http.ResponseWriter, r *http.Request) bool {

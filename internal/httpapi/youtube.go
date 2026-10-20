@@ -37,7 +37,7 @@ func (y isolatedYT) Search(ctx context.Context, q string, limit int) ([]scapex.H
 	if y.s == nil || y.s.ScapeX == nil {
 		return nil, nil
 	}
-	if y.s.Jobs == nil || !y.s.Jobs.Started() {
+	if y.s.Jobs == nil || !y.s.Jobs.Started() || external.InlineSearch(ctx) {
 		return y.s.ScapeX.Search(ctx, q, limit)
 	}
 	var hits []scapex.Hit

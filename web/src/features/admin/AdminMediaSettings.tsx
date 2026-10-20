@@ -33,7 +33,7 @@ function MetadataSettings() {
     <Card title="Metadata" description="MusicBrainz fills in titles, artists, genres, and IDs; Cover Art Archive supplies album artwork.">
       <SettingSwitch
         label="Look up metadata online"
-        description={`Used during scans and by Catalog → Cleanup. Sources: ${(q.data?.providers || []).join(", ") || "MusicBrainz, Cover Art Archive"}.`}
+        description={`Used during scans and by Metadata cleanup on the Scan page. Sources: ${(q.data?.providers || []).join(", ") || "MusicBrainz, Cover Art Archive"}.`}
         checked={!!q.data?.external_enabled}
         disabled={q.isLoading}
         onChange={async (v) => {

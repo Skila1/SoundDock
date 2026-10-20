@@ -16,7 +16,7 @@ import (
 const updateExistingTrackSQL = `
 	UPDATE tracks SET
 	  title=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='title') THEN title ELSE $2 END,
-	  album_id=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='album') THEN album_id ELSE $3 END,
+	  album_id=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='album') THEN album_id ELSE COALESCE($3::uuid, album_id) END,
 	  disc_number=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='disc_number') THEN disc_number ELSE $4 END,
 	  track_number=CASE WHEN EXISTS (SELECT 1 FROM metadata_locks WHERE entity_type='track' AND entity_id=$1 AND field='track_number') THEN track_number ELSE $5 END,
 	  duration_ms=CASE WHEN $6 > 0 THEN $6 ELSE duration_ms END,
@@ -99,7 +99,7 @@ func (s *Scanner) updateExistingTrack(ctx context.Context, trackID, albumID uuid
 	}
 	title = s.keepStrongTitle(ctx, trackID, title)
 	_, _ = s.pool.Exec(ctx, updateExistingTrackSQL,
-		trackID, title, albumID, max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre, probe.Source, confOrNil(probe.Confidence), probe.MBID)
+		trackID, title, nullUUID(albumID), max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre, probe.Source, confOrNil(probe.Confidence), probe.MBID)
 }
 
 func (s *Scanner) keepStrongTitle(ctx context.Context, trackID uuid.UUID, incoming string) string {
@@ -130,6 +130,15 @@ func WeakIncomingTitle(incoming, videoID string) bool {
 func IsPlaceholderTitle(s string) bool {
 	s = strings.TrimSpace(s)
 	return s == "" || strings.EqualFold(s, "Restoring") || strings.HasPrefix(s, "YouTube ")
+}
+
+// nullUUID sends uuid.Nil as SQL NULL so an unknown album is left blank
+// (new tracks) or left as it was (existing tracks).
+func nullUUID(id uuid.UUID) any {
+	if id == uuid.Nil {
+		return nil
+	}
+	return id
 }
 
 func confOrNil(c float64) any {

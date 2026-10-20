@@ -141,7 +141,7 @@ export function HomePage() {
           hasMore={!!full.hasNextPage}
           loadingMore={full.isFetchingNextPage}
           onMore={() => void full.fetchNextPage()}
-          onPlay={(i) => play(fullTracks.map((t) => t.id), i)}
+          onPlay={(i) => play([fullTracks[i].id])}
           onQueue={(t) => add([t.id]).then(() => toast.success("Added to queue"))}
           onNext={playNext}
         />

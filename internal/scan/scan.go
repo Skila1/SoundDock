@@ -290,10 +290,9 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 	if artistName == "" {
 		artistName = "Unknown Artist"
 	}
-	albumTitle := probe.Album
-	if albumTitle == "" {
-		albumTitle = "Unknown Album"
-	}
+	// Albums are optional: no album tag means no album, never a shared
+	// "Unknown Album" that unrelated songs pile into.
+	albumTitle := strings.TrimSpace(probe.Album)
 
 	artistSort, artistMBID := "", ""
 	if probe.AlbumArtist == "" || strings.EqualFold(probe.AlbumArtist, probe.Artist) {
@@ -330,7 +329,7 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 	if err == nil && trackID != uuid.Nil && s.trackOrFieldLocked(ctx, trackID, "album") {
 		_ = s.pool.QueryRow(ctx, `SELECT album_id FROM tracks WHERE id=$1`, trackID).Scan(&albumID)
 	}
-	if albumID == uuid.Nil {
+	if albumID == uuid.Nil && albumTitle != "" {
 		albumID, err = s.upsertAlbum(ctx, libID, albumTitle, probe, artistID)
 		if err != nil {
 			return err
@@ -346,7 +345,7 @@ func (s *Scanner) ingestFile(ctx context.Context, libID uuid.UUID, prov storage.
 		err = s.pool.QueryRow(ctx, `
 			INSERT INTO tracks (library_id, album_id, title, disc_number, track_number, duration_ms, year, genre_text, metadata_source, metadata_confidence, mbid)
 			VALUES ($1,$2,$3,$4,$5,$6,NULLIF($7,0),$8,$9,$10,NULLIF($11,'')) RETURNING id`,
-			libID, albumID, title, max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre, probe.Source, confOrNil(probe.Confidence), probe.MBID).Scan(&trackID)
+			libID, nullUUID(albumID), title, max1(probe.Disc), probe.Track, probe.DurationMS, probe.Year, probe.Genre, probe.Source, confOrNil(probe.Confidence), probe.MBID).Scan(&trackID)
 		if err != nil {
 			return err
 		}

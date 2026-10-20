@@ -23,6 +23,8 @@ type refreshRow struct {
 	MBID      string
 	Duration  int
 	Year      int
+	Disc      int
+	Track     int
 	Locked    bool
 }
 
@@ -68,6 +70,8 @@ func (s *Scanner) RefreshAll(ctx context.Context, runner *jobs.Runner, jobID uui
 		updated, cover, unmatched, ferr := s.refreshOne(ctx, row)
 		if ferr != nil {
 			rep.Failed++
+		} else if unmatched && !updated {
+			rep.Unmatched++
 		} else if row.Locked || !updated {
 			rep.Skipped++
 		} else {
@@ -116,7 +120,7 @@ func (s *Scanner) listRefreshRows(ctx context.Context) ([]refreshRow, error) {
 		         ORDER BY aa.position LIMIT 1
 		       ), ''),
 		       coalesce(t.genre_text, ''), coalesce(t.mbid, ''),
-		       t.duration_ms, coalesce(t.year, 0), t.locked
+		       t.duration_ms, coalesce(t.year, 0), coalesce(t.disc_number, 1), coalesce(t.track_number, 0), t.locked
 		FROM tracks t
 		LEFT JOIN albums al ON al.id=t.album_id
 		ORDER BY t.created_at`)
@@ -127,7 +131,7 @@ func (s *Scanner) listRefreshRows(ctx context.Context) ([]refreshRow, error) {
 	var out []refreshRow
 	for q.Next() {
 		var r refreshRow
-		if err := q.Scan(&r.TrackID, &r.AlbumID, &r.LibraryID, &r.Title, &r.Album, &r.Artist, &r.Genre, &r.MBID, &r.Duration, &r.Year, &r.Locked); err != nil {
+		if err := q.Scan(&r.TrackID, &r.AlbumID, &r.LibraryID, &r.Title, &r.Album, &r.Artist, &r.Genre, &r.MBID, &r.Duration, &r.Year, &r.Disc, &r.Track, &r.Locked); err != nil {
 			continue
 		}
 		out = append(out, r)
@@ -145,16 +149,40 @@ func (s *Scanner) refreshOne(ctx context.Context, row refreshRow) (updated, cove
 		Album:      row.Album,
 		Genre:      row.Genre,
 		Year:       row.Year,
+		Disc:       row.Disc,
+		Track:      row.Track,
 		DurationMS: row.Duration,
 		MBID:       row.MBID,
+	}
+	if strings.EqualFold(strings.TrimSpace(probe.Album), "Unknown Album") {
+		probe.Album = ""
 	}
 	before := probe
 	metadata.EnrichMusicBrainzForced(ctx, &probe)
 	unmatched = probe.Source != "musicbrainz" && probe.RecordingMBID == "" && probe.MBID == before.MBID
-	if row.AlbumID != uuid.Nil && probe.Album != "" && (strings.TrimSpace(row.Album) == "" || strings.EqualFold(row.Album, "Unknown Album")) {
-		_, _ = s.pool.Exec(ctx, `
-			UPDATE albums SET title=$2
-			WHERE id=$1 AND (title='' OR lower(title)='unknown album')`, row.AlbumID, probe.Album)
+	// No confident match: write nothing, so hand-entered details survive.
+	if unmatched {
+		return false, false, true, nil
+	}
+	// Fill an empty album by moving only this track onto the matched album.
+	// Renaming the old shared album would relabel every other song on it.
+	if before.Album == "" && probe.Album != "" && !s.trackOrFieldLocked(ctx, row.TrackID, "album") {
+		artist := probe.Artist
+		if artist == "" {
+			artist = row.Artist
+		}
+		if artist != "" {
+			if artistID, aerr := s.upsertArtistMeta(ctx, artist, probe.ArtistSortName, probe.ArtistMBID); aerr == nil {
+				if albumID, aerr := s.upsertAlbum(ctx, row.LibraryID, probe.Album, probe, artistID); aerr == nil {
+					row.AlbumID = albumID
+				}
+			}
+		}
+	}
+	// Keep the artists already on the track unless MusicBrainz agrees on the
+	// main one; then its credits (featured artists, ids) are added.
+	if row.Artist != "" && len(probe.Credits) > 0 && !strings.EqualFold(foldName(probe.Credits[0].Name), foldName(row.Artist)) {
+		probe.Credits = nil
 	}
 	var fallback uuid.UUID
 	_ = s.pool.QueryRow(ctx, `
@@ -188,6 +216,10 @@ func (s *Scanner) refreshOne(ctx context.Context, row refreshRow) (updated, cove
 	}
 	updated = true
 	return updated, cover, unmatched, nil
+}
+
+func foldName(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 func (s *Scanner) hasArtwork(ctx context.Context, row refreshRow) bool {

@@ -668,7 +668,6 @@ func (s *Server) listAlbums(w http.ResponseWriter, r *http.Request) {
 	if limit > 500 {
 		limit = 500
 	}
-	singles := strings.EqualFold(r.URL.Query().Get("singles"), "1") || strings.EqualFold(r.URL.Query().Get("singles"), "true")
 	rows, err := s.Pool.Query(r.Context(), `
 		SELECT a.id, a.title, a.year, a.edition_title, a.disc_count, a.is_compilation,
 		       coalesce(string_agg(DISTINCT ar.name, ', ') FILTER (WHERE ar.name IS NOT NULL), ''),
@@ -684,9 +683,8 @@ func (s *Server) listAlbums(w http.ResponseWriter, r *http.Request) {
 			WHERE aa2.album_id=a.id AND ar2.name ILIKE $3
 		  ))
 		GROUP BY a.id
-		HAVING (NOT $4 OR count(DISTINCT t.id) <= 1)
 		ORDER BY a.title
-		LIMIT $5`, libs, q, like, singles, limit)
+		LIMIT $4`, libs, q, like, limit)
 	if err != nil {
 		writeErr(w, 500, "db", err.Error())
 		return

@@ -39,6 +39,8 @@ const AdminUsers = lazy(() => import("@/features/admin/AdminUsers").then((m) => 
 const AdminRoles = lazy(() => import("@/features/admin/AdminRoles").then((m) => ({ default: m.AdminRoles })));
 const AdminDiscord = lazy(() => import("@/features/admin/AdminDiscord").then((m) => ({ default: m.AdminDiscord })));
 const AdminLibraries = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminLibraries })));
+const AdminStorage = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminStorage })));
+const AdminScan = lazy(() => import("@/features/admin/AdminScan").then((m) => ({ default: m.AdminScan })));
 const AdminCatalog = lazy(() => import("@/features/admin/AdminCatalog").then((m) => ({ default: m.AdminCatalog })));
 const AdminMediaSettings = lazy(() => import("@/features/admin/AdminMediaSettings").then((m) => ({ default: m.AdminMediaSettings })));
 const AdminArchive = lazy(() => import("@/features/admin/AdminArchive").then((m) => ({ default: m.AdminArchive })));
@@ -166,11 +168,12 @@ export function AppRouter() {
             <Route path="groups" element={<AdminRoles />} />
             <Route path="discord" element={<AdminDiscord />} />
             <Route path="libraries" element={<AdminLibraries />} />
+            <Route path="storage" element={<AdminStorage />} />
+            <Route path="scan" element={<AdminScan />} />
             <Route path="catalog" element={<AdminCatalog />} />
             <Route path="media-settings" element={<AdminMediaSettings />} />
             <Route path="retention" element={<AdminRetention />} />
             <Route path="archive" element={<AdminArchive />} />
-            <Route path="connected" element={<ConnectedServicesPage inAdmin />} />
             <Route path="stats-migration" element={<AdminStatsMigration />} />
             {Object.entries(legacyAdminRedirects).map(([from, to]) => (
               <Route key={from} path={from} element={<Navigate to={to} replace />} />

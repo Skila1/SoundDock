@@ -14,7 +14,7 @@ import { PageHeader } from "@/components/ui/empty";
 import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { formatBytes } from "@/lib/utils";
-import { ScanProgressBar, latestScan, scanActive, useScanRuns } from "@/features/library/ScanProgress";
+import { ScanProgressBar, latestScan, useScanRuns } from "@/features/library/ScanProgress";
 import { AdminTabs, ByteInput, Card, RowMenu, errorMessage } from "./adminUi";
 import { capLabel } from "./adminFormat";
 import { fetchQuotas, overrideFor, quotasKey, saveQuotas } from "./adminQuotas";
@@ -54,15 +54,23 @@ export function AdminLibraries() {
   const [params] = useSearchParams();
   return (
     <div>
-      <PageHeader title="Libraries & Storage" description="Your music libraries, where their files live, and who can use them. Removing a library never deletes files on network or local folders." />
+      <PageHeader title="Libraries" description="Your music libraries and who can use them. Scan them from the Scan page. Removing a library never deletes files on network or local folders." />
       <AdminTabs
         fallback="libraries"
         tabs={[
           { id: "libraries", label: "Libraries", content: <LibrariesTab /> },
-          { id: "storage", label: "Storage", content: <StorageTab /> },
           { id: "access", label: "Access", content: <LibraryAccess initialLibrary={params.get("lib") || ""} /> }
         ]}
       />
+    </div>
+  );
+}
+
+export function AdminStorage() {
+  return (
+    <div>
+      <PageHeader title="Storage" description="Where your music files live, how much space they use, and the default size limits." />
+      <StorageTab />
     </div>
   );
 }
@@ -91,7 +99,6 @@ function LibrariesTab() {
       <div className="space-y-3">
         {list.map((l) => {
           const scan = latestScan(scans.data, l.id);
-          const busy = scanActive(scan);
           const used = quotas.data?.library_usage?.[l.id] || 0;
           const cap = capFor(l.id);
           return (
@@ -107,21 +114,6 @@ function LibrariesTab() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <Button
-                    size="sm"
-                    disabled={busy}
-                    onClick={async () => {
-                      try {
-                        await api.post(`/api/v1/admin/libraries/${l.id}/scan`);
-                        toast.success("Scan started");
-                        scans.refetch();
-                      } catch (e) {
-                        toast.error(errorMessage(e, "Could not start scan"));
-                      }
-                    }}
-                  >
-                    {busy ? "Scanning…" : "Scan"}
-                  </Button>
                   <RowMenu
                     label={`Actions for ${l.name}`}
                     actions={[
@@ -413,7 +405,7 @@ function StorageTab() {
         })}
       </div>
 
-      <Card title="Default library limit" description="How much a library may hold unless it has its own limit (set under Edit on the Libraries tab). 0 means unlimited.">
+      <Card title="Default library limit" description="How much a library may hold unless it has its own limit (set under Edit on the Libraries page). 0 means unlimited.">
         <div className="flex flex-wrap items-center gap-2">
           <ByteInput value={defaultCap} onChange={setDefaultCap} />
           <Button

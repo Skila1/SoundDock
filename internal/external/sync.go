@@ -190,7 +190,7 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 				}
 			}
 			if res.TrackID == nil && p.shouldFill() && sx != nil {
-				tid, ferr := FillTrack(ctx, sx, p.Provider, tr.ID, tr.Title, tr.Artists)
+				tid, ferr := FillTrackInfo(WithInlineSearch(ctx), sx, p.Provider, tr)
 				if ferr == nil && tid != uuid.Nil {
 					res.TrackID = &tid
 					status = "high"
@@ -199,8 +199,8 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 				}
 			}
 			if res.TrackID != nil {
-				// A copy keeps songs that are still downloading; they play once the file lands.
-				playable := trackPlayable(ctx, pool, *res.TrackID) || (p.Copy && res.Source == "youtube")
+				// Songs found on YouTube count as matched while downloading; they play once the file lands.
+				playable := trackPlayable(ctx, pool, *res.TrackID) || res.Source == "youtube"
 				if id, ok := keepMembership(*res.TrackID, playable); ok && (status == "exact" || status == "high") {
 					matched++
 					keepIDs = append(keepIDs, id)

@@ -1,8 +1,12 @@
 package external
 
 import (
+	"context"
+	"errors"
+	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/sounddock/sounddock/internal/scapex"
 )
 
@@ -11,17 +15,123 @@ func TestPickYouTubeIDRequiresTitleAndArtist(t *testing.T) {
 		{ID: "majortomxxx", Title: "Peter Schilling - Major Tom (Coming Home) Official Video", Artist: "Peter Schilling"},
 		{ID: "randomxxxx1", Title: "Workout mix 2024", Artist: "Various"},
 	}
-	got := pickYouTubeID(hits, "Major Tom (Coming Home)", []string{"Peter Schilling"})
+	got, _ := pickYouTubeID(hits, "Major Tom (Coming Home)", []string{"Peter Schilling"}, 0)
 	if got != "majortomxxx" {
 		t.Fatalf("got %q", got)
 	}
-	if pickYouTubeID(hits, "dominga la mave", []string{"Someone"}) != "" {
+	if id, _ := pickYouTubeID(hits, "dominga la mave", []string{"Someone"}, 0); id != "" {
 		t.Fatal("unrelated query should not pick a hit")
 	}
 }
 
-func TestYouTubeQuery(t *testing.T) {
-	if youtubeQuery("Major Tom", []string{"Peter Schilling"}) != "Peter Schilling Major Tom" {
-		t.Fatal(youtubeQuery("Major Tom", []string{"Peter Schilling"}))
+func TestPickYouTubeIDFalloutTracks(t *testing.T) {
+	cases := []struct {
+		title   string
+		artists []string
+		dur     int
+		hits    []scapex.Hit
+		want    string
+	}{
+		{
+			"Butcher Pete, Pt. 1", []string{"Roy Brown"}, 160000,
+			[]scapex.Hit{
+				{ID: "cover", Title: "Butcher Pete Part 1 (cover)", Artist: "Some Band", DurationMS: 161000},
+				{ID: "orig", Title: "Roy Brown - Butcher Pete (Part 1)", Artist: "Fallout Radio", DurationMS: 158000},
+			},
+			"orig",
+		},
+		{
+			"Civilization (Bongo, Bongo, Bongo)", []string{"Danny Kaye", "The Andrews Sisters"}, 180000,
+			[]scapex.Hit{{ID: "civ", Title: "Civilization (Bongo, Bongo, Bongo)", Artist: "The Andrews Sisters - Topic", DurationMS: 181000}},
+			"civ",
+		},
+		{
+			"I Don't Want to Set the World on Fire", []string{"The Ink Spots"}, 182000,
+			[]scapex.Hit{
+				{ID: "live", Title: "Ink Spots - I Dont Want To Set The World On Fire LIVE", Artist: "x", DurationMS: 200000},
+				{ID: "ink", Title: "The Ink Spots - I Don't Want to Set the World on Fire", Artist: "InkSpotsVEVO", DurationMS: 183000},
+			},
+			"ink",
+		},
+		{
+			"Crazy He Calls Me - Single Version", []string{"Billie Holiday"}, 190000,
+			[]scapex.Hit{{ID: "bh", Title: "Crazy He Calls Me", Artist: "Billie Holiday - Topic", DurationMS: 189000}},
+			"bh",
+		},
+		{
+			"Way Back Home - feat. Conor Maynard (Sam Feldt Edit)", []string{"SHAUN", "Conor Maynard"}, 0,
+			[]scapex.Hit{
+				{ID: "sped", Title: "SHAUN - Way Back Home (sped up)", Artist: "Speed Songs"},
+				{ID: "wbh", Title: "SHAUN feat. Conor Maynard - Way Back Home (Sam Feldt Edit)", Artist: "Spinnin' Records"},
+			},
+			"wbh",
+		},
+		{
+			"Atom Bomb Baby", []string{"The Five Stars"}, 150000,
+			[]scapex.Hit{{ID: "abb", Title: "Atom Bomb Baby - Fallout 4", Artist: "Vault Tunes", DurationMS: 151000}},
+			"abb",
+		},
+	}
+	for _, c := range cases {
+		if got, _ := pickYouTubeID(c.hits, c.title, c.artists, c.dur); got != c.want {
+			t.Errorf("%q: got %q, want %q", c.title, got, c.want)
+		}
+	}
+}
+
+func TestYouTubeQueries(t *testing.T) {
+	got := youtubeQueries("Crazy He Calls Me - Single Version", []string{"Billie Holiday", "X"}, "Lady Day")
+	want := []string{"Billie Holiday - Crazy He Calls Me", "Crazy He Calls Me Billie Holiday", "Crazy He Calls Me Lady Day"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q", got)
+	}
+}
+
+type fakeFiller struct {
+	queries []string
+	errs    []error
+	hits    map[string][]scapex.Hit
+	fetched []string
+}
+
+func (f *fakeFiller) Search(_ context.Context, q string, _ int) ([]scapex.Hit, error) {
+	f.queries = append(f.queries, q)
+	if len(f.errs) > 0 {
+		err := f.errs[0]
+		f.errs = f.errs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	return f.hits[q], nil
+}
+
+func (f *fakeFiller) Fetch(_ context.Context, refs []string) ([]uuid.UUID, error) {
+	f.fetched = append(f.fetched, refs...)
+	return []uuid.UUID{uuid.New()}, nil
+}
+
+func TestFillFromYouTubeLadderAndRetry(t *testing.T) {
+	f := &fakeFiller{
+		errs: []error{context.DeadlineExceeded, nil, nil},
+		hits: map[string][]scapex.Hit{
+			"Atom Bomb Baby The Five Stars": {{ID: "abb", Title: "The Five Stars - Atom Bomb Baby", DurationMS: 150000}},
+		},
+	}
+	id, err := fillFromYouTube(context.Background(), f, "Atom Bomb Baby", []string{"The Five Stars"}, "", 150000)
+	if err != nil || id == uuid.Nil {
+		t.Fatalf("id=%v err=%v", id, err)
+	}
+	want := []string{"The Five Stars - Atom Bomb Baby", "The Five Stars - Atom Bomb Baby", "Atom Bomb Baby The Five Stars"}
+	if !reflect.DeepEqual(f.queries, want) || !reflect.DeepEqual(f.fetched, []string{"abb"}) {
+		t.Fatalf("queries=%q fetched=%q", f.queries, f.fetched)
+	}
+}
+
+func TestFillFromYouTubeReportsSearchErrors(t *testing.T) {
+	boom := errors.New("scapex down")
+	f := &fakeFiller{errs: []error{boom, boom, boom}}
+	if _, err := fillFromYouTube(context.Background(), f, "Song", []string{"A"}, "", 0); !errors.Is(err, boom) {
+		t.Fatalf("err=%v", err)
 	}
 }

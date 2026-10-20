@@ -2,13 +2,16 @@ import {
   Activity,
   Archive,
   ArchiveRestore,
+  Cog,
   Disc3,
   HardDrive,
+  KeyRound,
   LayoutDashboard,
-  Link2,
+  Library,
   MessageCircle,
   Plug,
   RefreshCw,
+  ScanSearch,
   SlidersHorizontal,
   Timer,
   Users,
@@ -18,9 +21,11 @@ import {
 
 export type AdminNavLink = { to: string; label: string; icon: LucideIcon };
 
+/** One button on the admin bar; its links show as sub-pages under it. */
 export type AdminNavGroup = {
   id: string;
   label: string;
+  icon: LucideIcon;
   links: readonly AdminNavLink[];
 };
 
@@ -28,23 +33,38 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
   {
     id: "overview",
     label: "Overview",
+    icon: LayoutDashboard,
     links: [
       { to: ".", label: "Dashboard", icon: LayoutDashboard },
       { to: "activity", label: "Activity", icon: Activity }
     ]
   },
   {
-    id: "server",
-    label: "Server",
+    id: "library",
+    label: "Library",
+    icon: Library,
     links: [
-      { to: "backups", label: "Backups", icon: ArchiveRestore },
-      { to: "updates", label: "Updates", icon: RefreshCw },
-      { to: "integrations", label: "Integrations", icon: Plug }
+      { to: "libraries", label: "Libraries", icon: Library },
+      { to: "scan", label: "Scan", icon: ScanSearch },
+      { to: "catalog", label: "Catalog", icon: Disc3 },
+      { to: "media-settings", label: "Media Settings", icon: SlidersHorizontal }
     ]
   },
   {
-    id: "people",
-    label: "People",
+    id: "storage",
+    label: "Storage",
+    icon: HardDrive,
+    links: [
+      { to: "storage", label: "Storage", icon: HardDrive },
+      { to: "retention", label: "Retention", icon: Timer },
+      { to: "archive", label: "Archive", icon: Archive },
+      { to: "backups", label: "Backups", icon: ArchiveRestore }
+    ]
+  },
+  {
+    id: "iam",
+    label: "IAM",
+    icon: KeyRound,
     links: [
       { to: "users", label: "Users", icon: Users },
       { to: "groups", label: "Groups", icon: UsersRound },
@@ -52,20 +72,13 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
     ]
   },
   {
-    id: "media",
-    label: "Media",
+    id: "system",
+    label: "System",
+    icon: Cog,
     links: [
-      { to: "libraries", label: "Libraries & Storage", icon: HardDrive },
-      { to: "catalog", label: "Catalog", icon: Disc3 },
-      { to: "media-settings", label: "Media Settings", icon: SlidersHorizontal },
-      { to: "retention", label: "Retention", icon: Timer },
-      { to: "archive", label: "Archive", icon: Archive }
+      { to: "updates", label: "Updates", icon: RefreshCw },
+      { to: "integrations", label: "Integrations", icon: Plug }
     ]
-  },
-  {
-    id: "account",
-    label: "Account",
-    links: [{ to: "connected", label: "Connected Services", icon: Link2 }]
   }
 ];
 
@@ -87,9 +100,9 @@ export const legacyAdminRedirects: Readonly<Record<string, string>> = {
   webhooks: "/admin/integrations?tab=webhooks",
   quotas: "/admin/users",
   roles: "/admin/groups",
-  storage: "/admin/libraries?tab=storage",
   grants: "/admin/libraries?tab=access",
-  "duplicate-review": "/admin/catalog?tab=duplicates",
+  "duplicate-review": "/admin/scan?tab=duplicates",
+  connected: "/settings/connected",
   metadata: "/admin/media-settings",
   lyrics: "/admin/media-settings",
   transcoding: "/admin/media-settings",
@@ -101,6 +114,13 @@ export const legacyAdminRedirects: Readonly<Record<string, string>> = {
 export function adminPath(to: string) {
   if (to === "." || to === "") return "/admin";
   return `/admin/${to}`;
+}
+
+/** The bar button whose pages include this path (falls back to Overview). */
+export function adminGroupFor(pathname: string) {
+  const seg = pathname.replace(/^\/admin\/?/, "").split("/")[0] || ".";
+  const page = seg === "users" || seg === "discord-users" ? "users" : seg === "stats-migration" ? "." : seg;
+  return adminNavGroups.find((g) => g.links.some((l) => l.to === page)) || adminNavGroups[0];
 }
 
 /** Every path the admin nav links to, for tests and sanity checks. */
