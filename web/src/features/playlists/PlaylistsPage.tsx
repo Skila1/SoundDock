@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { CopyPlus, Download, Link2, ListMusic, Plus, Radio as RadioIcon, Shuffle, Wand2 } from "lucide-react";
+import { Download, Link2, ListMusic, Plus, Radio as RadioIcon, Shuffle, Wand2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { hasPerm } from "@/lib/perms";
 import { MediaCard } from "@/components/media/MediaCard";
@@ -17,12 +17,16 @@ import { EmptyState, PageHeader } from "@/components/ui/empty";
 import { toast } from "sonner";
 import { usePlayer } from "@/stores/player";
 import type { User } from "@/types/api";
-import type { PlaylistFolder, PlaylistListItem, ProviderCapabilities, ProviderPlaylist, RadioResponse } from "./types";
-import { capabilityBlurb } from "./types";
-import { createPlaylistBasedOn } from "./createBasedOn";
+import type { PlaylistFolder, PlaylistListItem, ProviderCapabilities, RadioResponse } from "./types";
+import { capabilityBlurb, isSoundDockPlaylist } from "./types";
+import { ProviderPlaylistList } from "./ProviderPlaylistList";
 
+// "all" (SoundDock) lists your own playlists, including copies made from a
+// service. "global" lists every playlist in SoundDock plus each connected
+// service's playlists. A service tab lists what came from that service.
 const allTabs = [
   { id: "all", label: "SoundDock" },
+  { id: "global", label: "Global" },
   { id: "spotify", label: "Spotify" },
   { id: "youtube", label: "YouTube" },
   { id: "soundcloud", label: "SoundCloud" },
@@ -61,27 +65,22 @@ export function PlaylistsPage() {
     }
     return set;
   }, [providers.data]);
-  const tabs = useMemo(() => allTabs.filter((t) => t.id === "all" || connected.has(t.id)), [connected]);
-  const providerOk = tab !== "all" && connected.has(tab);
+  const isProviderTab = tab !== "all" && tab !== "global";
+  const tabs = useMemo(() => allTabs.filter((t) => t.id === "all" || t.id === "global" || connected.has(t.id)), [connected]);
+  const providerOk = isProviderTab && connected.has(tab);
   useEffect(() => {
-    if (tab !== "all" && !connected.has(tab) && providers.data) setTab("all");
-  }, [tab, connected, providers.data]);
-  const remote = useQuery({
-    queryKey: ["provider-playlists", tab],
-    enabled: providerOk,
-    queryFn: () => api.get<ProviderPlaylist[]>(`/api/v1/providers/${tab}/playlists`)
-  });
+    if (isProviderTab && !connected.has(tab) && providers.data) setTab("all");
+  }, [tab, isProviderTab, connected, providers.data]);
+  const remoteProviders = tab === "global" ? allTabs.filter((t) => connected.has(t.id)) : providerOk ? allTabs.filter((t) => t.id === tab) : [];
 
   const list = useMemo(() => {
     return (q.data || []).filter((p) => {
-      if (tab === "all" ? p.provider : p.provider !== tab) {
-        if (tab !== "all") return false;
-        if (p.provider) return false;
-      }
+      if (tab === "all" && !isSoundDockPlaylist(p)) return false;
+      if (isProviderTab && p.provider !== tab) return false;
       if (folder !== "all" && (p.folder || "") !== folder) return false;
       return true;
     });
-  }, [q.data, tab, folder]);
+  }, [q.data, tab, isProviderTab, folder]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, PlaylistListItem[]>();
@@ -182,7 +181,7 @@ export function PlaylistsPage() {
           />
         )}
       </div>
-      {tab !== "all" && !providerOk && providers.data && (
+      {isProviderTab && !providerOk && providers.data && (
         <p className="mb-5 text-sm text-muted">
           Connect this service in <a className="text-accent underline" href="/settings/connected">Connected Services</a>, or paste a playlist URL. SoundDock matches your library first.
         </p>
@@ -195,78 +194,7 @@ export function PlaylistsPage() {
           ) : null}
         </p>
       )}
-      {canImport && providerOk && (remote.data || []).length > 0 && (
-        <section className="mb-8">
-          <h2 className="mb-3 text-sm font-medium uppercase tracking-wide text-subtle">Your {tabs.find((x) => x.id === tab)?.label} playlists</h2>
-          <ul className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-surface-1">
-            {(remote.data || []).map((pl) => (
-              <li key={pl.id} className="flex items-center justify-between gap-3 px-4 py-3 transition-colors hover:bg-surface-2/60">
-                <Link
-                  to={pl.readable === false ? "#" : `/playlists/remote/${tab}/${encodeURIComponent(pl.id)}`}
-                  onClick={(e) => {
-                    if (pl.readable === false) {
-                      e.preventDefault();
-                      toast.message("Spotify only shares songs from playlists you own or collaborate on. Copy this one into your own Spotify playlist to open it here.");
-                    }
-                  }}
-                  className={`group flex min-w-0 flex-1 items-center gap-3 ${pl.readable === false ? "opacity-60" : ""}`}
-                >
-                  {pl.artwork ? <img src={pl.artwork} alt="" loading="lazy" className="h-11 w-11 shrink-0 rounded-md object-cover" /> : <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-surface-2"><ListMusic className="h-5 w-5 text-subtle" /></div>}
-                  <div className="min-w-0">
-                  <div className="truncate font-medium group-hover:underline">{pl.name}</div>
-                  <div className="flex items-center gap-1.5 text-xs text-muted">
-                    {pl.track_count ?? 0} tracks{pl.owner ? ` · ${pl.owner}` : ""}
-                    {pl.readable === false && <Badge>Followed · can&apos;t open</Badge>}
-                  </div>
-                  </div>
-                </Link>
-                <div className="flex shrink-0 items-center gap-2">
-                <Button
-                  size="sm"
-                  disabled={busyId === pl.id || pl.readable === false}
-                  title="Copy the name, songs and cover into a new SoundDock playlist. Missing songs are downloaded."
-                  onClick={async () => {
-                    setBusyId(pl.id);
-                    try {
-                      const jid = await createPlaylistBasedOn(tab, pl);
-                      if (jid) trackJob(jid, `Creating playlist based on ${pl.name}`);
-                      toast.success("Creating your playlist. Missing songs download in the background.");
-                      qc.invalidateQueries({ queryKey: ["playlists"] });
-                    } catch (err: any) {
-                      toast.error(err?.message || "Could not create the playlist");
-                    } finally {
-                      setBusyId("");
-                    }
-                  }}
-                >
-                  <CopyPlus /> <span className="hidden sm:inline">Create Playlist Based On</span><span className="sm:hidden">Copy</span>
-                </Button>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={busyId === pl.id || pl.readable === false}
-                  onClick={async () => {
-                    setBusyId(pl.id);
-                    try {
-                      const r = await api.post<{ job_id?: string }>(`/api/v1/providers/${tab}/playlists/${pl.id}/import`, { mode: "once", name: pl.name });
-                      if (r?.job_id) trackJob(r.job_id, `Importing ${pl.name}`);
-                      toast.success("Import started. Matching your library first.");
-                      qc.invalidateQueries({ queryKey: ["playlists"] });
-                    } catch (err: any) {
-                      toast.error(err?.message || "Import failed");
-                    } finally {
-                      setBusyId("");
-                    }
-                  }}
-                >
-                  {busyId === pl.id ? "Queued…" : "Import"}
-                </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+      {canImport && remoteProviders.map((t) => <ProviderPlaylistList key={t.id} provider={t.id} label={t.label} />)}
       {!q.isLoading && !list.length && tab === "all" && (
         <EmptyState
           icon={ListMusic}

@@ -95,3 +95,8 @@ export type SyncDiff = {
   ignored?: number;
   items: SyncDiffItem[];
 };
+
+/** Your own SoundDock playlists: made here, or copied from a service with Create Playlist Based On. */
+export function isSoundDockPlaylist(p: { provider?: string | null; sync_mode?: string | null }) {
+  return !p.provider || p.sync_mode === "copy";
+}

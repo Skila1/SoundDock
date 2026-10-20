@@ -32,6 +32,9 @@ type ImportPayload struct {
 	Artwork string `json:"artwork,omitempty"`
 }
 
+// SyncModeCopy marks a playlist made with "Create playlist based on".
+const SyncModeCopy = "copy"
+
 func (p ImportPayload) shouldFill() bool {
 	return p.FillYouTube == nil || *p.FillYouTube
 }
@@ -102,6 +105,12 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 			FROM external_playlists WHERE user_id=$1 AND provider=$2 AND external_playlist_id=$3`,
 			p.UserID, p.Provider, p.ExternalID).Scan(&prevSnap, &prevStatus)
 		snap := retainedSnapshot(prevSnap, meta.Snapshot)
+		// A copy is the user's own SoundDock playlist that remembers where it came
+		// from; it is listed with SoundDock playlists, not under the provider.
+		storedMode := p.Mode
+		if p.Copy {
+			storedMode = SyncModeCopy
+		}
 		var epid uuid.UUID
 		err = pool.QueryRow(ctx, `
 			INSERT INTO external_playlists (provider_account_id, user_id, provider, external_playlist_id, sounddock_playlist_id, name, description, owner_external_id, artwork_url, track_count, external_snapshot, sync_mode, sync_interval, removal_policy, last_sync_attempt_at, last_sync_status)
@@ -113,7 +122,7 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 				sync_mode=EXCLUDED.sync_mode, sync_interval=EXCLUDED.sync_interval,
 				removal_policy=EXCLUDED.removal_policy, last_sync_attempt_at=now(), last_sync_status='running'
 			RETURNING id, sounddock_playlist_id`,
-			p.UserID, p.Provider, p.ExternalID, sdID, name, meta.Description, meta.Owner, meta.Artwork, meta.TrackCount, snap, p.Mode, p.Interval, p.Removal,
+			p.UserID, p.Provider, p.ExternalID, sdID, name, meta.Description, meta.Owner, meta.Artwork, meta.TrackCount, snap, storedMode, p.Interval, p.Removal,
 		).Scan(&epid, &sdID)
 		if err != nil {
 			return err

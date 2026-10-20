@@ -396,10 +396,15 @@ func (s *Server) playlistExternalSync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fill := true
-	jid, err := s.enqueuePlaylistImport(r, external.ImportPayload{
+	payload := external.ImportPayload{
 		UserID: u.ID, Provider: prov, ExternalID: ext, Mode: "sync", Interval: iv, Removal: rem,
 		PlaylistUUID: id, LibraryIDs: s.libraryIDs(r.Context(), u), FillYouTube: &fill,
-	})
+	}
+	if mode == external.SyncModeCopy {
+		// Refreshing a copy keeps it a copy instead of turning on scheduled sync.
+		payload.Mode, payload.Copy = "once", true
+	}
+	jid, err := s.enqueuePlaylistImport(r, payload)
 	if err != nil {
 		s.writeJobErr(w, err)
 		return
