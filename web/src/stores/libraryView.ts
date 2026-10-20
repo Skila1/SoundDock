@@ -16,6 +16,8 @@ export type LibraryView = {
   explicit?: "all" | "clean" | "explicit";
   /** Open (true) or collapsed (false) state of named page sections. */
   sections?: Record<string, boolean>;
+  /** Saved order of named page sections (Home), first to last. */
+  order?: string[];
 };
 
 type State = {

@@ -1,7 +1,7 @@
-import { useMemo, useRef } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { ChevronLeft, ChevronRight, Disc3, Heart, Plus } from "lucide-react";
+import { ChevronLeft, ChevronRight, Disc3, GripVertical, Heart, Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import { TrackCard } from "@/components/media/TrackActions";
 import { TrackList } from "@/components/media/TrackList";
@@ -13,6 +13,7 @@ import { usePlayer } from "@/stores/player";
 import { useLibraryView } from "@/stores/libraryView";
 import { cn } from "@/lib/utils";
 import type { Track } from "@/types/api";
+import { moveSection, orderSections } from "./homeOrder";
 import { toast } from "sonner";
 
 type HomeTrack = Track & { count?: number };
@@ -42,6 +43,9 @@ export function HomePage() {
   const recent = useMemo(() => asTracks(home.data?.continue).slice(0, 15), [home.data]);
   const added = useMemo(() => asTracks(home.data?.recently_added).slice(0, 15), [home.data]);
   const played = useMemo(() => asTracks(home.data?.most_played).slice(0, 15), [home.data]);
+  // Section being dragged and the section it would land before (null = last).
+  const [drag, setDrag] = useState<{ id: string; before: string | null } | null>(null);
+  const sectionEls = useRef(new Map<string, HTMLElement>());
 
   if (home.isLoading) {
     return (
@@ -86,6 +90,57 @@ export function HomePage() {
     { id: "most", title: "Most played", to: "/stats", tracks: played, open: false, countLabel: true }
   ];
 
+  // Sections are dragged by their grip (mouse, touch or pen) and the order is
+  // remembered for the account, like the open/closed state.
+  const ordered = orderSections(sections, view.order);
+  const fullOrder = ordered.map((s) => s.id);
+  const visible = ordered.filter((sec) => sec.tracks.length > 0);
+  const visibleIds = visible.map((s) => s.id);
+  const nextVisible = (id: string) => visibleIds[visibleIds.indexOf(id) + 1] ?? null;
+  const commitMove = (id: string, before: string | null) => {
+    if (before === id || before === nextVisible(id)) return;
+    patchView({ order: moveSection(fullOrder, id, before) });
+  };
+  const dropTarget = (id: string, y: number): string | null => {
+    for (const other of visibleIds) {
+      if (other === id) continue;
+      const el = sectionEls.current.get(other);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (y < r.top + r.height / 2) return other;
+    }
+    return null;
+  };
+  const gripProps = (id: string) => ({
+    onPointerDown: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      setDrag({ id, before: nextVisible(id) });
+    },
+    onPointerMove: (e: React.PointerEvent<HTMLButtonElement>) => {
+      if (drag?.id !== id) return;
+      const before = dropTarget(id, e.clientY);
+      if (before !== drag.before) setDrag({ id, before });
+    },
+    onPointerUp: () => {
+      if (drag?.id === id) commitMove(id, drag.before);
+      setDrag(null);
+    },
+    onPointerCancel: () => setDrag(null),
+    onKeyDown: (e: React.KeyboardEvent<HTMLButtonElement>) => {
+      const i = visibleIds.indexOf(id);
+      if (e.key === "ArrowUp" && i > 0) {
+        e.preventDefault();
+        commitMove(id, visibleIds[i - 1]);
+      } else if (e.key === "ArrowDown" && i < visibleIds.length - 1) {
+        e.preventDefault();
+        commitMove(id, visibleIds[i + 2] ?? null);
+      }
+    }
+  });
+  const moving = !!drag && drag.before !== drag.id && drag.before !== nextVisible(drag.id);
+
   return (
     <div className="space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -100,16 +155,45 @@ export function HomePage() {
           <LayoutToggle value={layout} onChange={(l) => patchView({ layout: l })} />
         </div>
       </div>
-      {sections
-        .filter((sec) => sec.tracks.length > 0)
-        .map((sec) => {
+      <div className={cn("space-y-6", drag && "select-none")}>
+        {visible.map((sec) => {
           const open = isOpen(sec.id, sec.open);
           return (
-            <Section key={sec.id} title={sec.title} to={sec.to} count={sec.tracks.length} open={open} onToggle={() => toggle(sec.id, sec.open)}>
-              <TrackSection tracks={sec.tracks} layout={layout} onPlay={play} onQueue={add} onNext={playNext} countLabel={sec.countLabel} />
-            </Section>
+            <div key={sec.id}>
+              {moving && drag?.before === sec.id && <DropLine />}
+              <Section
+                title={sec.title}
+                to={sec.to}
+                count={sec.tracks.length}
+                open={open}
+                onToggle={() => toggle(sec.id, sec.open)}
+                dragging={drag?.id === sec.id}
+                sectionRef={(el) => {
+                  if (el) sectionEls.current.set(sec.id, el);
+                  else sectionEls.current.delete(sec.id);
+                }}
+                grip={
+                  <button
+                    type="button"
+                    {...gripProps(sec.id)}
+                    aria-label={`Move ${sec.title}. Drag, or use the up and down arrow keys.`}
+                    title="Drag to reorder"
+                    className={cn(
+                      "flex h-8 w-6 shrink-0 touch-none items-center justify-center rounded-md text-subtle transition-colors hover:bg-surface-2 hover:text-foreground focus-visible:text-foreground",
+                      drag?.id === sec.id ? "cursor-grabbing" : "cursor-grab"
+                    )}
+                  >
+                    <GripVertical className="h-4 w-4" />
+                  </button>
+                }
+              >
+                <TrackSection tracks={sec.tracks} layout={layout} onPlay={play} onQueue={add} onNext={playNext} countLabel={sec.countLabel} />
+              </Section>
+            </div>
           );
         })}
+        {moving && drag?.before === null && <DropLine />}
+      </div>
       {!favourites.length && (
         <p className="rounded-2xl border border-dashed border-border px-4 py-3 text-sm text-muted">
           <Heart className="mr-1.5 inline h-4 w-4 align-[-3px] text-accent" />
@@ -125,12 +209,19 @@ function greeting() {
   return h < 5 ? "Late night listening" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
 }
 
+function DropLine() {
+  return <div aria-hidden className="-mt-1 mb-2 h-0.5 rounded-full bg-accent" />;
+}
+
 function Section({
   title,
   to,
   count,
   open,
   onToggle,
+  grip,
+  dragging,
+  sectionRef,
   children
 }: {
   title: string;
@@ -138,12 +229,17 @@ function Section({
   count: number;
   open: boolean;
   onToggle: () => void;
+  grip?: React.ReactNode;
+  dragging?: boolean;
+  sectionRef?: (el: HTMLElement | null) => void;
   children: React.ReactNode;
 }) {
   const id = `home-${title.toLowerCase().replace(/\s+/g, "-")}`;
   return (
-    <section className="border-b border-border/60 pb-6 last:border-0">
+    <section ref={sectionRef} className={cn("border-b border-border/60 pb-6 transition-opacity", dragging && "opacity-50")}>
       <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-1">
+        {grip}
         <button
           type="button"
           onClick={onToggle}
@@ -155,6 +251,7 @@ function Section({
           <h2 className="text-xl font-bold tracking-tight">{title}</h2>
           <span className="tabular text-sm text-subtle">{count}</span>
         </button>
+        </div>
         {to && open && (
           <Link to={to} className="text-xs font-semibold uppercase tracking-wider text-subtle transition-colors hover:text-foreground">
             See all
