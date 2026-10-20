@@ -30,30 +30,140 @@ export function AdminIntegrations() {
   );
 }
 
+// Keep in step with apiKeyScopeMeta and adminAreas in internal/httpapi/apikeys.go.
 const apiKeyScopes = [
-  { name: "admin", label: "Administrator", desc: "Everything, including logs, users, Discord, and updates" },
-  { name: "tracks.read", label: "Read catalogue", desc: "List tracks, albums, artists, and search" },
+  { name: "tracks.read", label: "Read catalogue", desc: "List tracks, albums, artists, playlists, and search" },
   { name: "tracks.stream", label: "Stream audio", desc: "Play files from the library" },
   { name: "playlists.write", label: "Playlists", desc: "Create and edit playlists" },
   { name: "history.read", label: "History", desc: "Listening history and stats" },
-  { name: "library.upload", label: "Upload", desc: "Upload into writable libraries" },
+  { name: "library.upload", label: "Upload", desc: "Upload into libraries" },
   { name: "library.import_url", label: "Import from URL", desc: "Import remote files" },
   { name: "library.create", label: "Create libraries", desc: "Add library folders" },
   { name: "library.migrate", label: "Move libraries", desc: "Move files into managed storage" }
 ];
 
+type AdminAreaScope = { scope: string; label: string; desc: string; readOnly?: boolean };
+
+const adminAreaScopes: AdminAreaScope[] = [
+  { scope: "admin.overview", label: "Dashboard and health", desc: "Overview, health, diagnostics, maintenance, announcements, quotas" },
+  { scope: "admin.audit", label: "Activity and audit logs", desc: "Audit events, logs, errors, playback sessions, Discord logs" },
+  { scope: "admin.jobs", label: "Jobs and workers", desc: "Background jobs, worker pools, scans" },
+  { scope: "admin.users", label: "Users and groups", desc: "See users, groups and permissions. Changing them needs Administrator.", readOnly: true },
+  { scope: "admin.libraries", label: "Libraries and storage", desc: "Libraries, storage, grants, duplicates" },
+  { scope: "admin.media", label: "Media settings", desc: "Metadata, transcoding, lyrics, retention, archive" },
+  { scope: "admin.backups", label: "Backups", desc: "Backups, backup settings, restore" },
+  { scope: "admin.integrations", label: "Integrations and Discord", desc: "API keys, webhooks, playlist providers, Discord bot" },
+  { scope: "admin.updates", label: "Updates", desc: "Check for and apply updates" }
+];
+
+const allAdminRead = adminAreaScopes.map((a) => `${a.scope}.read`);
+
 const scopePresets: Record<string, string[]> = {
   listen: ["tracks.read", "tracks.stream", "history.read"],
-  library: ["tracks.read", "tracks.stream", "playlists.write", "history.read", "library.upload"],
+  library: ["tracks.read", "tracks.stream", "playlists.write", "history.read", "library.upload", "library.import_url"],
+  audit: ["admin.audit.read", "admin.overview.read"],
+  monitor: allAdminRead,
+  librarian: ["tracks.read", "tracks.stream", "library.upload", "library.import_url", "library.create", "library.migrate", "admin.libraries", "admin.jobs", "admin.media"],
   admin: ["admin"]
 };
 
 const presetOptions = [
   { value: "listen", label: "Listen (read and stream)" },
-  { value: "library", label: "Library (listen, playlists, upload)" },
-  { value: "admin", label: "Administrator" },
+  { value: "library", label: "Library (listen, playlists, upload, import)" },
+  { value: "audit", label: "Audit and logs (read only)" },
+  { value: "monitor", label: "Monitoring (every admin page, read only)" },
+  { value: "librarian", label: "Librarian (libraries, jobs, media settings)" },
+  { value: "admin", label: "Administrator (everything)" },
   { value: "custom", label: "Custom…" }
 ];
+
+type AreaLevel = "off" | "read" | "full";
+
+function areaLevel(scopes: string[], scope: string): AreaLevel {
+  if (scopes.includes(scope)) return "full";
+  if (scopes.includes(`${scope}.read`)) return "read";
+  return "off";
+}
+
+function setAreaLevel(scopes: string[], scope: string, level: AreaLevel): string[] {
+  const rest = scopes.filter((s) => s !== scope && s !== `${scope}.read`);
+  if (level === "full") return [...rest, scope];
+  if (level === "read") return [...rest, `${scope}.read`];
+  return rest;
+}
+
+/** Human summary of a key's scopes for the list and the template preview. */
+function describeScopes(scopes: string[]): string {
+  if (scopes.includes("admin")) return "Administrator (everything)";
+  const parts: string[] = [];
+  for (const s of apiKeyScopes) if (scopes.includes(s.name)) parts.push(s.label);
+  for (const a of adminAreaScopes) {
+    const lvl = areaLevel(scopes, a.scope);
+    if (lvl !== "off") parts.push(`${a.label}${lvl === "read" ? " (read)" : ""}`);
+  }
+  return parts.join(", ") || "no permissions";
+}
+
+function ScopePicker({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const full = value.includes("admin");
+  const toggle = (name: string) => onChange(value.includes(name) ? value.filter((x) => x !== name) : [...value, name]);
+  return (
+    <div className="space-y-4">
+      <label className="flex items-start gap-3 rounded-lg border border-border px-3 py-2">
+        <input type="checkbox" className="mt-1" checked={full} onChange={() => toggle("admin")} />
+        <span>
+          <span className="block text-sm font-medium">Administrator</span>
+          <span className="block text-xs text-muted">Everything, including changing users and creating keys. Overrides the choices below.</span>
+        </span>
+      </label>
+      <fieldset disabled={full} className={full ? "opacity-50" : undefined}>
+        <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-subtle">Library and playback</legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {apiKeyScopes.map((s) => (
+            <label key={s.name} className="flex items-start gap-3 rounded-lg border border-border px-3 py-2">
+              <input type="checkbox" className="mt-1" checked={value.includes(s.name)} onChange={() => toggle(s.name)} />
+              <span>
+                <span className="block text-sm font-medium">{s.label}</span>
+                <span className="block text-xs text-muted">{s.desc}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+      <fieldset disabled={full} className={full ? "opacity-50" : undefined}>
+        <legend className="mb-2 text-xs font-semibold uppercase tracking-wider text-subtle">Administration</legend>
+        <ul className="divide-y divide-border rounded-lg border border-border">
+          {adminAreaScopes.map((a) => {
+            const lvl = areaLevel(value, a.scope);
+            const levels: AreaLevel[] = a.readOnly ? ["off", "read"] : ["off", "read", "full"];
+            return (
+              <li key={a.scope} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">{a.label}</span>
+                  <span className="block text-xs text-muted">{a.desc}</span>
+                </span>
+                <span role="radiogroup" aria-label={a.label} className="inline-flex shrink-0 rounded-full bg-surface-2/70 p-0.5 ring-1 ring-inset ring-border">
+                  {levels.map((l) => (
+                    <button
+                      key={l}
+                      type="button"
+                      role="radio"
+                      aria-checked={lvl === l}
+                      onClick={() => onChange(setAreaLevel(value, a.scope, l))}
+                      className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${lvl === l ? "bg-accent text-[#04140a]" : "text-muted hover:text-foreground"}`}
+                    >
+                      {l === "off" ? "Off" : l === "read" ? "Read" : "Full"}
+                    </button>
+                  ))}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      </fieldset>
+    </div>
+  );
+}
 
 function ApiKeys() {
   const qc = useQueryClient();
@@ -105,7 +215,7 @@ function ApiKeys() {
             <div className="min-w-0">
               <div className="font-medium">{c.name}</div>
               <div className="truncate text-xs text-muted">
-                {c.prefix ? `${c.prefix}… · ` : ""}{(c.scopes || []).join(", ") || "no permissions"}
+                {c.prefix ? `${c.prefix}… · ` : ""}{describeScopes(c.scopes || [])}
                 {c.last_used_at ? ` · used ${relativeTime(c.last_used_at)}` : " · never used"}
               </div>
             </div>
@@ -122,20 +232,22 @@ function ApiKeys() {
               <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="home-assistant" required />
             </Field>
             <Field label="Permissions">
-              <Select value={preset} onValueChange={(v) => { setPreset(v); if (v === "custom" && !custom.length) setCustom(scopePresets.listen); }} options={presetOptions} />
+              <Select
+                value={preset}
+                onValueChange={(v) => {
+                  // Custom starts from the template you were looking at.
+                  if (v === "custom") setCustom(scopePresets[preset] || scopePresets.listen);
+                  setPreset(v);
+                }}
+                options={presetOptions}
+              />
             </Field>
-            {preset === "custom" && (
-              <div className="grid gap-2 sm:grid-cols-2">
-                {apiKeyScopes.map((s) => (
-                  <label key={s.name} className="flex items-start gap-3 rounded-lg border border-border px-3 py-2">
-                    <input type="checkbox" className="mt-1" checked={custom.includes(s.name)} onChange={() => setCustom((cur) => (cur.includes(s.name) ? cur.filter((x) => x !== s.name) : [...cur, s.name]))} />
-                    <span>
-                      <span className="block text-sm font-medium">{s.label}</span>
-                      <span className="block text-xs text-muted">{s.desc}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
+            {preset === "custom" ? (
+              <ScopePicker value={custom} onChange={setCustom} />
+            ) : (
+              <p className="rounded-lg bg-surface-2/60 px-3 py-2 text-xs text-muted">
+                <span className="font-medium text-foreground">Includes:</span> {describeScopes(scopes)}. Choose Custom to adjust.
+              </p>
             )}
             <Button type="submit">Create key</Button>
           </form>

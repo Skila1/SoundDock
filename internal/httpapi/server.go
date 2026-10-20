@@ -282,10 +282,10 @@ func (s *Server) Router() http.Handler {
 			r.Patch("/uploads/{id}", s.patchUpload)
 			r.Post("/uploads/{id}/complete", s.notifyOnSuccess(s.completeUpload, catalogInvalidateKeys))
 
-			r.With(s.requireAdmin).Get("/duplicates", s.duplicates)
+			r.With(s.requireAdminScope).Get("/duplicates", s.duplicates)
 
 			r.Group(func(r chi.Router) {
-				r.Use(s.requireAdmin)
+				r.Use(s.requireAdminScope)
 				r.With(s.limit(ratelimit.ClassAdmin)).Route("/admin", func(r chi.Router) {
 					r.Get("/overview", s.adminOverview)
 					r.Get("/health", s.adminHealth)
@@ -824,7 +824,7 @@ func (s *Server) apiKeyUser(ctx context.Context, tok string) (*auth.User, error)
 		return nil, err
 	}
 	_, _ = s.Pool.Exec(ctx, `UPDATE api_clients SET last_used_at=now() WHERE id=$1`, cid)
-	u := &auth.User{ID: cid, Username: "integration", Permissions: []string{}}
+	u := &auth.User{ID: cid, Username: "integration", Permissions: []string{}, Integration: true}
 	var clientName string
 	_ = s.Pool.QueryRow(ctx, `SELECT scopes, name FROM api_clients WHERE id=$1`, cid).Scan(&scopes, &clientName)
 	if clientName != "" {
@@ -833,7 +833,7 @@ func (s *Server) apiKeyUser(ctx context.Context, tok string) (*auth.User, error)
 	if len(scopes) == 0 {
 		return nil, errString("api key has no scopes")
 	}
-	u.Permissions = scopes
+	u.Permissions = expandAdminScopes(scopes)
 	for _, sc := range scopes {
 		if sc == "admin" {
 			u.IsAdmin = true
@@ -852,9 +852,10 @@ func applyPATScopes(u *auth.User, scopes []string) *auth.User {
 		return u
 	}
 	allow := map[string]struct{}{}
-	for _, sc := range scopes {
+	for _, sc := range expandAdminScopes(scopes) {
 		allow[strings.TrimSpace(sc)] = struct{}{}
 	}
+	wasAdmin := u.IsAdmin
 	if _, ok := allow["admin"]; !ok {
 		u.IsAdmin = false
 	}
@@ -866,6 +867,18 @@ func applyPATScopes(u *auth.User, scopes []string) *auth.User {
 	}
 	if _, ok := allow["admin"]; ok && u.IsAdmin {
 		out = u.Permissions
+	} else if wasAdmin {
+		// An administrator's token may carry admin area scopes (and what they
+		// imply); other users' tokens never gain admin access this way.
+		have := map[string]bool{}
+		for _, p := range out {
+			have[p] = true
+		}
+		for sc := range allow {
+			if (isAdminScope(sc) || sc == "tracks.merge" || sc == "lyrics.configure") && !have[sc] {
+				out = append(out, sc)
+			}
+		}
 	}
 	if out == nil {
 		out = []string{}
@@ -960,7 +973,7 @@ func (s *Server) libraryIDsFor(ctx context.Context, u *auth.User, action string)
 	if u == nil || s.Pool == nil {
 		return []uuid.UUID{}
 	}
-	if u.IsAdmin {
+	if u.IsAdmin || (u.Integration && integrationLibraryAction(u, action)) {
 		rows, err := s.Pool.Query(ctx, `SELECT id FROM libraries`)
 		if err != nil {
 			return []uuid.UUID{}
@@ -1007,7 +1020,7 @@ func (s *Server) userHasLibraryAction(ctx context.Context, u *auth.User, libID u
 	if u == nil || libID == uuid.Nil {
 		return false
 	}
-	if u.IsAdmin {
+	if u.IsAdmin || (u.Integration && integrationLibraryAction(u, action)) {
 		return true
 	}
 	for _, id := range s.libraryIDsFor(ctx, u, action) {

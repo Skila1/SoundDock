@@ -633,6 +633,10 @@ func (s *Server) adminCreateIntegration(w http.ResponseWriter, r *http.Request) 
 		writeErr(w, 400, "invalid", err.Error())
 		return
 	}
+	if !scopesWithin(currentUser(r), scopes) {
+		writeErr(w, 403, "forbidden", "a key can only create keys with permissions it has")
+		return
+	}
 	secret, err := cryptox.RandomToken(32)
 	if err != nil {
 		writeErr(w, 500, "token", err.Error())

@@ -36,6 +36,9 @@ type User struct {
 	PersonalLibraryVisibility string    `json:"personal_library_visibility"`
 	Permissions               []string  `json:"permissions"`
 	IsAdmin                   bool      `json:"is_admin"`
+	// Integration is an admin-created API key with no user behind it. Its
+	// scopes stand in for library grants.
+	Integration bool `json:"-"`
 }
 
 type Session struct {
