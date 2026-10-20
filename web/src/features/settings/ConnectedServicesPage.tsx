@@ -39,7 +39,8 @@ type ScrobbleState = {
   lastfm_configured?: boolean;
 };
 
-export function ConnectedServicesPage() {
+/** `inAdmin` renders the page under the Administration bar, without the profile tabs. */
+export function ConnectedServicesPage({ inAdmin = false }: { inAdmin?: boolean }) {
   const qc = useQueryClient();
   const [params] = useSearchParams();
   const me = useQuery({ queryKey: ["me"], queryFn: () => api.get<User>("/api/v1/me") });
@@ -82,7 +83,7 @@ export function ConnectedServicesPage() {
         title="Connected Services"
         description="Connect accounts your administrator has configured. Spotify can import playlists into SoundDock. YouTube, SoundCloud, and Apple Music import playlist metadata; they are not a substitute for those catalogues."
       />
-      <SettingsTabs />
+      {!inAdmin && <SettingsTabs />}
       {q.isError && <QueryError message={q.error instanceof Error ? q.error.message : undefined} onRetry={() => q.refetch()} />}
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {(q.data || []).map((p) => (

@@ -5,6 +5,7 @@ import {
   Disc3,
   HardDrive,
   LayoutDashboard,
+  Link2,
   MessageCircle,
   Plug,
   RefreshCw,
@@ -60,6 +61,11 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
       { to: "retention", label: "Retention", icon: Timer },
       { to: "archive", label: "Archive", icon: Archive }
     ]
+  },
+  {
+    id: "account",
+    label: "Account",
+    links: [{ to: "connected", label: "Connected Services", icon: Link2 }]
   }
 ];
 
