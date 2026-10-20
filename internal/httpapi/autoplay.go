@@ -57,6 +57,12 @@ func (s *Server) ReplenishAutoplay(ctx context.Context, sid uuid.UUID) error {
 	exclude := append([]uuid.UUID{}, have...)
 	exclude = append(exclude, seed)
 
+	// Songs someone uploaded continue with the rest of their album, or else
+	// with more of that person's uploads, before any radio or YouTube fill.
+	if picked := s.autoplayUploadTracks(fillCtx, userID, seed, have); len(picked) > 0 {
+		return s.addAutoplayTracks(fillCtx, sid, userID, picked)
+	}
+
 	// With YouTube available, the related-songs mix leads and the library only
 	// bridges the gap while it loads, so autoplay is not just more songs by the
 	// same artist. Without YouTube, the library fills everything.
@@ -147,15 +153,11 @@ func (s *Server) autoplayLibraryTracks(ctx context.Context, userID, seed uuid.UU
 	if s.autoplaySelectHook != nil {
 		return s.autoplaySelectHook(ctx, seed, exclude)
 	}
-	u := s.autoplayUser(ctx, userID)
-	libs := s.libraryIDs(ctx, u)
-	if len(libs) == 0 && seed != uuid.Nil {
-		var lib uuid.UUID
-		_ = s.Pool.QueryRow(ctx, `SELECT library_id FROM tracks WHERE id=$1`, seed).Scan(&lib)
-		if lib != uuid.Nil {
-			libs = []uuid.UUID{lib}
-		}
+	var seedLib uuid.UUID
+	if seed != uuid.Nil {
+		_ = s.Pool.QueryRow(ctx, `SELECT library_id FROM tracks WHERE id=$1`, seed).Scan(&seedLib)
 	}
+	libs := s.autoplayLibs(ctx, userID, seedLib)
 	res, err := radio.New(s.Pool).Select(ctx, radio.Request{
 		Kind:    "track",
 		SeedID:  seed,
