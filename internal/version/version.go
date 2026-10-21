@@ -1,6 +1,6 @@
 package version
 
 var (
-	Version    = "0.1.9"
+	Version    = "0.1.10"
 	APIVersion = "v1"
 )
