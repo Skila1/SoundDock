@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, useSearchParams } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRightLeft, Combine, KeyRound, Pencil, Star, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -15,10 +15,9 @@ import { Select } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { formatBytes } from "@/lib/utils";
 import { ScanProgressBar, latestScan, useScanRuns } from "@/features/library/ScanProgress";
-import { AdminTabs, ByteInput, Card, RowMenu, errorMessage } from "./adminUi";
+import { ByteInput, RowMenu, errorMessage } from "./adminUi";
 import { capLabel } from "./adminFormat";
 import { fetchQuotas, overrideFor, quotasKey, saveQuotas } from "./adminQuotas";
-import { LibraryAccess } from "./LibraryAccess";
 
 type Library = {
   id: string;
@@ -53,32 +52,20 @@ type StorageRow = {
 export function AdminLibraries() {
   const [params] = useSearchParams();
   if (params.get("tab") === "storage") return <Navigate to="/admin/storage" replace />;
+  if (params.get("tab") === "access") return <Navigate to={`/admin/access${params.get("lib") ? `?lib=${params.get("lib")}` : ""}`} replace />;
   return (
     <div>
-      <PageHeader title="Libraries" description="Your music libraries and who can use them. Scan them from the Scan page. Removing a library never deletes files on network or local folders." />
-      <AdminTabs
-        fallback="libraries"
-        tabs={[
-          { id: "libraries", label: "Libraries", content: <LibrariesTab /> },
-          { id: "access", label: "Access", content: <LibraryAccess initialLibrary={params.get("lib") || ""} /> }
-        ]}
-      />
+      <PageHeader title="Libraries" description="Your music libraries. Scan them from the Scan page and set who can use them under IAM > Access. Removing a library never deletes files on network or local folders." />
+      <LibrariesTab />
     </div>
   );
 }
 
-export function AdminStorage() {
-  return (
-    <div>
-      <PageHeader title="Storage" description="Where your music files live, how much space they use, and the default size limits." />
-      <StorageTab />
-    </div>
-  );
-}
+export { AdminStorage } from "./AdminStorage";
 
 function LibrariesTab() {
   const qc = useQueryClient();
-  const [, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const libs = useQuery({ queryKey: ["libraries"], queryFn: () => api.get<Library[]>("/api/v1/libraries") });
   const quotas = useQuery({ queryKey: quotasKey, queryFn: fetchQuotas });
   const scans = useScanRuns();
@@ -119,7 +106,7 @@ function LibrariesTab() {
                     label={`Actions for ${l.name}`}
                     actions={[
                       { label: "Edit", icon: Pencil, onSelect: () => setEdit(l) },
-                      { label: "Manage access", icon: KeyRound, onSelect: () => setParams({ tab: "access", lib: l.id }, { replace: true }) },
+                      { label: "Manage access", icon: KeyRound, onSelect: () => navigate(`/admin/access?lib=${l.id}`) },
                       ...(!l.is_default
                         ? [
                             {
@@ -336,161 +323,5 @@ function DeleteLibraryDialog({ lib, onClose, onDeleted }: { lib: Library | null;
         )}
       </DialogContent>
     </Dialog>
-  );
-}
-
-const emptyStorageForm = { name: "", type: "local", root: "", endpoint: "", bucket: "", region: "auto", access_key: "", secret_key: "", prefix: "", use_ssl: true };
-
-function StorageTab() {
-  const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["admin-storage"], queryFn: () => api.get<StorageRow[]>("/api/v1/admin/storage") });
-  const quotas = useQuery({ queryKey: quotasKey, queryFn: fetchQuotas });
-  const [open, setOpen] = useState(false);
-  const [edit, setEdit] = useState<StorageRow | null>(null);
-  const [remove, setRemove] = useState<StorageRow | null>(null);
-  const [form, setForm] = useState(emptyStorageForm);
-  const [defaultCap, setDefaultCap] = useState<number | null>(null);
-  useEffect(() => { if (quotas.data) setDefaultCap(quotas.data.default_library_bytes || 0); }, [quotas.data]);
-
-  const saveConfig = () =>
-    form.type === "s3"
-      ? { endpoint: form.endpoint, bucket: form.bucket, region: form.region, access_key: form.access_key, secret_key: form.secret_key, prefix: form.prefix, use_ssl: form.use_ssl }
-      : { root: form.root };
-
-  return (
-    <div className="space-y-5">
-      <div className="flex justify-end">
-        <Button onClick={() => { setForm(emptyStorageForm); setOpen(true); }}>Add storage</Button>
-      </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        {(q.data || []).map((s) => {
-          const used = s.used_bytes || 0;
-          const total = s.total_bytes || 0;
-          return (
-            <article key={s.id} className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="font-semibold">{s.name}</h3>
-                  <p className="text-sm text-muted">{s.type_label || s.type}</p>
-                </div>
-                <RowMenu
-                  label={`Actions for ${s.name}`}
-                  actions={[
-                    {
-                      label: "Edit",
-                      icon: Pencil,
-                      onSelect: () => {
-                        setEdit(s);
-                        setForm({ ...emptyStorageForm, name: s.name, type: s.type, root: s.root || "", endpoint: s.endpoint || "", bucket: s.bucket || "", region: s.region || "auto", prefix: s.prefix || "", use_ssl: s.use_ssl !== false });
-                      }
-                    },
-                    { label: s.can_delete ? "Remove" : "Remove (still used by a library)", icon: Trash2, destructive: true, disabled: !s.can_delete, onSelect: () => setRemove(s) }
-                  ]}
-                />
-              </div>
-              {s.description && <p className="mt-2 text-sm text-subtle">{s.description}</p>}
-              {s.root && <p className="mt-2 break-all font-mono text-xs text-muted">{s.root}</p>}
-              {s.bucket && <p className="mt-2 text-xs text-muted">{s.bucket}{s.prefix ? ` / ${s.prefix}` : ""} · {s.endpoint || "S3"}</p>}
-              {(total > 0 || used > 0) && (
-                <div className="mt-3">
-                  <div className="mb-1 flex justify-between text-xs text-muted">
-                    <span>{formatBytes(used)} used{typeof s.file_count === "number" ? ` · ${s.file_count} files` : ""}</span>
-                    {total > 0 && <span>{formatBytes(s.free_bytes || 0)} free</span>}
-                  </div>
-                  {total > 0 && <Progress value={Math.min(100, (used / total) * 100)} />}
-                </div>
-              )}
-              {(s.libraries || []).length > 0 && <p className="mt-2 text-xs text-muted">Libraries: {(s.libraries || []).map((l) => l.name).join(", ")}</p>}
-            </article>
-          );
-        })}
-      </div>
-
-      <Card title="Default library limit" description="How much a library may hold unless it has its own limit (set under Edit on the Libraries page). 0 means unlimited.">
-        <div className="flex flex-wrap items-center gap-2">
-          <ByteInput value={defaultCap} onChange={setDefaultCap} />
-          <Button
-            size="sm"
-            disabled={defaultCap === (quotas.data?.default_library_bytes || 0)}
-            onClick={async () => {
-              try {
-                await saveQuotas({ defaultLibraryBytes: defaultCap || 0 });
-                toast.success("Default library limit saved");
-                qc.invalidateQueries({ queryKey: quotasKey });
-              } catch (e) {
-                toast.error(errorMessage(e, "Could not save limit"));
-              }
-            }}
-          >
-            Save
-          </Button>
-        </div>
-      </Card>
-
-      <Dialog open={open || !!edit} onOpenChange={(v) => { if (!v) { setOpen(false); setEdit(null); } }}>
-        <DialogContent title={edit ? `Edit ${edit.name}` : "Add storage"} className="max-h-[90vh] overflow-y-auto">
-          <form
-            className="space-y-3"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              try {
-                if (edit) {
-                  await api.patch(`/api/v1/admin/storage/${edit.id}`, { name: form.name, config: saveConfig() });
-                  toast.success("Storage updated");
-                } else {
-                  await api.post("/api/v1/admin/storage", { name: form.name, type: form.type, config: saveConfig() });
-                  toast.success("Storage added");
-                }
-                setOpen(false);
-                setEdit(null);
-                qc.invalidateQueries({ queryKey: ["admin-storage"] });
-              } catch (err) {
-                toast.error(errorMessage(err, "Could not save storage"));
-              }
-            }}
-          >
-            <Field label="Name"><Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required /></Field>
-            {!edit && (
-              <Field label="Type">
-                <Select value={form.type} onValueChange={(type) => setForm({ ...form, type })} options={[{ value: "managed", label: "SoundDock media folder" }, { value: "local", label: "Folder on this server" }, { value: "s3", label: "S3 or Cloudflare R2" }]} />
-              </Field>
-            )}
-            {form.type !== "s3" ? (
-              <Field label="Folder path" hint="Leave empty to use SoundDock's own media folder.">
-                <Input value={form.root} onChange={(e) => setForm({ ...form, root: e.target.value })} placeholder="/srv/music" />
-              </Field>
-            ) : (
-              <>
-                <Field label="Endpoint"><Input value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder="xxx.r2.cloudflarestorage.com" required={!edit} /></Field>
-                <Field label="Bucket"><Input value={form.bucket} onChange={(e) => setForm({ ...form, bucket: e.target.value })} required={!edit} /></Field>
-                <Field label="Region"><Input value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} /></Field>
-                <Field label="Folder in bucket"><Input value={form.prefix} onChange={(e) => setForm({ ...form, prefix: e.target.value })} /></Field>
-                <Field label="Access key" hint={edit ? "Leave blank to keep the saved key." : undefined}><Input value={form.access_key} onChange={(e) => setForm({ ...form, access_key: e.target.value })} /></Field>
-                <Field label="Secret key" hint="Stored encrypted and never shown again."><Input type="password" value={form.secret_key} onChange={(e) => setForm({ ...form, secret_key: e.target.value })} /></Field>
-              </>
-            )}
-            <Button type="submit">Save</Button>
-          </form>
-        </DialogContent>
-      </Dialog>
-      <ConfirmDialog
-        open={!!remove}
-        onOpenChange={(v) => { if (!v) setRemove(null); }}
-        title={`Remove ${remove?.name || "storage"}?`}
-        description="SoundDock stops using this storage. Files in it are not deleted."
-        confirmLabel="Remove"
-        destructive
-        onConfirm={async () => {
-          if (!remove) return;
-          try {
-            await api.del(`/api/v1/admin/storage/${remove.id}`);
-            toast.success("Storage removed");
-            qc.invalidateQueries({ queryKey: ["admin-storage"] });
-          } catch (e) {
-            toast.error(errorMessage(e, "Could not remove storage"));
-          }
-        }}
-      />
-    </div>
   );
 }

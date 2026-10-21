@@ -70,6 +70,9 @@ type Runner struct {
 
 	// OnCompleted runs after a job is marked completed. Set it before Start.
 	OnCompleted func(ctx context.Context, job Job)
+	// OnFailed runs once a job is marked failed for good (terminal error or
+	// retries exhausted) with the stored error text. Set it before Start.
+	OnFailed func(ctx context.Context, job Job, msg string)
 }
 
 func New(pool *pgxpool.Pool, log *slog.Logger) *Runner {
@@ -673,10 +676,13 @@ func (r *Runner) fail(ctx context.Context, job Job, err error, cfg PoolConfig) {
 		msg = fmt.Sprintf("timed out after %ds", cfg.TimeoutSeconds)
 	}
 	if errors.Is(err, ErrTerminal) {
-		_, _ = r.db.Exec(ctx, `
+		tag, _ := r.db.Exec(ctx, `
 			UPDATE jobs SET status='failed', last_error=$2, finished_at=now(), locked_until=NULL, updated_at=now()
 			WHERE id=$1 AND status='running'`, job.ID, msg)
 		writeJobLog(ctx, r.db, job, msg)
+		if r.OnFailed != nil && tag.RowsAffected() > 0 {
+			r.OnFailed(ctx, job, msg)
+		}
 		return
 	}
 	_, _ = r.db.Exec(ctx, `
@@ -688,6 +694,9 @@ func (r *Runner) fail(ctx context.Context, job Job, err error, cfg PoolConfig) {
 	_ = r.db.QueryRow(ctx, `SELECT status FROM jobs WHERE id=$1`, job.ID).Scan(&status)
 	if status == "failed" {
 		writeJobLog(ctx, r.db, job, msg)
+		if r.OnFailed != nil {
+			r.OnFailed(ctx, job, msg)
+		}
 		return
 	}
 	emitJob(ctx, job, job.Pool, "warn", "will retry", msg, 0)

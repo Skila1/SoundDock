@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/auth"
 	cryptox "github.com/sounddock/sounddock/internal/crypto"
 	discordx "github.com/sounddock/sounddock/internal/discord"
 	"github.com/sounddock/sounddock/internal/minilib"
@@ -129,21 +130,43 @@ func (s *Server) attachedBoundSession(r *http.Request) (uuid.UUID, bool) {
 	var sid uuid.UUID
 	var runtimeCh *string
 	var connected bool
-	var reason string
+	var reason, kind, outputPref string
+	var owner *uuid.UUID
 	err := s.Pool.QueryRow(r.Context(), `
-		SELECT session_id, voice_channel_id, connected, coalesce(last_disconnect_reason,'')
-		FROM discord_voice_runtime
-		WHERE guild_id=$1 AND session_id IS NOT NULL`, guildID).Scan(&sid, &runtimeCh, &connected, &reason)
+		SELECT r.session_id, r.voice_channel_id, r.connected, coalesce(r.last_disconnect_reason,''),
+			coalesce(p.kind,''), p.user_id, coalesce(p.output_pref,'')
+		FROM discord_voice_runtime r
+		LEFT JOIN playback_sessions p ON p.id = r.session_id
+		WHERE r.guild_id=$1 AND r.session_id IS NOT NULL`, guildID).Scan(&sid, &runtimeCh, &connected, &reason, &kind, &owner, &outputPref)
 	if err != nil || sid == uuid.Nil {
 		return uuid.Nil, false
 	}
 	if runtimeCh == nil || *runtimeCh == "" || *runtimeCh != channelID {
 		return uuid.Nil, false
 	}
+	if !sharedBoundSession(kind, owner, outputPref, currentUser(r)) {
+		return uuid.Nil, false
+	}
 	if connected || reason == "pending_join" || reason == "joining" {
 		return sid, true
 	}
 	return uuid.Nil, false
+}
+
+// sharedBoundSession decides whether a caller in the bot's channel shares the
+// bound session. A guild session, or one playing through the bot, is the
+// channel's shared queue. Another user's personal session that only has the
+// bot sitting silently in the channel (its owner listens in the browser) is
+// not: attaching to it let a friend who opened the app replace the owner's
+// queue and drive their browser playback.
+func sharedBoundSession(kind string, owner *uuid.UUID, outputPref string, u *auth.User) bool {
+	if kind == "" || kind == "discord_guild" || outputPref == playback.OutputDiscord {
+		return true
+	}
+	if owner == nil || u == nil {
+		return true
+	}
+	return *owner == u.ID
 }
 
 func (s *Server) guildPlaybackEnabled(ctx context.Context, guildID string) bool {

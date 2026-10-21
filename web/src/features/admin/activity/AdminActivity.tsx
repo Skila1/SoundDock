@@ -1,28 +1,44 @@
+import { useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "@/components/ui/empty";
 import { AdminTabs } from "../adminUi";
-import { AuditTab } from "./AuditTab";
-import { ErrorsTab } from "./ErrorsTab";
-import { JobsTab } from "./JobsTab";
-import { LiveTab } from "./LiveTab";
-import { LogsTab } from "./LogsTab";
+import { JobsPanel } from "./JobsPanel";
+import { LogStream } from "./LogStream";
+import { NowPlaying } from "./NowPlaying";
+import { legacyActivityParams, type ActivityTab } from "./streamModel";
 
-export const activityTabs = ["live", "jobs", "logs", "audit", "errors"] as const;
-export type ActivityTab = (typeof activityTabs)[number];
+export { activityTabs, type ActivityTab } from "./streamModel";
 
 export function AdminActivity() {
+  const [params, setParams] = useSearchParams();
+  const legacy = legacyActivityParams(params)?.toString();
+
+  // Old links (?tab=live, jobs, audit, errors) land on the new tab and filter.
+  useEffect(() => {
+    if (legacy != null) setParams(new URLSearchParams(legacy), { replace: true });
+  }, [legacy, setParams]);
+
   return (
     <div>
-      <PageHeader title="Activity" description="What is happening now, and a searchable record of who did what, when, from where, and whether it worked." />
-      <AdminTabs<ActivityTab>
-        fallback="live"
-        tabs={[
-          { id: "live", label: "Live", content: <LiveTab /> },
-          { id: "jobs", label: "Jobs & Workers", content: <JobsTab /> },
-          { id: "logs", label: "Logs", content: <LogsTab /> },
-          { id: "audit", label: "Audit", content: <AuditTab /> },
-          { id: "errors", label: "Errors", content: <ErrorsTab /> }
-        ]}
-      />
+      <PageHeader title="Activity" description="Who is listening, what the server is working on, and a searchable record of everything that happened." />
+      {legacy == null && (
+        <AdminTabs<ActivityTab>
+          fallback="activity"
+          tabs={[
+            {
+              id: "activity",
+              label: "Activity",
+              content: (
+                <div className="space-y-6">
+                  <NowPlaying />
+                  <JobsPanel />
+                </div>
+              )
+            },
+            { id: "logs", label: "Logs", content: <LogStream /> }
+          ]}
+        />
+      )}
     </div>
   );
 }

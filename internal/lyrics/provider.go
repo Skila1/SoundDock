@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 var (
@@ -42,6 +43,47 @@ func NormalizeProviderURL(raw string) (string, error) {
 
 func hostAllowed(host string) bool {
 	return strings.EqualFold(strings.TrimSpace(host), AllowedHost)
+}
+
+// providerBackoff is how long LRCLIB is left alone after a 5xx, so an outage
+// costs one warning instead of one per track.
+const providerBackoff = 10 * time.Minute
+
+// statusError is a non-2xx LRCLIB reply.
+type statusError struct{ Code int }
+
+func (e *statusError) Error() string { return fmt.Sprintf("lrclib status %d", e.Code) }
+
+func isServerError(err error) bool {
+	var se *statusError
+	return errors.As(err, &se) && se.Code >= 500
+}
+
+func (s *Service) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
+// providerPaused reports an active backoff after a provider 5xx.
+func (s *Service) providerPaused() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clock().Before(s.pausedUntil)
+}
+
+// pauseProvider starts a backoff. It reports true only when no backoff was
+// already running, so the caller logs once per outage.
+func (s *Service) pauseProvider() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.clock()
+	fresh := !now.Before(s.pausedUntil)
+	if fresh {
+		s.pausedUntil = now.Add(providerBackoff)
+	}
+	return fresh
 }
 
 func (s *Service) fetch(ctx context.Context, origin string, meta Meta) (string, bool, error) {
@@ -95,7 +137,7 @@ func fetchLRCLIB(ctx context.Context, client *http.Client, origin string, meta M
 		return "", false, nil
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", false, fmt.Errorf("lrclib status %d", res.StatusCode)
+		return "", false, &statusError{Code: res.StatusCode}
 	}
 	ct := res.Header.Get("Content-Type")
 	if ct != "" && !strings.Contains(strings.ToLower(ct), "json") {

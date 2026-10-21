@@ -115,6 +115,11 @@ func main() {
 	runner := jobs.New(pool, log)
 	runner.OnCompleted = func(ctx context.Context, job jobs.Job) {
 		playback.NotifyLibrary(ctx, pool, playback.JobInvalidateKeys(job.Type))
+		external.ConfirmFetchJob(ctx, pool, job)
+	}
+	// A YouTube pick that cannot be downloaded goes back to Needs review.
+	runner.OnFailed = func(ctx context.Context, job jobs.Job, msg string) {
+		external.FailFetchJob(ctx, pool, job, msg)
 	}
 	art := artwork.New(pool, cfg.CacheDir)
 	hooks := webhooks.New(pool, box, log)

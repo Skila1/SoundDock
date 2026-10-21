@@ -141,7 +141,19 @@ func TestGuestInBoundVCAttachesHostSession(t *testing.T) {
 		t.Fatalf("binding_revision %v", join["binding_revision"])
 	}
 
+	// Only a session that plays through the bot is shared with the channel.
 	grec := httptest.NewRecorder()
+	s.getQueue(grec, authedJSON(guest, http.MethodGet, "/api/v1/me/queue", nil))
+	if grec.Code != 200 {
+		t.Fatalf("guest get %d %s", grec.Code, grec.Body.String())
+	}
+	if queueID(decodeMap(t, grec)) == hostSID {
+		t.Fatal("guest attached to the host's browser-output session")
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE playback_sessions SET output_pref='discord' WHERE id=$1`, hostSID); err != nil {
+		t.Fatal(err)
+	}
+	grec = httptest.NewRecorder()
 	s.getQueue(grec, authedJSON(guest, http.MethodGet, "/api/v1/me/queue", nil))
 	if grec.Code != 200 {
 		t.Fatalf("guest get %d %s", grec.Code, grec.Body.String())
@@ -495,5 +507,23 @@ func TestQueueGetIncludesEngineFields(t *testing.T) {
 		if _, ok := got[k]; !ok {
 			t.Fatalf("missing %s", k)
 		}
+	}
+}
+
+func TestSharedBoundSessionKeepsOtherUsersBrowserSessionPrivate(t *testing.T) {
+	owner := uuid.New()
+	friend := &auth.User{ID: uuid.New()}
+	self := &auth.User{ID: owner}
+	if sharedBoundSession("web_device", &owner, playback.OutputBrowser, friend) {
+		t.Fatal("a friend in the channel must not attach to the owner's browser session")
+	}
+	if !sharedBoundSession("web_device", &owner, playback.OutputBrowser, self) {
+		t.Fatal("the owner's other device still follows their own bound session")
+	}
+	if !sharedBoundSession("web_device", &owner, playback.OutputDiscord, friend) {
+		t.Fatal("a session playing through the bot is the channel's shared queue")
+	}
+	if !sharedBoundSession("discord_guild", nil, playback.OutputBrowser, friend) {
+		t.Fatal("guild sessions are shared")
 	}
 }

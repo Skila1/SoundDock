@@ -31,13 +31,16 @@ export function relativeTime(iso?: string | null) {
   if (!iso) return "-";
   const d = new Date(iso);
   const diff = Date.now() - d.getTime();
-  const min = Math.round(diff / 60000);
-  if (min < 1) return "just now";
-  if (min < 60) return `${min}m ago`;
+  // Future times (party end, next run) read "in 2h" instead of "just now".
+  const future = diff < -30_000;
+  const min = Math.round(Math.abs(diff) / 60000);
+  const say = (n: string) => (future ? `in ${n}` : `${n} ago`);
+  if (min < 1) return future ? "in a moment" : "just now";
+  if (min < 60) return say(`${min}m`);
   const hr = Math.round(min / 60);
-  if (hr < 24) return `${hr}h ago`;
+  if (hr < 24) return say(`${hr}h`);
   const day = Math.round(hr / 24);
-  if (day < 14) return `${day}d ago`;
+  if (day < 14) return say(`${day}d`);
   return d.toLocaleDateString();
 }
 

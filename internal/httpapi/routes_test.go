@@ -60,6 +60,7 @@ func TestWave1RoutesRegistered(t *testing.T) {
 		"GET /api/v1/admin/media/holds",
 		"GET /api/v1/admin/scans/errors",
 		"GET /api/v1/admin/webhooks/deliveries",
+		"GET /api/v1/admin/integrations/discord/guilds/{id}/roles",
 		"GET /api/v1/admin/external/errors",
 		"GET /api/v1/admin/discord-users/{discordID}/library",
 		"GET /api/v1/me/history",

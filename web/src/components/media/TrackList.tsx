@@ -73,7 +73,11 @@ export async function callWriteBack(ids: string[], artwork = false) {
 export async function saveTrackMeta(id: string, body: Record<string, unknown>) {
   try {
     await api.patch(`/api/v1/tracks/${id}/metadata`, body);
-  } catch {
+  } catch (err) {
+    // Only an older server without the metadata route falls back. A locked
+    // song (423) or a refused edit must not be written another way.
+    const status = (err as { status?: number }).status;
+    if (status !== 404 && status !== 405) throw err;
     if (typeof body.title === "string") await api.patch(`/api/v1/tracks/${id}`, { title: body.title });
     if (body.genre != null || body.year != null) {
       await api.post("/api/v1/tracks/bulk", { ids: [id], genre: body.genre, year: body.year });
@@ -257,16 +261,23 @@ export function TrackList({
     if (year && !Number.isNaN(year)) body.year = year;
     body.write_back = bulkWriteBack;
     try {
+      let res: { updated?: number; locked?: number } | null;
       try {
-        await api.post("/api/v1/tracks/bulk/metadata", body);
-      } catch {
-        await api.post("/api/v1/tracks/bulk", { ids, genre: body.genre, year: body.year });
+        res = await api.post<{ updated?: number; locked?: number }>("/api/v1/tracks/bulk/metadata", body);
+      } catch (err) {
+        const status = (err as { status?: number }).status;
+        if (status !== 404 && status !== 405) throw err;
+        res = await api.post<{ updated?: number; locked?: number }>("/api/v1/tracks/bulk", { ids, genre: body.genre, year: body.year });
       }
+      const locked = res?.locked || 0;
+      const done = ids.length - locked;
       const patch: { genre?: string; year?: number } = {};
       if (typeof body.genre === "string") patch.genre = body.genre;
       if (typeof body.year === "number") patch.year = body.year;
-      if (Object.keys(patch).length) patchTracksInCaches(qc, ids, patch);
-      toast.success(ids.length === 1 ? "Updated" : `Updated ${ids.length} tracks`);
+      // Locked songs were skipped, so only an all-or-nothing result patches the cache here.
+      if (Object.keys(patch).length && !locked) patchTracksInCaches(qc, ids, patch);
+      toast.success(done === 1 ? "Updated" : `Updated ${done} tracks`);
+      if (locked) toast.message(locked === 1 ? "1 locked song was left unchanged" : `${locked} locked songs were left unchanged`);
       if (bulkWriteBack) await callWriteBack(ids);
       setBulkOpen(false);
       setSelected(new Set());

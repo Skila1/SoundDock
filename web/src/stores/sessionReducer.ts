@@ -236,7 +236,31 @@ export function applySwitchToBrowser(view: SessionView, snap: QueueSnapshot, now
   };
 }
 
+/**
+ * True when a full snapshot names a different playback session than the one
+ * applied so far: joining or leaving the bot's voice channel attaches to or
+ * detaches from a shared guild session, and another device's session can be
+ * the bound one. state_revision and playhead_sequence count per session.
+ */
+export function isSessionSwitch(view: SessionView, snap: Pick<QueueSnapshot, "id"> | null | undefined): boolean {
+  const next = snap?.id ? String(snap.id) : "";
+  const cur = view.queue?.id ? String(view.queue.id) : "";
+  return !!next && !!cur && next !== cur;
+}
+
 export function applySnapshot(view: SessionView, snap: QueueSnapshot, opts: ApplyOpts = {}): SessionView {
+  if (opts.kind !== "playhead" && opts.kind !== "bind" && isSessionSwitch(view, snap)) {
+    // Revisions from the previous session say nothing about this one; keeping
+    // them dropped every snapshot of a session with a lower revision as stale.
+    view = {
+      ...view,
+      lastAppliedRevision: 0,
+      lastPlayheadSequence: 0,
+      lastInstanceId: null,
+      queue: emptyQueue(),
+      playhead: emptyPlayhead()
+    };
+  }
   const nowMs = opts.nowMs ?? Date.now();
   const offsetMs = opts.clock?.offsetMs ?? view.clockOffsetMs;
   const kind = opts.kind || "snapshot";

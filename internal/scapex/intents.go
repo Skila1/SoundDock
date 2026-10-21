@@ -170,11 +170,25 @@ func EnsureStubTrack(ctx context.Context, pool *pgxpool.Pool, libraryID uuid.UUI
 	return id, nil
 }
 
+// fieldLocked reports whether a track, or one of its fields, was locked or
+// edited by hand, so YouTube hints must not overwrite it.
+func fieldLocked(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, field string) bool {
+	var locked bool
+	err := pool.QueryRow(ctx, `
+		SELECT t.locked OR EXISTS (
+			SELECT 1 FROM metadata_locks ml WHERE ml.entity_type='track' AND ml.entity_id=t.id AND ml.field=$2
+		) FROM tracks t WHERE t.id=$1`, id, field).Scan(&locked)
+	return err == nil && locked
+}
+
 func ApplyStubHint(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, hint TrackHint) {
 	if pool == nil || id == uuid.Nil {
 		return
 	}
 	title := strings.TrimSpace(hint.Title)
+	if fieldLocked(ctx, pool, id, "title") {
+		title = ""
+	}
 	if title != "" && !IsPlaceholderTitle(title) {
 		if hint.DurationMS > 0 {
 			_, _ = pool.Exec(ctx, `
@@ -186,7 +200,7 @@ func ApplyStubHint(ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, hint T
 	} else if hint.DurationMS > 0 {
 		_, _ = pool.Exec(ctx, `UPDATE tracks SET duration_ms=CASE WHEN duration_ms=0 THEN $2 ELSE duration_ms END, updated_at=now() WHERE id=$1`, id, hint.DurationMS)
 	}
-	if strings.TrimSpace(hint.Artist) != "" {
+	if strings.TrimSpace(hint.Artist) != "" && !fieldLocked(ctx, pool, id, "artist") {
 		setStubArtists(ctx, pool, id, hint.Artist)
 	}
 }

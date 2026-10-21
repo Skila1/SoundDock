@@ -1,6 +1,9 @@
 package discordx
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestSkipControlExtraEnded(t *testing.T) {
 	got := skipControlExtra(true)
@@ -31,6 +34,35 @@ func TestSessionPositionMS(t *testing.T) {
 	}
 	if sessionPositionMS(map[string]any{"position_ms": float64(900)}) != 900 {
 		t.Fatal("float")
+	}
+}
+
+func TestSessionLivePositionMS(t *testing.T) {
+	now := time.Date(2026, 10, 21, 17, 0, 0, 0, time.UTC)
+	at := now.Add(-7 * time.Second)
+	playing := map[string]any{"status": "playing", "position_ms": 60000, "checkpoint_at": &at, "duration_ms": 200000}
+	if got := sessionLivePositionMS(playing, now); got != 67000 {
+		t.Fatalf("playing from a browser checkpoint 7s ago should start at 67000, got %d", got)
+	}
+	paused := map[string]any{"status": "paused", "position_ms": 60000, "checkpoint_at": &at}
+	if got := sessionLivePositionMS(paused, now); got != 60000 {
+		t.Fatalf("paused must not move, got %d", got)
+	}
+	old := now.Add(-10 * time.Minute)
+	stale := map[string]any{"status": "playing", "position_ms": 60000, "checkpoint_at": &old}
+	if got := sessionLivePositionMS(stale, now); got != 60000 {
+		t.Fatalf("a checkpoint nobody kept up is not extrapolated, got %d", got)
+	}
+	nearEnd := map[string]any{"status": "playing", "position_ms": 198000, "checkpoint_at": at, "duration_ms": 200000}
+	if got := sessionLivePositionMS(nearEnd, now); got != 200000 {
+		t.Fatalf("clamped to duration, got %d", got)
+	}
+	fast := map[string]any{"status": "playing", "position_ms": 1000, "checkpoint_at": &at, "playback_rate": 1.5}
+	if got := sessionLivePositionMS(fast, now); got != 11500 {
+		t.Fatalf("rate applies, got %d", got)
+	}
+	if got := sessionLivePositionMS(map[string]any{"status": "playing", "position_ms": 500}, now); got != 500 {
+		t.Fatalf("no checkpoint, got %d", got)
 	}
 }
 

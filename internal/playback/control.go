@@ -161,7 +161,15 @@ func (e *Engine) controlTx(ctx context.Context, tx db, sid uuid.UUID, action str
 			WHERE id=$1`, sid)
 		return true, err
 	case "resume", "play":
-		_, err := tx.Exec(ctx, `UPDATE playback_sessions SET status='playing', updated_at=now() WHERE id=$1`, sid)
+		// Restart the playhead clock from the paused position without bumping
+		// playhead_sequence. Leaving checkpoint_at at the pause time made every
+		// observer (other tabs, the Discord bot on a handoff) add the whole
+		// paused span to the position.
+		_, err := tx.Exec(ctx, `
+			UPDATE playback_sessions
+			SET checkpoint_at=CASE WHEN status='playing' THEN checkpoint_at ELSE now() END,
+				status='playing', updated_at=now()
+			WHERE id=$1`, sid)
 		return true, err
 	case "stop":
 		_, err := tx.Exec(ctx, `UPDATE playback_sessions SET status='stopped', position_ms=0, stop_after_current=false, updated_at=now() WHERE id=$1`, sid)

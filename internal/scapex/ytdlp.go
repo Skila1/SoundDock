@@ -96,9 +96,37 @@ func (y *ytDLP) extra() []string {
 }
 
 func (y *ytDLP) run(ctx context.Context, args ...string) ([]byte, error) {
+	out, _, err := y.runCapture(ctx, args...)
+	return out, err
+}
+
+// stderrTailLines is how much yt-dlp stderr a "no audio" error keeps.
+const stderrTailLines = 5
+
+// tailLines returns the last n non-empty lines of raw, joined by " | ".
+func tailLines(raw []byte, n int) string {
+	var keep []string
+	for _, l := range strings.Split(string(raw), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			keep = append(keep, l)
+		}
+	}
+	if len(keep) > n {
+		keep = keep[len(keep)-n:]
+	}
+	s := strings.Join(keep, " | ")
+	if len(s) > 1200 {
+		s = s[len(s)-1200:]
+	}
+	return s
+}
+
+// runCapture is run that also hands back stderr from a successful exit, so
+// a download that exits 0 without a file can say why.
+func (y *ytDLP) runCapture(ctx context.Context, args ...string) ([]byte, []byte, error) {
 	bin, err := y.resolve()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	all := append(y.extra(), args...)
 	if _, ok := ctx.Deadline(); !ok {
@@ -123,9 +151,9 @@ func (y *ytDLP) run(ctx context.Context, args ...string) ([]byte, error) {
 		if msg == "" {
 			msg = err.Error()
 		}
-		return nil, fmt.Errorf("yt-dlp: %s", msg)
+		return nil, stderr.Bytes(), fmt.Errorf("yt-dlp: %s", msg)
 	}
-	return stdout.Bytes(), nil
+	return stdout.Bytes(), stderr.Bytes(), nil
 }
 
 func searchTarget(query string, limit int) (lookup bool, spec string) {
@@ -356,10 +384,25 @@ func (y *ytDLP) FetchPolicy(ctx context.Context, mediaURL, destDir, policy strin
 		"-o", filepath.Join(destDir, "%(id)s.%(ext)s"),
 		src,
 	)
-	if _, err := y.run(ctx, args...); err != nil {
+	_, stderr, err := y.runCapture(ctx, args...)
+	if err != nil {
 		return nil, err
 	}
-	return collectDownloads(destDir, vid)
+	got, err := collectDownloads(destDir, vid)
+	if err != nil {
+		return nil, withStderr(err, stderr)
+	}
+	return got, nil
+}
+
+// withStderr appends the tail of yt-dlp's stderr to err so a run that exited
+// cleanly without audio still records what yt-dlp said.
+func withStderr(err error, stderr []byte) error {
+	tail := tailLines(stderr, stderrTailLines)
+	if err == nil || tail == "" {
+		return err
+	}
+	return fmt.Errorf("%w; yt-dlp said: %s", err, tail)
 }
 
 var uploadExt = map[string]bool{

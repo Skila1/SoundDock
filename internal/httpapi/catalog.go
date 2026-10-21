@@ -63,6 +63,7 @@ func (s *Server) createAlbum(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.TrackIDs) > 0 {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE tracks SET album_id=$1, updated_at=now() WHERE id = ANY($2)`, albumID, body.TrackIDs)
+		s.lockTrackFields(r.Context(), body.TrackIDs, currentUser(r).ID, "album")
 	}
 	writeJSON(w, 201, map[string]any{"id": albumID, "title": title, "library_id": libID, "ok": true})
 }

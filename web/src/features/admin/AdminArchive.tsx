@@ -5,12 +5,13 @@ import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { relativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { EmptyState, PageHeader, QueryError } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/misc";
 import { ConfirmDialog } from "@/components/ui/alert-dialog";
 import { LocalSearch, useDebounced } from "@/components/media/LibraryToolbar";
-import { Card, SaveBar, SettingSwitch, StatCard, errorMessage } from "./adminUi";
+import { Switch } from "@/components/ui/switch";
+import { Card, SaveBar, errorMessage } from "./adminUi";
+import { InlineNumber, StatusLine } from "./storage/storageUi";
 
 type Policy = { enabled: boolean; days: number; last_run_at?: string | null; last_archived?: number };
 type ArchivedTrack = { id: string; title: string; album?: string; artist?: string; archived_at: string; last_played_at?: string | null };
@@ -96,35 +97,33 @@ export function AdminArchive() {
     <div className="space-y-6">
       <PageHeader
         title="Archive"
-        description="Songs nobody has played for a while are hidden from listings, playlists and libraries. Nothing is deleted: searching for and playing an archived song brings it back everywhere it was, without downloading it again."
+        description="Hides songs nobody plays from listings, playlists and libraries. Nothing is deleted: playing an archived song brings it back everywhere, without downloading it again. Archive hides the song; Cleanup deletes the file."
         actions={
           <Button variant="secondary" onClick={() => void runNow()} disabled={running}>
             {running ? <Loader2 className="animate-spin" /> : <Play />} Run now
           </Button>
         }
       />
-      <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Archived" value={status.data ? status.data.archived.toLocaleString() : "-"} icon={Archive} />
-        <StatCard label="Would archive now" value={status.data ? status.data.pending.toLocaleString() : "-"} hint={policy ? `Not played in ${policy.days} days` : undefined} />
-        <StatCard
-          label="Last run"
-          value={policy?.last_run_at ? relativeTime(policy.last_run_at) : "Never"}
-          hint={policy?.last_run_at ? `${policy.last_archived ?? 0} archived` : "Runs once a day when enabled"}
-        />
-      </div>
-      <Card title="Settings" description="Favourites, Keep forever songs and anything in a queue are never archived.">
+      <Card>
         {draft ? (
-          <div className="space-y-2">
-            <SettingSwitch label="Archive automatically" description="Checks once a day." checked={draft.enabled} onChange={(v) => setDraft({ ...draft, enabled: v })} />
-            <div className="flex items-center justify-between gap-4 py-2">
-              <div>
-                <div className="text-sm font-medium">Archive after</div>
-                <p className="text-xs text-subtle">Days without a play by anyone.</p>
-              </div>
-              <div className="flex items-center gap-2">
-                <Input className="w-24" inputMode="numeric" value={String(draft.days)} onChange={(e) => setDraft({ ...draft, days: Number(e.target.value.replace(/\D/g, "")) || 0 })} />
-                <span className="text-sm text-muted">days</span>
-              </div>
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <p className={`text-[15px] leading-10 ${draft.enabled ? "" : "opacity-60"}`}>
+                Archive songs nobody has played in
+                <InlineNumber label="Days without a play" value={String(draft.days)} min={1} disabled={!draft.enabled} onChange={(v) => setDraft({ ...draft, days: Number(v.replace(/\D/g, "")) || 0 })} />
+                days.
+              </p>
+              <Switch className="mt-2.5" checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} aria-label="Archive automatically" />
+            </div>
+            <div className="rounded-xl bg-surface-2/60 px-4 py-3">
+              <StatusLine
+                items={[
+                  <span key="a"><span className="font-medium text-foreground">{(status.data?.archived ?? 0).toLocaleString()}</span> archived</span>,
+                  <span key="p">{(status.data?.pending ?? 0).toLocaleString()} would be archived now</span>,
+                  <span key="l">Last run {policy?.last_run_at ? `${relativeTime(policy.last_run_at)}, ${policy.last_archived ?? 0} archived` : "never"}</span>,
+                  <span key="c">Checks once a day. Favourites, Keep forever and queued songs are never archived.</span>
+                ]}
+              />
             </div>
           </div>
         ) : (

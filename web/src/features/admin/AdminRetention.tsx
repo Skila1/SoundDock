@@ -1,17 +1,20 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Eye, Loader2, ShieldCheck, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Field } from "@/components/ui/field";
 import { Select } from "@/components/ui/select";
-import { Badge } from "@/components/ui/misc";
-import { PageHeader } from "@/components/ui/empty";
+import { Badge, Skeleton } from "@/components/ui/misc";
+import { PageHeader, QueryError } from "@/components/ui/empty";
 import { Switch } from "@/components/ui/switch";
 import { formatBytes, relativeTime } from "@/lib/utils";
-import { toast } from "sonner";
-import { SaveBar, errorMessage } from "./adminUi";
+import { Card, SaveBar, SettingSwitch, errorMessage } from "./adminUi";
+import { Expander, InlineNumber, StatusLine, fromGB, toGB, whenLabel } from "./storage/storageUi";
+import { ExclusionPicker, kindIcon, type PickKind } from "./storage/ExclusionPicker";
 
 type Policy = {
   enabled: boolean;
@@ -58,12 +61,14 @@ type PreviewRow = {
   reason: string;
 };
 
+type Exclusion = { id: string; kind: string; target_id: string; created_at: string; name?: string };
+
 type Retention = {
   log_policies: { key: string; days: number; label: string }[];
   media: Policy;
   status?: Status;
   libraries: { id: string; name: string; storage_type: string; read_only: boolean; retention_opt_in: boolean; managed: boolean; track_count: number }[];
-  exclusions: { id: string; kind: string; target_id: string; created_at: string }[];
+  exclusions: Exclusion[];
   events: {
     id: string;
     track_id?: string;
@@ -79,353 +84,382 @@ type Retention = {
   }[];
 };
 
-const modes = [
-  { value: "disabled", label: "Off - never remove downloaded music automatically" },
-  { value: "age", label: "By age - remove idle downloads after a number of days" },
-  { value: "storage", label: "By size - keep downloads under a storage limit" },
-  { value: "free_space", label: "By free space - prune when the disk is nearly full" },
-  { value: "hybrid", label: "Combined - by age, and harder when space runs low" }
+const triggers = [
+  { value: "hybrid", label: "By age, and sooner when space runs low" },
+  { value: "age", label: "By age only" },
+  { value: "storage", label: "Only when downloads pass the size cap" },
+  { value: "free_space", label: "Only when free disk space runs low" }
 ];
 
-function toGB(bytes?: number | null) {
-  if (!bytes) return "0";
-  const n = bytes / 1024 / 1024 / 1024;
-  return n >= 10 ? String(Math.round(n)) : String(Math.round(n * 100) / 100);
+type Form = {
+  on: boolean;
+  trigger: string;
+  ageDays: string;
+  freeGB: string;
+  hours: string;
+  batch: string;
+  recentDays: string;
+  minPlays: string;
+  maxGB: string;
+  lowGB: string;
+  freeTargetGB: string;
+  dryRun: boolean;
+  optIn: Record<string, boolean>;
+  logDays: Record<string, string>;
+};
+
+function formFrom(d?: Retention): Form | null {
+  if (!d) return null;
+  const p = d.media || ({} as Policy);
+  const on = !!p.enabled && p.mode !== "disabled";
+  return {
+    on,
+    trigger: !p.mode || p.mode === "disabled" ? "hybrid" : p.mode,
+    ageDays: String(p.age_days ?? 14),
+    freeGB: toGB(p.min_free_bytes),
+    hours: String(Math.max(1, Math.round((p.interval_minutes || 60) / 60))),
+    batch: String(p.batch_size ?? 50),
+    recentDays: String(p.recent_play_days ?? 7),
+    minPlays: String(p.min_play_count_protect ?? 0),
+    maxGB: toGB(p.max_managed_bytes),
+    lowGB: toGB(p.prune_down_to_bytes),
+    freeTargetGB: toGB(p.free_space_target_bytes),
+    dryRun: !!p.dry_run,
+    optIn: Object.fromEntries((d.libraries || []).map((l) => [l.id, !!l.retention_opt_in])),
+    logDays: Object.fromEntries((d.log_policies || []).map((r) => [r.key, String(r.days)]))
+  };
 }
 
-function fromGB(s: string) {
-  const n = Number(s);
-  if (!n || n < 0) return 0;
-  return Math.round(n * 1024 * 1024 * 1024);
+function payloadFrom(f: Form, d: Retention) {
+  return {
+    log_policies: Object.fromEntries((d.log_policies || []).map((r) => [r.key, Number(f.logDays[r.key] ?? r.days) || 0])),
+    media: {
+      enabled: f.on,
+      mode: f.on ? f.trigger : "disabled",
+      interval_minutes: Math.max(1, Number(f.hours) || 1) * 60,
+      max_managed_bytes: fromGB(f.maxGB),
+      prune_down_to_bytes: fromGB(f.lowGB),
+      min_free_bytes: fromGB(f.freeGB),
+      free_space_target_bytes: fromGB(f.freeTargetGB),
+      age_days: Number(f.ageDays) || 0,
+      min_play_count_protect: Number(f.minPlays) || 0,
+      recent_play_days: Number(f.recentDays) || 0,
+      batch_size: Number(f.batch) || 50,
+      dry_run: f.dryRun
+    },
+    libraries: (d.libraries || []).map((l) => ({ id: l.id, retention_opt_in: !!f.optIn[l.id] }))
+  };
 }
 
+const retKey = ["ret"];
+
+/** Cleanup: deletes downloaded files nobody plays so the disk does not fill up. */
 export function AdminRetention() {
   const qc = useQueryClient();
-  const q = useQuery({ queryKey: ["ret"], queryFn: () => api.get<Retention>("/api/v1/admin/retention") });
-  const [enabled, setEnabled] = useState(false);
-  const [mode, setMode] = useState("disabled");
-  const [hours, setHours] = useState("1");
-  const [maxGB, setMaxGB] = useState("0");
-  const [lowGB, setLowGB] = useState("0");
-  const [freeGB, setFreeGB] = useState("0");
-  const [freeTargetGB, setFreeTargetGB] = useState("0");
-  const [ageDays, setAgeDays] = useState("14");
-  const [minPlays, setMinPlays] = useState("0");
-  const [recentDays, setRecentDays] = useState("7");
-  const [batch, setBatch] = useState("50");
-  const [dryRun, setDryRun] = useState(false);
-  const [days, setDays] = useState<Record<string, string>>({});
-  const [optIn, setOptIn] = useState<Record<string, boolean>>({});
-  const [exKind, setExKind] = useState("track");
-  const [exId, setExId] = useState("");
-  const [preview, setPreview] = useState<{ rows: PreviewRow[]; bytes: number } | null>(null);
-  const [baseline, setBaseline] = useState("");
-  const [needBaseline, setNeedBaseline] = useState(false);
+  const q = useQuery({ queryKey: retKey, queryFn: () => api.get<Retention>("/api/v1/admin/retention") });
+  const server = useMemo(() => formFrom(q.data), [q.data]);
+  const [form, setForm] = useState<Form | null>(null);
   const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState<{ rows: PreviewRow[]; bytes: number } | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
-  useEffect(() => {
-    const d = q.data;
-    if (!d) return;
-    const p = d.media || ({} as Policy);
-    setEnabled(!!p.enabled);
-    setMode(p.mode || "disabled");
-    setHours(String(Math.max(1, Math.round((p.interval_minutes || 60) / 60))));
-    setMaxGB(toGB(p.max_managed_bytes));
-    setLowGB(toGB(p.prune_down_to_bytes));
-    setFreeGB(toGB(p.min_free_bytes));
-    setFreeTargetGB(toGB(p.free_space_target_bytes));
-    setAgeDays(String(p.age_days ?? 14));
-    setMinPlays(String(p.min_play_count_protect ?? 0));
-    setRecentDays(String(p.recent_play_days ?? 7));
-    setBatch(String(p.batch_size ?? 50));
-    setDryRun(!!p.dry_run);
-    const next: Record<string, string> = {};
-    (d.log_policies || []).forEach((r) => {
-      if (r.key === "operational_logs") return;
-      next[r.key] = String(r.days);
-    });
-    setDays(next);
-    const o: Record<string, boolean> = {};
-    (d.libraries || []).forEach((l) => { o[l.id] = !!l.retention_opt_in; });
-    setOptIn(o);
-    setNeedBaseline(true);
-  }, [q.data]);
+  useEffect(() => { setForm(server); }, [server]);
 
-  const st = q.data?.status;
-  const logPolicies = (q.data?.log_policies || []).filter((r) => r.key !== "operational_logs");
-  const buildPayload = () => ({
-      log_policies: Object.fromEntries(logPolicies.map((r) => [r.key, Number(days[r.key] ?? r.days) || 0])),
-      media: {
-        enabled,
-        mode,
-        interval_minutes: Math.max(1, Number(hours) || 1) * 60,
-        max_managed_bytes: fromGB(maxGB),
-        prune_down_to_bytes: fromGB(lowGB),
-        min_free_bytes: fromGB(freeGB),
-        free_space_target_bytes: fromGB(freeTargetGB),
-        age_days: Number(ageDays) || 0,
-        min_play_count_protect: Number(minPlays) || 0,
-        recent_play_days: Number(recentDays) || 0,
-        batch_size: Number(batch) || 50,
-        dry_run: dryRun
-      },
-      libraries: (q.data?.libraries || []).map((l) => ({ id: l.id, retention_opt_in: !!optIn[l.id] }))
-  });
-  // Snapshot the form right after it is filled from the server so the save
-  // bar only appears once something actually changed.
-  useEffect(() => {
-    if (!needBaseline) return;
-    setBaseline(JSON.stringify(buildPayload()));
-    setNeedBaseline(false);
-    // The form state and needBaseline are set in the same update.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [needBaseline]);
-  const dirty = !!baseline && JSON.stringify(buildPayload()) !== baseline;
+  const d = q.data;
+  const st = d?.status;
+  const f = form;
+  const set = (patch: Partial<Form>) => setForm((cur) => (cur ? { ...cur, ...patch } : cur));
+  const dirty = !!f && !!server && JSON.stringify(f) !== JSON.stringify(server);
+  const savedOn = !!server?.on;
+
   const save = async () => {
+    if (!f || !d) return;
     setSaving(true);
     try {
-      await api.put("/api/v1/admin/retention", buildPayload());
-      toast.success("Retention saved");
-      await qc.invalidateQueries({ queryKey: ["ret"] });
+      await api.put("/api/v1/admin/retention", payloadFrom(f, d));
+      toast.success("Cleanup saved");
+      await qc.invalidateQueries({ queryKey: retKey });
     } catch (e) {
-      toast.error(errorMessage(e, "Could not save retention"));
+      toast.error(errorMessage(e, "Could not save cleanup settings"));
     } finally {
       setSaving(false);
     }
   };
+
   const openPreview = async () => {
+    setPreviewing(true);
     try {
       const res = await api.post<{ preview?: PreviewRow[]; eligible_bytes?: number }>("/api/v1/admin/retention/preview");
       setPreview({ rows: res.preview || [], bytes: res.eligible_bytes || 0 });
     } catch (e) {
       toast.error(errorMessage(e, "Could not preview"));
+    } finally {
+      setPreviewing(false);
     }
   };
 
+  const runNow = async () => {
+    try {
+      await api.post("/api/v1/admin/retention/run");
+      toast.success(server?.dryRun ? "Dry run started. Nothing will be deleted." : "Cleanup started");
+      setPreview(null);
+      void qc.invalidateQueries({ queryKey: retKey });
+    } catch (e) {
+      toast.error(errorMessage(e, "Could not start cleanup"));
+    }
+  };
+
+  const excluded = useMemo(() => new Set((d?.exclusions || []).map((e) => `${e.kind}:${e.target_id}`)), [d?.exclusions]);
+  const addExclusion = async (kind: PickKind, id: string, title: string) => {
+    try {
+      await api.post("/api/v1/admin/retention/exclusions", { kind, target_id: id });
+      toast.success(`${title} is protected`);
+      void qc.invalidateQueries({ queryKey: retKey });
+    } catch (e) {
+      toast.error(errorMessage(e, "Could not protect it"));
+    }
+  };
+  const removeExclusion = async (id: string) => {
+    try {
+      await api.del(`/api/v1/admin/retention/exclusions/${id}`);
+      void qc.invalidateQueries({ queryKey: retKey });
+    } catch (e) {
+      toast.error(errorMessage(e, "Could not remove"));
+    }
+  };
+
+  if (q.isError) return <QueryError message={q.error instanceof Error ? q.error.message : undefined} onRetry={() => q.refetch()} />;
+
+  const usesAge = f ? f.trigger === "age" || f.trigger === "hybrid" : true;
+  const usesFree = f ? f.trigger === "free_space" || f.trigger === "hybrid" : true;
+  const events = (d?.events || []).slice(0, 8);
+
   return (
-    <div>
+    <div className="space-y-5">
       <PageHeader
-        title="Retention"
-        description="Automatically remove downloaded music nobody is listening to, so temporary listening does not fill the disk. Network, mounted, and read-only libraries are never touched unless you opt them in."
-        actions={<Button variant="secondary" onClick={openPreview}>Prune now…</Button>}
+        title="Cleanup"
+        description="Deletes downloaded files nobody plays so they do not fill the disk. Your own folders and network libraries are left alone. Cleanup deletes the file; Archive only hides the song."
+        actions={
+          <Button variant="secondary" onClick={() => void openPreview()} disabled={previewing}>
+            {previewing ? <Loader2 className="animate-spin" /> : <Eye />} Preview cleanup
+          </Button>
+        }
       />
 
-      <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Managed media" value={formatBytes(st?.managed_bytes)} hint={st?.policy?.max_managed_bytes ? `Limit ${formatBytes(st.policy.max_managed_bytes)}` : "No size limit"} />
-        <Stat label="Filesystem free" value={st?.disk_error ? "Unavailable" : formatBytes(st?.disk_free)} hint={st?.disk_path || st?.disk_error || ""} />
-        <Stat label="Eligible now" value={String(st?.eligible_count ?? 0)} hint={formatBytes(st?.eligible_bytes)} />
-        <Stat
-          label="Last prune"
-          value={st?.last_prune_at ? relativeTime(st.last_prune_at) : "Never"}
-          hint={st?.last_prune_at ? `${st.last_dry_run ? "Dry run · " : ""}${formatBytes(st.last_reclaimed_bytes)} reclaimed` : (st?.next_prune_at ? `Next ${relativeTime(st.next_prune_at)}` : "")}
-        />
-      </div>
-      {(st?.pressure_storage || st?.pressure_free || st?.running) && (
-        <div className="mb-4 flex flex-wrap gap-2">
-          {st.running && <Badge tone="accent">Prune running</Badge>}
-          {st.pressure_storage && <Badge tone="warning">Over storage limit</Badge>}
-          {st.pressure_free && <Badge tone="warning">Low free disk</Badge>}
-        </div>
+      <Card>
+        {!f ? (
+          <Skeleton className="h-24 w-full" />
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold tracking-tight">Automatic cleanup</h2>
+                <p className="text-sm text-muted">{f.on ? "On. Runs in the background without slowing playback." : "Off. Nothing is deleted automatically."}</p>
+              </div>
+              <Switch checked={f.on} onCheckedChange={(on) => set({ on })} aria-label="Automatic cleanup" />
+            </div>
+            <p className={`text-[15px] leading-10 ${f.on ? "" : "opacity-60"}`}>
+              Remove downloaded files
+              {usesAge ? (
+                <> not played in<InlineNumber label="Days without a play" value={f.ageDays} onChange={(ageDays) => set({ ageDays })} disabled={!f.on} />days</>
+              ) : (
+                <> when space runs low</>
+              )}
+              {usesFree && (
+                <>, keep at least<InlineNumber label="Free space to keep in GB" step="0.5" value={f.freeGB} onChange={(freeGB) => set({ freeGB })} disabled={!f.on} />GB free</>
+              )}
+              .
+            </p>
+            {st && (
+              <div className="rounded-xl bg-surface-2/60 px-4 py-3">
+                <StatusLine
+                  items={[
+                    <span key="m">{formatBytes(st.managed_bytes)} downloaded</span>,
+                    st.disk_error ? <span key="f">Free space unknown</span> : <span key="f">{formatBytes(st.disk_free)} free</span>,
+                    <span key="e"><span className="font-medium text-foreground">{st.eligible_count}</span> files ({formatBytes(st.eligible_bytes)}) could go now</span>,
+                    <span key="l">Last run {st.last_prune_at ? `${relativeTime(st.last_prune_at)}${st.last_dry_run ? " (dry run)" : `, freed ${formatBytes(st.last_reclaimed_bytes)}`}` : "never"}</span>,
+                    savedOn && st.next_prune_at && <span key="n">next {whenLabel(st.next_prune_at)}</span>
+                  ]}
+                />
+                {(st.running || st.pressure_storage || st.pressure_free) && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {st.running && <Badge tone="accent">Running now</Badge>}
+                    {st.pressure_storage && <Badge tone="warning">Over the size cap</Badge>}
+                    {st.pressure_free && <Badge tone="warning">Low free space</Badge>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {f && (
+        <Expander title="Advanced" description="When it runs, how much at a time, extra protection, dry run and which libraries.">
+          <div className="space-y-5">
+            <Row label="What triggers cleanup">
+              <Select className="sm:w-80" value={f.trigger} onValueChange={(trigger) => set({ trigger })} options={triggers} />
+            </Row>
+            <Row label="Check every" hint="Hours between automatic runs.">
+              <Num value={f.hours} onChange={(hours) => set({ hours })} min={1} unit="hours" />
+            </Row>
+            <Row label="Files per run" hint="Most files removed in one run (up to 500).">
+              <Num value={f.batch} onChange={(batch) => set({ batch })} min={1} unit="files" />
+            </Row>
+            <Row label="Keep anything played in the last" hint="0 turns this off.">
+              <Num value={f.recentDays} onChange={(recentDays) => set({ recentDays })} unit="days" />
+            </Row>
+            <Row label="Keep songs played at least" hint="0 turns this off.">
+              <Num value={f.minPlays} onChange={(minPlays) => set({ minPlays })} unit="times" />
+            </Row>
+            <Row label="Size cap for downloads" hint="Start cleaning above this. 0 means no cap.">
+              <Num value={f.maxGB} onChange={(maxGB) => set({ maxGB })} step="0.5" unit="GB" />
+            </Row>
+            <Row label="Then clean down to" hint="0 means 90% of the cap.">
+              <Num value={f.lowGB} onChange={(lowGB) => set({ lowGB })} step="0.5" unit="GB" />
+            </Row>
+            <Row label="When space runs low, free up to" hint="0 frees 5 GB more than the minimum.">
+              <Num value={f.freeTargetGB} onChange={(freeTargetGB) => set({ freeTargetGB })} step="0.5" unit="GB" />
+            </Row>
+            <SettingSwitch label="Dry run" description="Record what would be deleted without deleting anything." checked={f.dryRun} onChange={(dryRun) => set({ dryRun })} />
+            {(d?.libraries || []).length > 0 && (
+              <div>
+                <div className="text-sm font-medium">Libraries</div>
+                <p className="mb-2 text-xs text-subtle">Downloads in SoundDock's own media folder are always included. Turn another library on only if SoundDock may delete files there.</p>
+                <ul className="divide-y divide-border rounded-xl border border-border">
+                  {(d?.libraries || []).map((l) => (
+                    <li key={l.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">{l.name}</div>
+                        <div className="text-xs text-subtle">{l.track_count} tracks{l.managed ? " · SoundDock media" : ` · ${l.storage_type}`}{l.read_only ? " · read only" : ""}</div>
+                      </div>
+                      <Switch checked={!!f.optIn[l.id]} onCheckedChange={(v) => set({ optIn: { ...f.optIn, [l.id]: v } })} aria-label={`Clean up ${l.name}`} />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </Expander>
       )}
 
-      <section className="mb-8 max-w-2xl space-y-4 rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
-        <h2 className="text-base font-semibold tracking-tight">Media pruning</h2>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium">Enable automatic pruning</div>
-            <p className="text-xs text-subtle">Runs in the background without slowing down playback, search, or downloads.</p>
-          </div>
-          <Switch checked={enabled} onCheckedChange={setEnabled} />
-        </div>
-        <Field label="Retention mode">
-          <Select value={mode} onValueChange={setMode} options={modes} />
-        </Field>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Prune interval (hours)" hint="How often automatic runs are considered.">
-            <Input type="number" min={1} value={hours} onChange={(e) => setHours(e.target.value)} />
-          </Field>
-          <Field label="Batch size" hint="Maximum deletions per run.">
-            <Input type="number" min={1} max={500} value={batch} onChange={(e) => setBatch(e.target.value)} />
-          </Field>
-          <Field label="Age threshold (days)" hint="Downloaded tracks older than this, and not recently played, can be removed.">
-            <Input type="number" min={0} value={ageDays} onChange={(e) => setAgeDays(e.target.value)} />
-          </Field>
-          <Field label="Recent-play protection (days)" hint="Do not prune anything played within this window. 0 disables.">
-            <Input type="number" min={0} value={recentDays} onChange={(e) => setRecentDays(e.target.value)} />
-          </Field>
-          <Field label="Protect after this many plays" hint="0 disables. Frequently played tracks stay.">
-            <Input type="number" min={0} value={minPlays} onChange={(e) => setMinPlays(e.target.value)} />
-          </Field>
-          <Field label="Maximum managed storage (GB)" hint="Start removing tracks above this size. 0 means no limit.">
-            <Input type="number" min={0} step="0.1" value={maxGB} onChange={(e) => setMaxGB(e.target.value)} />
-          </Field>
-          <Field label="Prune down to (GB)" hint="Keep removing until storage is back under this. 0 uses 90% of the maximum.">
-            <Input type="number" min={0} step="0.1" value={lowGB} onChange={(e) => setLowGB(e.target.value)} />
-          </Field>
-          <Field label="Minimum free disk (GB)" hint="Start pruning when free space drops below this. 0 disables.">
-            <Input type="number" min={0} step="0.1" value={freeGB} onChange={(e) => setFreeGB(e.target.value)} />
-          </Field>
-          <Field label="Free-space target (GB)" hint="Extra space to free once pruning starts. 0 frees an extra 5 GB.">
-            <Input type="number" min={0} step="0.1" value={freeTargetGB} onChange={(e) => setFreeTargetGB(e.target.value)} />
-          </Field>
-        </div>
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium">Dry-run / preview mode</div>
-            <p className="text-xs text-subtle">Automatic and manual runs record what they would delete without removing files.</p>
-          </div>
-          <Switch checked={dryRun} onCheckedChange={setDryRun} />
-        </div>
-      </section>
+      <Card title="Always keep" description="Favourites, Keep forever songs, playlists, queues and anything playing are never removed. Add anything else here.">
+        <ExclusionPicker excluded={excluded} onPick={(kind, hit) => void addExclusion(kind, hit.id, hit.title)} />
+        {(d?.exclusions || []).length > 0 && (
+          <ul className="mt-3 flex flex-wrap gap-2">
+            {(d?.exclusions || []).map((e) => {
+              const Icon = kindIcon[e.kind as PickKind] || ShieldCheck;
+              return (
+                <li key={e.id} className="flex max-w-full items-center gap-2 rounded-full border border-border bg-surface-2 py-1 pl-3 pr-1 text-sm">
+                  <Icon className="h-3.5 w-3.5 shrink-0 text-muted" />
+                  <span className="min-w-0 truncate">{e.name || <span className="text-subtle">Removed {e.kind}</span>}</span>
+                  <button type="button" className="rounded-full p-1 text-muted hover:bg-surface-3 hover:text-foreground" aria-label={`Stop protecting ${e.name || e.kind}`} onClick={() => void removeExclusion(e.id)}>
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </Card>
 
-      <section className="mb-8 max-w-2xl space-y-3">
-        <h2 className="text-base font-semibold tracking-tight">Libraries</h2>
-        <p className="text-sm text-muted">Downloaded tracks in SoundDock-managed libraries can be pruned. Turn a network or local library on only if SoundDock may delete files there.</p>
-        <ul className="space-y-2">
-          {(q.data?.libraries || []).map((l) => (
-            <li key={l.id} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-surface-1 px-3 py-2">
-              <div className="min-w-0">
-                <div className="truncate font-medium">{l.name}</div>
-                <div className="text-xs text-subtle">
-                  {l.storage_type}{l.read_only ? " · read-only" : ""}{l.managed ? " · managed" : ""} · {l.track_count} tracks
-                </div>
-              </div>
-              <label className="flex items-center gap-2 text-sm">
-                <span className="text-muted">Opt in</span>
-                <Switch checked={!!optIn[l.id]} onCheckedChange={(v) => setOptIn({ ...optIn, [l.id]: v })} />
-              </label>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="mb-8 max-w-2xl space-y-3">
-        <h2 className="text-base font-semibold tracking-tight">Exclusions</h2>
-        <p className="text-sm text-muted">Never prune these tracks, albums, artists, playlists, or libraries. Favourites, Keep forever, playlists, queues, and active jobs are always protected.</p>
-        <form
-          className="flex flex-wrap items-end gap-2"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            await api.post("/api/v1/admin/retention/exclusions", { kind: exKind, target_id: exId.trim() });
-            setExId("");
-            toast.success("Exclusion added");
-            qc.invalidateQueries({ queryKey: ["ret"] });
-          }}
-        >
-          <Field label="Kind">
-            <Select value={exKind} onValueChange={setExKind} options={["track", "album", "artist", "playlist", "library"].map((k) => ({ value: k, label: k }))} />
-          </Field>
-          <Field label="ID">
-            <Input className="w-72" value={exId} onChange={(e) => setExId(e.target.value)} placeholder="ID (from the item's page address)" required />
-          </Field>
-          <Button type="submit">Exclude</Button>
-        </form>
-        <ul className="space-y-1 text-sm">
-          {(q.data?.exclusions || []).map((e) => (
-            <li key={e.id} className="flex items-center justify-between gap-2 rounded-lg border border-border px-3 py-2">
-              <span><Badge>{e.kind}</Badge> <span className="font-mono text-xs">{e.target_id}</span></span>
-              <Button size="sm" variant="ghost" onClick={async () => {
-                await api.del(`/api/v1/admin/retention/exclusions/${e.id}`);
-                qc.invalidateQueries({ queryKey: ["ret"] });
-              }}>Remove</Button>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="mb-8 max-w-2xl space-y-3">
-        <h2 className="text-base font-semibold tracking-tight">Recent retention activity</h2>
-        <div className="overflow-x-auto rounded-xl border border-border">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-surface-2 text-muted">
-              <tr>
-                <th className="p-3">When</th>
-                <th className="p-3">Track</th>
-                <th className="p-3">Why</th>
-                <th className="p-3">Plays</th>
-                <th className="p-3">Size</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(q.data?.events || []).length === 0 && (
-                <tr><td className="p-3 text-subtle" colSpan={5}>No prune activity yet.</td></tr>
-              )}
-              {(q.data?.events || []).map((e) => (
-                <tr key={e.id} className="border-t border-border">
-                  <td className="p-3 text-muted">{relativeTime(e.created_at)}{e.dry_run ? " · dry" : ""}</td>
-                  <td className="p-3">
-                    <div className="font-medium">{e.title || "Unknown"}</div>
-                    <div className="text-xs text-subtle">{e.artist}{e.acquisition ? ` · ${e.acquisition}` : ""}</div>
-                  </td>
-                  <td className="p-3 text-muted">{e.reason}</td>
-                  <td className="p-3">{e.play_count}{e.last_played_at ? ` · ${relativeTime(e.last_played_at)}` : ""}</td>
-                  <td className="p-3">{formatBytes(e.size_bytes)}</td>
+      <Card title="Recent activity">
+        {!events.length ? (
+          <p className="text-sm text-subtle">Nothing removed yet.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="text-left text-[11px] font-semibold uppercase tracking-wider text-subtle">
+                <tr className="border-b border-border">
+                  <th className="py-2 pr-3">Song</th>
+                  <th className="hidden py-2 pr-3 sm:table-cell">Why</th>
+                  <th className="py-2 pr-3 text-right">Size</th>
+                  <th className="py-2 text-right">When</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {events.map((e) => (
+                  <tr key={e.id} className="border-b border-border/50 last:border-0">
+                    <td className="max-w-[14rem] py-2 pr-3">
+                      <div className="truncate font-medium">{e.title || "Unknown"}</div>
+                      <div className="truncate text-xs text-subtle">{e.artist}</div>
+                    </td>
+                    <td className="hidden py-2 pr-3 text-muted sm:table-cell">{e.reason}{e.dry_run ? <Badge className="ml-2">dry run</Badge> : null}</td>
+                    <td className="tabular py-2 pr-3 text-right text-muted">{formatBytes(e.size_bytes)}</td>
+                    <td className="whitespace-nowrap py-2 text-right text-muted">{relativeTime(e.created_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
-      <section className="mb-8 max-w-md space-y-3">
-        <h2 className="text-base font-semibold tracking-tight">Logs and history</h2>
-        <p className="text-sm text-muted">0 days means keep forever. These only clear old records, never music files.</p>
-        {(logPolicies).map((r) => (
-          <Field key={r.key} label={r.label || r.key}>
-            <Input type="number" min={0} value={days[r.key] ?? r.days} onChange={(e) => setDays({ ...days, [r.key]: e.target.value })} />
-          </Field>
-        ))}
-      </section>
+      {f && (d?.log_policies || []).length > 0 && (
+        <Card title="Log history" description="How long old records are kept. 0 keeps them forever. This never touches music files.">
+          <div className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
+            {(d?.log_policies || []).map((r) => (
+              <div key={r.key} className="flex items-center justify-between gap-3 py-1">
+                <span className="text-sm">{r.label || r.key}</span>
+                <Num value={f.logDays[r.key] ?? String(r.days)} onChange={(v) => set({ logDays: { ...f.logDays, [r.key]: v } })} unit="days" />
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
-      <SaveBar dirty={dirty} saving={saving} onSave={save} onReset={() => q.refetch().then(() => setNeedBaseline(true))} />
+      <SaveBar dirty={dirty} saving={saving} onSave={() => void save()} onReset={() => setForm(server)} />
 
       <Dialog open={!!preview} onOpenChange={(v) => { if (!v) setPreview(null); }}>
-        <DialogContent title="Prune now" className="max-h-[90vh] overflow-auto">
+        <DialogContent title="Preview cleanup" className="max-h-[90vh] overflow-auto">
           <p className="mb-3 text-sm text-muted">
-            {preview?.rows.length || 0} tracks · {formatBytes(preview?.bytes)} would be freed. Favourites, tracks marked Keep forever, playlists, queues, and active jobs are never pruned.
+            {preview?.rows.length ? `${preview.rows.length} files, ${formatBytes(preview.bytes)} in total, would be removed by a run now.` : "Nothing would be removed right now."}
+            {server?.dryRun ? " Dry run is on, so a run only records this list." : ""}
           </p>
+          {!savedOn && <p className="mb-3 text-sm text-warning">Turn on automatic cleanup and save to run it.</p>}
           <div className="mb-3 flex gap-2">
-            <Button
-              disabled={!preview?.rows.length}
-              onClick={async () => {
-                try {
-                  await api.post("/api/v1/admin/retention/run");
-                  toast.success("Prune started");
-                  setPreview(null);
-                  qc.invalidateQueries({ queryKey: ["ret"] });
-                } catch (e) {
-                  toast.error(errorMessage(e, "Could not start prune"));
-                }
-              }}
-            >
-              Prune {preview?.rows.length || 0} tracks
+            <Button variant={server?.dryRun ? "default" : "destructive"} disabled={!preview?.rows.length || !savedOn} onClick={() => void runNow()}>
+              <Trash2 /> {server?.dryRun ? "Run dry run" : `Remove ${preview?.rows.length || 0} files`}
             </Button>
             <Button variant="ghost" onClick={() => setPreview(null)}>Cancel</Button>
           </div>
-          <ul className="space-y-2 text-sm">
+          <ul className="divide-y divide-border rounded-xl border border-border text-sm">
             {(preview?.rows || []).map((row) => (
-              <li key={row.id} className="rounded-lg border border-border px-3 py-2">
-                <div className="font-medium">{row.title}</div>
-                <div className="text-xs text-subtle">
-                  {row.artist} · {row.reason} · {row.play_count} plays · {formatBytes(row.size_bytes)}
-                  {row.last_played_at ? ` · last ${relativeTime(row.last_played_at)}` : " · never played"}
+              <li key={row.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                <div className="min-w-0">
+                  <div className="truncate font-medium">{row.title}</div>
+                  <div className="truncate text-xs text-subtle">
+                    {row.artist} · {row.play_count} plays · {row.last_played_at ? `last ${relativeTime(row.last_played_at)}` : "never played"}
+                  </div>
                 </div>
+                <span className="tabular shrink-0 text-xs text-muted">{formatBytes(row.size_bytes)}</span>
               </li>
             ))}
-            {(preview?.rows || []).length === 0 && <li className="text-subtle">Nothing is eligible to prune right now.</li>}
           </ul>
+          <p className="mt-3 text-xs text-subtle">Want to keep something? Add it under Always keep. Hiding songs instead of deleting them is done by <Link to="/admin/archive" className="text-accent hover:underline">Archive</Link>.</p>
         </DialogContent>
       </Dialog>
     </div>
   );
 }
 
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
+function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
-    <div className="rounded-2xl border border-border bg-surface-1 p-5 shadow-sm">
-      <div className="text-xs uppercase tracking-wide text-subtle">{label}</div>
-      <div className="mt-1 text-lg font-semibold">{value}</div>
-      {hint && <div className="mt-1 truncate text-xs text-muted">{hint}</div>}
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+      <div className="min-w-0">
+        <div className="text-sm font-medium">{label}</div>
+        {hint && <p className="text-xs text-subtle">{hint}</p>}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
+}
+
+function Num({ value, onChange, unit, min = 0, step }: { value: string; onChange: (v: string) => void; unit: string; min?: number; step?: string }) {
+  return (
+    <div className="flex items-center gap-2">
+      <Input className="h-9 w-24" type="number" inputMode="decimal" min={min} step={step} value={value} onChange={(e) => onChange(e.target.value)} />
+      <span className="w-12 text-sm text-muted">{unit}</span>
     </div>
   );
 }

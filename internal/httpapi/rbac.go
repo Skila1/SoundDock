@@ -378,3 +378,69 @@ func discordMemberRoles(ctx context.Context, client *http.Client, token, guildID
 	}
 	return body.Roles, true
 }
+
+// discordGuildRoles lists a server's roles so admins pick them by name
+// instead of pasting role IDs. Discord being unreachable is not an error:
+// the page falls back to a raw ID field.
+func (s *Server) discordGuildRoles(w http.ResponseWriter, r *http.Request) {
+	gid := strings.TrimSpace(chi.URLParam(r, "id"))
+	out := map[string]any{"roles": []any{}, "discord": false}
+	token := s.discordBotToken(r.Context())
+	if gid == "" || token == "" {
+		out["error"] = "Discord bot is not configured"
+		writeJSON(w, 200, out)
+		return
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, "https://discord.com/api/v10/guilds/"+gid+"/roles", nil)
+	if err != nil {
+		out["error"] = err.Error()
+		writeJSON(w, 200, out)
+		return
+	}
+	req.Header.Set("Authorization", "Bot "+token)
+	res, err := (&http.Client{Timeout: 8 * time.Second}).Do(req)
+	if err != nil {
+		out["error"] = "Discord is unreachable"
+		writeJSON(w, 200, out)
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, res.Body)
+		out["error"] = "Discord refused the request (" + res.Status + ")"
+		writeJSON(w, 200, out)
+		return
+	}
+	var roles []struct {
+		ID       string `json:"id"`
+		Name     string `json:"name"`
+		Color    int    `json:"color"`
+		Position int    `json:"position"`
+		Managed  bool   `json:"managed"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&roles); err != nil {
+		out["error"] = "Could not read Discord roles"
+		writeJSON(w, 200, out)
+		return
+	}
+	list := make([]map[string]any, 0, len(roles))
+	for _, ro := range roles {
+		// @everyone shares the server ID and bot roles cannot be assigned to people.
+		if ro.ID == gid || ro.Managed {
+			continue
+		}
+		list = append(list, map[string]any{"id": ro.ID, "name": ro.Name, "color": ro.Color, "position": ro.Position})
+	}
+	sortRolesByPosition(list)
+	out["roles"] = list
+	out["discord"] = true
+	writeJSON(w, 200, out)
+}
+
+func sortRolesByPosition(list []map[string]any) {
+	for i := 1; i < len(list); i++ {
+		for j := i; j > 0 && list[j]["position"].(int) > list[j-1]["position"].(int); j-- {
+			list[j], list[j-1] = list[j-1], list[j]
+		}
+	}
+}

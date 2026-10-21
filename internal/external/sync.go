@@ -149,6 +149,8 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 			trackID    *uuid.UUID
 			status     string
 			confidence float64
+			source     string
+			itemError  string
 		}
 		matched, unmatched, amb := 0, 0, 0
 		var keepIDs []uuid.UUID
@@ -226,7 +228,29 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 				}
 			}
 			metaJSON, _ := json.Marshal(tr)
-			rows = append(rows, pendingItem{pos: i, tr: tr, arts: arts, metaJSON: metaJSON, trackID: res.TrackID, status: status, confidence: res.Confidence})
+			rows = append(rows, pendingItem{pos: i, tr: tr, arts: arts, metaJSON: metaJSON, trackID: res.TrackID, status: status, confidence: res.Confidence, source: res.Source})
+		}
+		// A YouTube pick whose download already failed for good goes to Needs
+		// review now; the fetch completion hook missed it because these rows
+		// did not exist yet.
+		for i := range rows {
+			row := &rows[i]
+			if row.trackID == nil || row.source != "youtube" {
+				continue
+			}
+			reason, failed := fetchFailure(ctx, pool, *row.trackID)
+			if !failed {
+				continue
+			}
+			stub := *row.trackID
+			_, _ = pool.Exec(ctx, `DELETE FROM external_track_mappings WHERE sounddock_track_id=$1 AND mapping_source='youtube'`, stub)
+			keepIDs = withoutID(keepIDs, stub)
+			row.trackID = nil
+			row.status = "unmatched"
+			row.confidence = 0
+			row.itemError = reason
+			matched--
+			unmatched++
 		}
 
 		removal := p.Removal
@@ -246,9 +270,9 @@ func Handler(pool *pgxpool.Pool, box *cryptox.Box, hooks *webhooks.Bus, sx Fille
 			return err
 		}
 		for _, row := range rows {
-			if _, err := tx.Exec(ctx, `INSERT INTO external_playlist_items (external_playlist_id, position, provider_track_id, source_url, title, artists, album, duration_ms, isrc, metadata, mapped_track_id, match_status, match_confidence)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-				epid, row.pos, row.tr.ID, row.tr.SourceURL, row.tr.Title, row.arts, row.tr.Album, row.tr.DurationMS, row.tr.ISRC, row.metaJSON, row.trackID, row.status, row.confidence); err != nil {
+			if _, err := tx.Exec(ctx, `INSERT INTO external_playlist_items (external_playlist_id, position, provider_track_id, source_url, title, artists, album, duration_ms, isrc, metadata, mapped_track_id, match_status, match_confidence, item_error)
+				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+				epid, row.pos, row.tr.ID, row.tr.SourceURL, row.tr.Title, row.arts, row.tr.Album, row.tr.DurationMS, row.tr.ISRC, row.metaJSON, row.trackID, row.status, row.confidence, row.itemError); err != nil {
 				return err
 			}
 		}

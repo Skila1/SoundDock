@@ -177,7 +177,7 @@ func (h *sessionHub) publishUser(userID uuid.UUID, name string, payload any) {
 var _ = pgx.ErrNoRows
 
 var (
-	catalogInvalidateKeys  = []string{"tracks", "albums", "artists", "album", "artist", "track", "track-meta", "home", "search", "personal-library", "favourites"}
+	catalogInvalidateKeys  = []string{"tracks", "albums", "artists", "album", "artist", "track", "track-meta", "home", "search", "personal-library", "favourites", "playlist", "me-history", "queue-tracks"}
 	playlistInvalidateKeys = []string{"playlists", "playlist", "playlist-folders", "playlist-snaps", "playlist-collabs"}
 	artworkInvalidateKeys  = []string{"artwork"}
 )

@@ -40,13 +40,15 @@ const AdminRoles = lazy(() => import("@/features/admin/AdminRoles").then((m) => 
 const AdminDiscord = lazy(() => import("@/features/admin/AdminDiscord").then((m) => ({ default: m.AdminDiscord })));
 const AdminLibraries = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminLibraries })));
 const AdminStorage = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminStorage })));
+const AdminAccess = lazy(() => import("@/features/admin/iam/AdminAccess").then((m) => ({ default: m.AdminAccess })));
+const AdminDiscordBot = lazy(() => import("@/features/admin/system/DiscordBot").then((m) => ({ default: m.AdminDiscordBot })));
 const AdminScan = lazy(() => import("@/features/admin/AdminScan").then((m) => ({ default: m.AdminScan })));
 const AdminCatalog = lazy(() => import("@/features/admin/AdminCatalog").then((m) => ({ default: m.AdminCatalog })));
 const AdminMediaSettings = lazy(() => import("@/features/admin/AdminMediaSettings").then((m) => ({ default: m.AdminMediaSettings })));
 const AdminArchive = lazy(() => import("@/features/admin/AdminArchive").then((m) => ({ default: m.AdminArchive })));
 const AdminRetention = lazy(() => import("@/features/admin/AdminRetention").then((m) => ({ default: m.AdminRetention })));
 const AdminStatsMigration = lazy(() => import("@/features/admin/AdminStatsMigration").then((m) => ({ default: m.AdminStatsMigration })));
-const PartyPage = lazy(() => import("@/features/devices/PartyPage").then((m) => ({ default: m.PartyPage })));
+const PartyLink = lazy(() => import("@/features/party/Party").then((m) => ({ default: m.PartyLink })));
 const ConnectedServicesPage = lazy(() => import("@/features/settings/ConnectedServicesPage").then((m) => ({ default: m.ConnectedServicesPage })));
 const FavouritesPage = lazy(() => import("@/features/favourites/FavouritesPage").then((m) => ({ default: m.FavouritesPage })));
 const LibrariesPage = lazy(() => import("@/features/library/LibrariesPage").then((m) => ({ default: m.LibrariesPage })));
@@ -155,7 +157,7 @@ export function AppRouter() {
           <Route path="/settings/connected" element={<ConnectedServicesPage />} />
           <Route path="/profile" element={<ProfilePage user={user} onRefresh={() => me.refetch()} />} />
           <Route path="/profile/devices" element={<DevicesPage />} />
-          <Route path="/profile/party" element={<PartyPage />} />
+          <Route path="/profile/party" element={<PartyLink />} />
           <Route path="/admin" element={user.is_admin ? <AdminLayout /> : <ForbiddenPage />}>
             <Route index element={<AdminDashboard />} />
             <Route path="activity" element={<AdminActivity />} />
@@ -166,7 +168,9 @@ export function AppRouter() {
             <Route path="users/:id/library" element={<PersonalLibraryPage admin />} />
             <Route path="discord-users/:discordID/library" element={<PersonalLibraryPage adminDiscord />} />
             <Route path="groups" element={<AdminRoles />} />
-            <Route path="discord" element={<AdminDiscord />} />
+            <Route path="discord" element={<AdminDiscord bot={false} />} />
+            <Route path="discord-bot" element={<AdminDiscordBot />} />
+            <Route path="access" element={<AdminAccess />} />
             <Route path="libraries" element={<AdminLibraries />} />
             <Route path="storage" element={<AdminStorage />} />
             <Route path="scan" element={<AdminScan />} />

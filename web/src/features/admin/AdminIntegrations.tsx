@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Trash2 } from "lucide-react";
+import { Copy, KeyRound, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -12,21 +13,54 @@ import { Badge } from "@/components/ui/misc";
 import { PageHeader } from "@/components/ui/empty";
 import { Select } from "@/components/ui/select";
 import { relativeTime } from "@/lib/utils";
-import { AdminTabs, Card, SettingSwitch, errorMessage } from "./adminUi";
+import { Card, SettingSwitch, errorMessage } from "./adminUi";
+
+const sections = [
+  { id: "keys", label: "API keys" },
+  { id: "webhooks", label: "Webhooks" },
+  { id: "providers", label: "Playlist services" }
+] as const;
 
 export function AdminIntegrations() {
+  const [params] = useSearchParams();
+  const target = params.get("tab");
+  // Old ?tab=keys|webhooks|providers links land on the matching section.
+  useEffect(() => {
+    if (!target) return;
+    const el = document.getElementById(`integrations-${target}`);
+    if (el) requestAnimationFrame(() => el.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }, [target]);
   return (
     <div>
-      <PageHeader title="Integrations" description="API keys, outgoing webhooks, and the playlist services people can connect." />
-      <AdminTabs
-        fallback="keys"
-        tabs={[
-          { id: "keys", label: "API keys", content: <ApiKeys /> },
-          { id: "webhooks", label: "Webhooks", content: <Webhooks /> },
-          { id: "providers", label: "Playlist providers", content: <PlaylistProviders /> }
-        ]}
-      />
+      <PageHeader title="Integrations" description="Connect SoundDock to scripts, other apps and playlist services." />
+      <nav className="mb-6 flex gap-2 overflow-x-auto pb-1 scrollbar-thin" aria-label="Sections">
+        {sections.map((s) => (
+          <a key={s.id} href={`#integrations-${s.id}`} className="shrink-0 rounded-full bg-surface-1 px-3.5 py-1.5 text-sm font-medium text-muted ring-1 ring-inset ring-border transition-colors hover:text-foreground">
+            {s.label}
+          </a>
+        ))}
+      </nav>
+      <div className="space-y-10">
+        <ApiKeys />
+        <Webhooks />
+        <PlaylistProviders />
+      </div>
     </div>
+  );
+}
+
+function Section({ id, title, description, action, children }: { id: string; title: string; description: string; action?: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <section id={`integrations-${id}`} className="scroll-mt-24">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg font-bold tracking-tight">{title}</h2>
+          <p className="mt-0.5 max-w-2xl text-sm text-muted">{description}</p>
+        </div>
+        {action}
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -194,11 +228,12 @@ function ApiKeys() {
   }
 
   return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">Keys let scripts and other apps use SoundDock. The key is shown once when it is created.</p>
-        <Button onClick={() => { setCreating(true); setPreset("listen"); setCustom([]); }}>Create key</Button>
-      </div>
+    <Section
+      id="keys"
+      title="API keys"
+      description="Keys let scripts and other apps use SoundDock. The key is shown once when it is created."
+      action={<Button size="sm" onClick={() => { setCreating(true); setPreset("listen"); setCustom([]); }}><KeyRound /> Create key</Button>}
+    >
       {secret && (
         <div className="mb-4 rounded-xl border border-accent/40 bg-accent/10 p-4 text-sm">
           <p className="mb-2 font-medium">Copy this key now. It will not be shown again.</p>
@@ -209,7 +244,7 @@ function ApiKeys() {
           </div>
         </div>
       )}
-      <ul className="divide-y divide-border rounded-xl border border-border">
+      <ul className="divide-y divide-border rounded-2xl border border-border bg-surface-1 shadow-sm">
         {(q.data || []).map((c) => (
           <li key={c.id} className="flex items-center justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
@@ -270,7 +305,7 @@ function ApiKeys() {
           }
         }}
       />
-    </div>
+    </Section>
   );
 }
 
@@ -286,6 +321,30 @@ const webhookEvents = [
   { name: "external.provider.disconnected", label: "Provider disconnected" }
 ];
 
+type Delivery = { id: string; endpoint_id?: string; event?: string; status?: string; attempts?: number; last_error?: string | null; created_at?: string };
+
+function eventLabel(name: string) {
+  return webhookEvents.find((e) => e.name === name)?.label || name;
+}
+
+function LastDelivery({ d }: { d?: Delivery }) {
+  if (!d) return <div className="mt-1 text-xs text-subtle">No deliveries yet</div>;
+  const st = (d.status || "").toLowerCase();
+  const ok = st === "delivered" || st === "ok" || st === "success" || st === "sent";
+  const failed = st === "failed" || st === "error" || st === "dead";
+  return (
+    <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs">
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${ok ? "bg-success" : failed ? "bg-destructive" : "bg-warning"}`} aria-hidden />
+      <span className={ok ? "text-muted" : failed ? "text-destructive" : "text-warning"}>
+        {ok ? "Delivered" : failed ? "Failed" : d.status || "Pending"}
+      </span>
+      <span className="truncate text-subtle">
+        {eventLabel(d.event || "")}{d.created_at ? ` · ${relativeTime(d.created_at)}` : ""}{!ok && d.last_error ? ` · ${d.last_error}` : ""}
+      </span>
+    </div>
+  );
+}
+
 function Webhooks() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["webhooks"], queryFn: () => api.get<any[]>("/api/v1/admin/webhooks") });
@@ -294,20 +353,33 @@ function Webhooks() {
   const [secret, setSecret] = useState("");
   const [events, setEvents] = useState<string[]>(["playback.started", "library.scan.completed"]);
   const [remove, setRemove] = useState<any | null>(null);
+  const deliveries = useQuery({
+    queryKey: ["webhook-deliveries"],
+    queryFn: () => api.get<{ deliveries: Delivery[] }>("/api/v1/admin/webhooks/deliveries?limit=200").then((r) => r.deliveries || []),
+    refetchInterval: 30000
+  });
+  // Newest first from the API, so the first row per endpoint is its last delivery.
+  const lastByHook = useMemo(() => {
+    const m = new Map<string, Delivery>();
+    for (const d of deliveries.data || []) if (d.endpoint_id && !m.has(d.endpoint_id)) m.set(d.endpoint_id, d);
+    return m;
+  }, [deliveries.data]);
   return (
-    <div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">SoundDock posts a signed JSON message to each URL when the chosen events happen. Failed deliveries appear under Activity.</p>
-        <Button onClick={() => setAdding(true)}>Add webhook</Button>
-      </div>
-      <ul className="divide-y divide-border rounded-xl border border-border">
+    <Section
+      id="webhooks"
+      title="Webhooks"
+      description="SoundDock posts a signed JSON message to each URL when the chosen events happen."
+      action={<Button size="sm" onClick={() => setAdding(true)}><Plus /> Add webhook</Button>}
+    >
+      <ul className="divide-y divide-border rounded-2xl border border-border bg-surface-1 shadow-sm">
         {(q.data || []).map((w) => (
           <li key={w.id} className="flex items-center justify-between gap-3 px-4 py-3">
             <div className="min-w-0">
               <div className="truncate text-sm font-medium">{w.url}</div>
-              <div className="truncate text-xs text-muted">{(w.events || []).join(", ")}</div>
+              <div className="truncate text-xs text-muted">{(w.events || []).map(eventLabel).join(", ")}</div>
+              <LastDelivery d={lastByHook.get(String(w.id))} />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               {w.enabled === false && <Badge tone="warning">Off</Badge>}
               <Button size="sm" variant="ghost" aria-label="Delete webhook" onClick={() => setRemove(w)}><Trash2 /></Button>
             </div>
@@ -370,7 +442,7 @@ function Webhooks() {
           }
         }}
       />
-    </div>
+    </Section>
   );
 }
 
@@ -380,14 +452,13 @@ function PlaylistProviders() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["ext-providers"], queryFn: () => api.get<any[]>("/api/v1/admin/integrations/external-providers") });
   return (
-    <div>
-      <p className="mb-3 text-sm text-muted">Let people import playlists from other services. Imported playlists match your library first, then download anything missing.</p>
+    <Section id="providers" title="Playlist services" description="Let people import playlists from other services. Imported playlists match your library first, then download anything missing.">
       <div className="grid gap-4 lg:grid-cols-2">
         {(q.data || []).map((p) => (
           <ProviderCard key={p.provider} p={p} onSaved={() => qc.invalidateQueries({ queryKey: ["ext-providers"] })} />
         ))}
       </div>
-    </div>
+    </Section>
   );
 }
 

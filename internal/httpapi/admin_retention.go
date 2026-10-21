@@ -72,11 +72,19 @@ func (s *Server) adminRetention(w http.ResponseWriter, r *http.Request) {
 	}
 
 	exRows, _ := s.Pool.Query(ctx, `
-		SELECT id, kind, target_id, created_at FROM retention_exclusions ORDER BY created_at DESC`)
+		SELECT e.id, e.kind, e.target_id, e.created_at,
+		       coalesce(CASE e.kind
+		         WHEN 'track' THEN (SELECT title FROM tracks WHERE id=e.target_id)
+		         WHEN 'album' THEN (SELECT title FROM albums WHERE id=e.target_id)
+		         WHEN 'artist' THEN (SELECT name FROM artists WHERE id=e.target_id)
+		         WHEN 'playlist' THEN (SELECT name FROM playlists WHERE id=e.target_id)
+		         WHEN 'library' THEN (SELECT name FROM libraries WHERE id=e.target_id)
+		       END, '') AS name
+		FROM retention_exclusions e ORDER BY e.created_at DESC`)
 	var exclusions []map[string]any
 	if exRows != nil {
 		defer exRows.Close()
-		exclusions = scanMaps(exRows, "id", "kind", "target_id", "created_at")
+		exclusions = scanMaps(exRows, "id", "kind", "target_id", "created_at", "name")
 	}
 
 	out := map[string]any{

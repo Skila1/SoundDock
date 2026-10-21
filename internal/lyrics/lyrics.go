@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -88,6 +89,11 @@ type Service struct {
 	urlFn   func(ctx context.Context) string
 	lockFn  func(ctx context.Context, trackID uuid.UUID) bool
 	fetchFn func(ctx context.Context, origin string, meta Meta) (body string, timed bool, err error)
+
+	// After a provider 5xx no requests go out until pausedUntil.
+	mu          sync.Mutex
+	pausedUntil time.Time
+	now         func() time.Time
 }
 
 // WithLocalDir sets the on-disk lyrics folder ({artist}/{title}.lrc).
@@ -157,8 +163,17 @@ func (s *Service) GetLyrics(ctx context.Context, meta Meta) Result {
 	if strings.TrimSpace(meta.Title) == "" || strings.TrimSpace(meta.Artist) == "" {
 		return Result{}
 	}
+	if s.providerPaused() {
+		return Result{}
+	}
 	body, timed, err := s.fetch(ctx, origin, meta)
 	if err != nil {
+		if isServerError(err) {
+			if s.pauseProvider() {
+				s.warn("lyrics provider unavailable, pausing requests", "err", err, "for", providerBackoff.String())
+			}
+			return Result{}
+		}
 		s.warn("lyrics provider fetch failed", "err", err, "track_id", meta.TrackID)
 		return Result{}
 	}

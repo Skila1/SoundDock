@@ -1,6 +1,6 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { clearCatalogueTracks, patchTracksInCaches, removeTracksFromCaches } from "./catalogue";
+import { clearCatalogueTracks, patchTracksInCaches, performerNames, removeTracksFromCaches } from "./catalogue";
 
 describe("catalogue caches", () => {
   it("drops deleted tracks from home and tracks immediately", () => {
@@ -50,5 +50,34 @@ describe("catalogue caches", () => {
       { id: "b", genre: "Jazz" }
     ]);
     expect((qc.getQueryData(["home"]) as { continue: { year: number }[] }).continue[0].year).toBe(1979);
+  });
+
+  it("covers the favourites and my library rails on Home", () => {
+    const qc = new QueryClient();
+    qc.setQueryData(["home"], {
+      favourites: [{ id: "a", title: "Old" }, { id: "b" }],
+      my_library: [{ id: "a", title: "Old" }],
+      continue: []
+    });
+    patchTracksInCaches(qc, ["a"], { title: "New", artist: "Someone" });
+    const home = qc.getQueryData(["home"]) as Record<string, { id: string; title?: string; artist?: string }[]>;
+    expect(home.favourites[0]).toEqual({ id: "a", title: "New", artist: "Someone" });
+    expect(home.my_library[0].title).toBe("New");
+    removeTracksFromCaches(qc, ["a"]);
+    const after = qc.getQueryData(["home"]) as Record<string, unknown[]>;
+    expect(after.favourites).toEqual([{ id: "b" }]);
+    expect(after.my_library).toEqual([]);
+  });
+
+  it("builds the editable artist field without composers", () => {
+    expect(
+      performerNames([
+        { name: "Main", role: "primary" },
+        { name: "Writer", role: "composer" },
+        { name: "Guest", role: "featured" },
+        { name: "Legacy" }
+      ])
+    ).toBe("Main, Guest, Legacy");
+    expect(performerNames(undefined)).toBe("");
   });
 });

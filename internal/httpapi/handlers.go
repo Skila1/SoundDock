@@ -468,7 +468,11 @@ func (s *Server) patchTrack(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = decodeJSON(r, &body)
 	if t, ok := body["title"].(string); ok {
-		_, _ = s.Pool.Exec(r.Context(), `UPDATE tracks SET title=$2, updated_at=now() WHERE id=$1`, id, t)
+		if s.trackGloballyLocked(r.Context(), id) {
+			writeErr(w, 423, "locked", "track metadata is locked")
+			return
+		}
+		s.applyTrackMeta(r.Context(), id, trackMetaBody{Title: &t}, currentUser(r).ID)
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
@@ -500,15 +504,16 @@ func (s *Server) bulkTracks(w http.ResponseWriter, r *http.Request) {
 		s.deleteTracks(w, r, body.IDs, body.All, body.LibraryID, body.DeleteFiles)
 		return
 	}
+	n, locked := 0, 0
 	for _, id := range body.IDs {
-		if body.Genre != nil {
-			_, _ = s.Pool.Exec(r.Context(), `UPDATE tracks SET genre_text=$2 WHERE id=$1`, id, *body.Genre)
+		if s.trackGloballyLocked(r.Context(), id) {
+			locked++
+			continue
 		}
-		if body.Year != nil {
-			_, _ = s.Pool.Exec(r.Context(), `UPDATE tracks SET year=$2 WHERE id=$1`, id, *body.Year)
-		}
+		s.applyTrackMeta(r.Context(), id, trackMetaBody{Genre: body.Genre, Year: body.Year}, currentUser(r).ID)
+		n++
 	}
-	writeJSON(w, 200, map[string]int{"updated": len(body.IDs)})
+	writeJSON(w, 200, map[string]int{"updated": n, "locked": locked})
 }
 
 func (s *Server) deleteTracks(w http.ResponseWriter, r *http.Request, ids []uuid.UUID, all bool, lib uuid.UUID, deleteFiles bool) {
@@ -751,6 +756,7 @@ func (s *Server) patchAlbum(w http.ResponseWriter, r *http.Request) {
 	_ = decodeJSON(r, &body)
 	if body.Title != nil {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE albums SET title=$2 WHERE id=$1`, id, *body.Title)
+		s.lockAlbumTracks(r.Context(), id, currentUser(r).ID)
 	}
 	if body.Edition != nil {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE albums SET edition_title=$2 WHERE id=$1`, id, *body.Edition)
@@ -774,6 +780,7 @@ func (s *Server) mergeAlbums(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE tracks SET album_id=$1 WHERE album_id=$2`, body.Into, body.From)
 	_, _ = s.Pool.Exec(r.Context(), `DELETE FROM albums WHERE id=$1`, body.From)
+	s.lockAlbumTracks(r.Context(), body.Into, u.ID)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -841,10 +848,22 @@ func (s *Server) mergeArtists(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeMergeArtists(w, r, body.Into, body.From) {
 		return
 	}
+	s.lockArtistTracks(r.Context(), body.From, currentUser(r).ID)
+	// Credits already held by Into would collide on the primary key and fail
+	// the whole re-point, after which deleting From would drop every credit.
+	_, _ = s.Pool.Exec(r.Context(), mergeArtistDropDupesSQL("track_artists", "track_id"), body.Into, body.From)
+	_, _ = s.Pool.Exec(r.Context(), mergeArtistDropDupesSQL("album_artists", "album_id"), body.Into, body.From)
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE track_artists SET artist_id=$1 WHERE artist_id=$2`, body.Into, body.From)
 	_, _ = s.Pool.Exec(r.Context(), `UPDATE album_artists SET artist_id=$1 WHERE artist_id=$2`, body.Into, body.From)
 	_, _ = s.Pool.Exec(r.Context(), `DELETE FROM artists WHERE id=$1`, body.From)
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// mergeArtistDropDupesSQL deletes From's rows in table that Into already has
+// for the same owner and role. $1 is Into, $2 is From.
+func mergeArtistDropDupesSQL(table, owner string) string {
+	return `DELETE FROM ` + table + ` f WHERE f.artist_id=$2 AND EXISTS (
+		SELECT 1 FROM ` + table + ` i WHERE i.` + owner + `=f.` + owner + ` AND i.role=f.role AND i.artist_id=$1)`
 }
 
 func (s *Server) authorizeMergeArtists(w http.ResponseWriter, r *http.Request, into, from uuid.UUID) bool {

@@ -47,7 +47,36 @@ func (e *Engine) CheckpointPlayhead(ctx context.Context, sessionID, instanceID u
 	return nil
 }
 
-const sqlNewInstance = `playback_instance_id=gen_random_uuid(), playhead_sequence=1, position_ms=0, checkpoint_at=now()`
+// PersistPosition is the browser's periodic "where am I" write. Unlike a seek
+// it does not bump state_revision, so a pending undo stays valid and other
+// clients do not see a queue change every few seconds. It only lands while the
+// session is playing the same instance and Discord is not the renderer, so a
+// write that was in flight across a skip cannot move the next track, and a
+// browser tab cannot overwrite the bot's own checkpoints. It reports whether
+// the position was stored.
+func (e *Engine) PersistPosition(ctx context.Context, sessionID, instanceID uuid.UUID, positionMS int) (bool, error) {
+	if e == nil || e.pool == nil || sessionID == uuid.Nil || instanceID == uuid.Nil {
+		return false, nil
+	}
+	if positionMS < 0 {
+		positionMS = 0
+	}
+	tag, err := e.pool.Exec(ctx, `
+		UPDATE playback_sessions
+		SET position_ms=$3, `+sqlStampPlayhead+`, updated_at=now()
+		WHERE id=$1 AND playback_instance_id=$2 AND status='playing'
+		  AND coalesce(renderer_kind,'none') <> 'discord'`, sessionID, instanceID, positionMS)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		return false, nil
+	}
+	e.notifySession(ctx, sessionID, "session.playhead")
+	return true, nil
+}
+
+const sqlNewInstance =`playback_instance_id=gen_random_uuid(), playhead_sequence=1, position_ms=0, checkpoint_at=now()`
 
 // sqlStampPlayhead is the seek/pause checkpoint triple. Resume must not use it.
 const sqlStampPlayhead = `checkpoint_at=now(), playhead_sequence=playhead_sequence+1`

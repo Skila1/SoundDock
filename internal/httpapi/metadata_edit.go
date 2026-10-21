@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -185,75 +186,94 @@ func (s *Server) patchTrackMetadata(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, out)
 }
 
+// autoLockedTrackFields are the track fields a rescan or metadata refresh
+// rewrites from file tags or MusicBrainz. A hand edit to one of them records a
+// per-field lock so the edit survives; the editor itself still writes them.
+var autoLockedTrackFields = map[string]bool{
+	"title": true, "artist": true, "album": true, "genre": true,
+	"year": true, "disc_number": true, "track_number": true, "mbid": true,
+}
+
+// applyTrackMeta writes an editor's changes. Per-field locks guard tracks from
+// automated writers, not from editors, so they are not checked here.
 func (s *Server) applyTrackMeta(ctx context.Context, id uuid.UUID, body trackMetaBody, userID uuid.UUID) []string {
-	var updated []string
-	set := func(field, sql string, v any) {
-		if s.fieldLocked(ctx, "track", id, field) {
+	var updated, edited []string
+	set := func(field, col string, v any) {
+		tag, err := s.Pool.Exec(ctx, `UPDATE tracks SET `+col+`=$2, updated_at=now() WHERE id=$1 AND `+col+` IS DISTINCT FROM $2`, id, v)
+		if err != nil {
 			return
 		}
-		if _, err := s.Pool.Exec(ctx, sql, id, v); err == nil {
-			updated = append(updated, field)
+		updated = append(updated, field)
+		if tag.RowsAffected() > 0 {
+			edited = append(edited, field)
 		}
 	}
 	if body.Title != nil {
-		set("title", `UPDATE tracks SET title=$2, updated_at=now() WHERE id=$1`, *body.Title)
+		set("title", "title", *body.Title)
 	}
 	if body.Genre != nil {
-		set("genre", `UPDATE tracks SET genre_text=$2, updated_at=now() WHERE id=$1`, *body.Genre)
+		set("genre", "genre_text", *body.Genre)
 		s.syncTrackGenres(ctx, id, *body.Genre)
 	}
 	if body.Year != nil {
-		set("year", `UPDATE tracks SET year=$2, updated_at=now() WHERE id=$1`, *body.Year)
+		set("year", "year", *body.Year)
 	}
 	if body.DiscNumber != nil {
-		set("disc_number", `UPDATE tracks SET disc_number=$2, updated_at=now() WHERE id=$1`, *body.DiscNumber)
+		set("disc_number", "disc_number", *body.DiscNumber)
 	}
 	if body.TrackNumber != nil {
-		set("track_number", `UPDATE tracks SET track_number=$2, updated_at=now() WHERE id=$1`, *body.TrackNumber)
+		set("track_number", "track_number", *body.TrackNumber)
 	}
 	if body.Explicit != nil {
-		set("explicit", `UPDATE tracks SET explicit=$2, updated_at=now() WHERE id=$1`, *body.Explicit)
+		set("explicit", "explicit", *body.Explicit)
 	}
 	if body.ISRC != nil {
-		set("isrc", `UPDATE tracks SET isrc=$2, updated_at=now() WHERE id=$1`, *body.ISRC)
+		set("isrc", "isrc", *body.ISRC)
 	}
 	if body.MBID != nil {
-		set("mbid", `UPDATE tracks SET mbid=$2, updated_at=now() WHERE id=$1`, *body.MBID)
+		set("mbid", "mbid", *body.MBID)
 	}
 	if body.Locked != nil {
 		_, _ = s.Pool.Exec(ctx, `UPDATE tracks SET locked=$2, updated_at=now() WHERE id=$1`, id, *body.Locked)
 		updated = append(updated, "locked")
 	}
-	if body.Lyrics != nil && !s.fieldLocked(ctx, "track", id, "lyrics") {
+	if body.Lyrics != nil {
 		_, _ = s.Pool.Exec(ctx, `DELETE FROM lyrics WHERE track_id=$1 AND source='user'`, id)
 		if strings.TrimSpace(*body.Lyrics) != "" {
 			_, _ = s.Pool.Exec(ctx, `INSERT INTO lyrics (track_id, source, timed, body) VALUES ($1,'user',false,$2)`, id, *body.Lyrics)
 		}
 		updated = append(updated, "lyrics")
 	}
-	if body.Artist != nil && !s.fieldLocked(ctx, "track", id, "artist") {
-		s.replaceTrackArtists(ctx, id, *body.Artist)
+	if body.Artist != nil {
+		if s.replaceTrackArtists(ctx, id, *body.Artist) {
+			edited = append(edited, "artist")
+		}
 		updated = append(updated, "artist")
 	}
 	if body.KeepForever != nil {
 		_, _ = s.Pool.Exec(ctx, `UPDATE tracks SET keep_forever=$2, updated_at=now() WHERE id=$1`, id, *body.KeepForever)
 		updated = append(updated, "keep_forever")
 	}
-	if body.AlbumID != nil && !s.fieldLocked(ctx, "track", id, "album") {
+	if body.AlbumID != nil {
 		raw := strings.TrimSpace(*body.AlbumID)
-		if raw == "" {
-			if _, err := s.Pool.Exec(ctx, `UPDATE tracks SET album_id=NULL, updated_at=now() WHERE id=$1`, id); err == nil {
+		var albumID *uuid.UUID
+		ok := raw == ""
+		if parsed, err := uuid.Parse(raw); err == nil {
+			albumID, ok = &parsed, true
+		}
+		if ok {
+			if tag, err := s.Pool.Exec(ctx, `UPDATE tracks SET album_id=$2, updated_at=now() WHERE id=$1 AND album_id IS DISTINCT FROM $2`, id, albumID); err == nil {
 				updated = append(updated, "album")
-			}
-		} else if albumID, err := uuid.Parse(raw); err == nil {
-			if _, err := s.Pool.Exec(ctx, `UPDATE tracks SET album_id=$2, updated_at=now() WHERE id=$1`, id, albumID); err == nil {
-				updated = append(updated, "album")
+				if tag.RowsAffected() > 0 {
+					edited = append(edited, "album")
+				}
 			}
 		}
 	}
-	if body.AlbumID == nil && body.Album != nil && !s.fieldLocked(ctx, "track", id, "album") {
+	if body.AlbumID == nil && body.Album != nil {
 		if s.linkTrackAlbumByTitle(ctx, id, strings.TrimSpace(*body.Album)) {
 			updated = append(updated, "album")
+			edited = append(edited, "album")
 		}
 	}
 	if body.ManualGainDB != nil {
@@ -261,8 +281,69 @@ func (s *Server) applyTrackMeta(ctx context.Context, id uuid.UUID, body trackMet
 			updated = append(updated, "manual_gain_db")
 		}
 	}
-	_ = userID
+	s.lockTrackFields(ctx, []uuid.UUID{id}, userID, edited...)
 	return updated
+}
+
+// lockTrackFields records per-field locks for hand-edited track fields so a
+// rescan or metadata refresh does not undo the edit. Fields no automated
+// writer touches are skipped.
+func (s *Server) lockTrackFields(ctx context.Context, trackIDs []uuid.UUID, by uuid.UUID, fields ...string) {
+	keep := lockableTrackFields(fields)
+	if len(keep) == 0 || len(trackIDs) == 0 {
+		return
+	}
+	var lockedBy *uuid.UUID
+	if by != uuid.Nil {
+		lockedBy = &by
+	}
+	_, _ = s.Pool.Exec(ctx, lockTrackFieldsSQL, trackIDs, keep, lockedBy)
+}
+
+func lockableTrackFields(fields []string) []string {
+	var keep []string
+	for _, f := range fields {
+		if autoLockedTrackFields[f] {
+			keep = append(keep, f)
+		}
+	}
+	return keep
+}
+
+const lockTrackFieldsSQL = `
+	INSERT INTO metadata_locks (entity_type, entity_id, field, locked_by)
+	SELECT 'track', t.id, f.field, $3
+	FROM tracks t, unnest($2::text[]) AS f(field)
+	WHERE t.id = ANY($1)
+	ON CONFLICT (entity_type, entity_id, field) DO NOTHING`
+
+// lockAlbumTracks pins every track on albumID to it, so renaming or merging
+// the album is not undone by a rescan relinking its tracks to an album named
+// after the old file tags.
+func (s *Server) lockAlbumTracks(ctx context.Context, albumID, by uuid.UUID) {
+	s.lockTrackFields(ctx, s.trackIDsWhere(ctx, `SELECT id FROM tracks WHERE album_id=$1`, albumID), by, "album")
+}
+
+// lockArtistTracks pins the credits of every track crediting artistID, so a
+// rename or merge is not undone by a rescan re-creating the tagged name.
+func (s *Server) lockArtistTracks(ctx context.Context, artistID, by uuid.UUID) {
+	s.lockTrackFields(ctx, s.trackIDsWhere(ctx, `SELECT DISTINCT track_id FROM track_artists WHERE artist_id=$1 AND role IN ('primary','featured')`, artistID), by, "artist")
+}
+
+func (s *Server) trackIDsWhere(ctx context.Context, sql string, arg any) []uuid.UUID {
+	rows, err := s.Pool.Query(ctx, sql, arg)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if rows.Scan(&id) == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 // linkTrackAlbumByTitle points a track at the album called title in its
@@ -304,14 +385,55 @@ func (s *Server) linkTrackAlbumByTitle(ctx context.Context, trackID uuid.UUID, t
 	return err == nil
 }
 
-func (s *Server) replaceTrackArtists(ctx context.Context, trackID uuid.UUID, names string) {
-	_, _ = s.Pool.Exec(ctx, `DELETE FROM track_artists WHERE track_id=$1 AND role='primary'`, trackID)
-	pos := 0
+// trackCreditNames is the performer credit the editors show: primary and
+// featured artists in credit order.
+func (s *Server) trackCreditNames(ctx context.Context, trackID uuid.UUID) []string {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT ar.name FROM track_artists ta JOIN artists ar ON ar.id=ta.artist_id
+		WHERE ta.track_id=$1 AND ta.role IN ('primary','featured')
+		ORDER BY ta.position, ta.role`, trackID)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// splitArtistNames turns the editor's comma separated artist field into
+// distinct names, keeping the first spelling of each.
+func splitArtistNames(names string) []string {
+	var out []string
+	seen := map[string]bool{}
 	for _, raw := range strings.Split(names, ",") {
 		name := strings.TrimSpace(raw)
-		if name == "" {
+		key := strings.ToLower(name)
+		if name == "" || seen[key] {
 			continue
 		}
+		seen[key] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+// replaceTrackArtists makes names the track's whole performer credit, all as
+// primary artists, which is what Home and the track lists show. Featured rows
+// go too because the editors show them in the same field. It reports whether
+// the credit changed; an unchanged list is left alone so roles are kept.
+func (s *Server) replaceTrackArtists(ctx context.Context, trackID uuid.UUID, names string) bool {
+	want := splitArtistNames(names)
+	if slices.Equal(want, s.trackCreditNames(ctx, trackID)) {
+		return false
+	}
+	_, _ = s.Pool.Exec(ctx, `DELETE FROM track_artists WHERE track_id=$1 AND role IN ('primary','featured')`, trackID)
+	for pos, name := range want {
 		var aid uuid.UUID
 		err := s.Pool.QueryRow(ctx, `SELECT id FROM artists WHERE lower(name)=lower($1) LIMIT 1`, name).Scan(&aid)
 		if err != nil {
@@ -319,9 +441,9 @@ func (s *Server) replaceTrackArtists(ctx context.Context, trackID uuid.UUID, nam
 		}
 		if aid != uuid.Nil {
 			_, _ = s.Pool.Exec(ctx, `INSERT INTO track_artists (track_id, artist_id, role, position) VALUES ($1,$2,'primary',$3) ON CONFLICT DO NOTHING`, trackID, aid, pos)
-			pos++
 		}
 	}
+	return true
 }
 
 func (s *Server) bulkTrackMetadata(w http.ResponseWriter, r *http.Request) {
@@ -354,15 +476,16 @@ func (s *Server) bulkTrackMetadata(w http.ResponseWriter, r *http.Request) {
 		DiscNumber: body.DiscNumber, TrackNumber: body.TrackNumber,
 		Artist: body.Artist, Title: body.Title, AlbumID: body.AlbumID, WriteBack: body.WriteBack,
 	}
-	n := 0
+	n, locked := 0, 0
 	for _, id := range body.IDs {
 		if s.trackGloballyLocked(r.Context(), id) {
+			locked++
 			continue
 		}
 		s.applyTrackMeta(r.Context(), id, meta, currentUser(r).ID)
 		n++
 	}
-	out := map[string]any{"updated": n, "write_back": body.WriteBack}
+	out := map[string]any{"updated": n, "locked": locked, "write_back": body.WriteBack}
 	if body.WriteBack {
 		out["write_back_status"] = "pending_p3"
 		out["write_back_path"] = "/api/v1/tracks/bulk/writeback"
@@ -447,6 +570,9 @@ func (s *Server) patchAlbumMetadata(w http.ResponseWriter, r *http.Request) {
 	if body.Artist != nil {
 		s.replaceAlbumArtists(ctx, id, *body.Artist)
 	}
+	if body.Title != nil || body.Artist != nil {
+		s.lockAlbumTracks(ctx, id, currentUser(r).ID)
+	}
 	out := map[string]any{"ok": true, "write_back": body.WriteBack}
 	if body.WriteBack {
 		out["write_back_status"] = "pending_p3"
@@ -477,6 +603,7 @@ func (s *Server) patchArtistMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.Name != nil && !s.fieldLocked(r.Context(), "artist", id, "name") {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE artists SET name=$2 WHERE id=$1`, id, *body.Name)
+		s.lockArtistTracks(r.Context(), id, currentUser(r).ID)
 	}
 	if body.SortName != nil {
 		_, _ = s.Pool.Exec(r.Context(), `UPDATE artists SET sort_name=$2 WHERE id=$1`, id, *body.SortName)

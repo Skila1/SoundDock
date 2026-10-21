@@ -311,7 +311,7 @@ func (s *Server) queueControl(w http.ResponseWriter, r *http.Request) {
 		body.Extra["command_id"] = body.CommandID
 	}
 	body.Extra = bindExtra(body.Extra, body.ExpectedBindingRevision, firstNonEmpty(body.RendererID, extraStringMap(body.Extra, "renderer_id")), body.RendererGeneration)
-	describePlaybackControl(r, body.Action)
+	describePlaybackControl(r, body.Action, body.Extra)
 	if body.Action == "switch_renderer" {
 		if controlOutputPref(body.Extra) == "" {
 			body.Extra["output_pref"] = playback.OutputBrowser
@@ -320,6 +320,10 @@ func (s *Server) queueControl(w http.ResponseWriter, r *http.Request) {
 	}
 	sid, err := s.playSession(r, body.Extra, body.Target, body.DeviceID)
 	if s.writePlaySessionErr(w, err) {
+		return
+	}
+	if body.Action == "seek" && isPersistSeek(body.Extra) {
+		s.persistPosition(w, r, sid, body.Extra)
 		return
 	}
 	if body.Action == "output_pref" {
@@ -365,6 +369,32 @@ func (s *Server) queueControl(w http.ResponseWriter, r *http.Request) {
 	q, _ := s.Play.Get(r.Context(), sid)
 	attachUndoToQueue(q, body.Extra)
 	s.respondQueueMedia(w, r, sid, q, "state+playhead")
+}
+
+// persistPosition stores the browser's periodic position save. It is not a
+// seek: no state_revision bump (an offered undo stays valid), and a save that
+// names a playback instance other than the current one (sent just before a
+// skip) or arrives while Discord renders is dropped instead of moving the
+// playhead.
+func (s *Server) persistPosition(w http.ResponseWriter, r *http.Request, sid uuid.UUID, extra map[string]any) {
+	pos, _ := extraIntMap(extra, "position_ms")
+	inst, _ := uuid.Parse(strings.TrimSpace(extraStringMap(extra, "playback_instance_id")))
+	if inst == uuid.Nil {
+		if q, err := s.Play.Get(r.Context(), sid); err == nil {
+			// No instance sent: the current one is the best guess.
+			inst = uuidFromQueue(q, "playback_instance_id")
+		}
+	}
+	applied, err := s.Play.PersistPosition(r.Context(), sid, inst, pos)
+	if err != nil {
+		writeErr(w, 400, "control", err.Error())
+		return
+	}
+	if applied {
+		s.maybeListenProgress(r, sid, extra)
+	}
+	q, _ := s.Play.Get(r.Context(), sid)
+	s.respondQueueMedia(w, r, sid, q, "")
 }
 
 func (s *Server) queueRendererAcquire(w http.ResponseWriter, r *http.Request) {
@@ -531,14 +561,14 @@ func (s *Server) postParty(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if sid == uuid.Nil {
-		sid, err = s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(body.DeviceID, requestDeviceID(r, nil)))
+		sid, err = s.attachedPlaySession(r, nil, body.DeviceID)
 		if err != nil {
 			writeErr(w, 500, "party", err.Error())
 			return
 		}
 	}
 	if body.Enabled {
-		own, _ := s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(body.DeviceID, requestDeviceID(r, nil)))
+		own, _ := s.attachedPlaySession(r, nil, body.DeviceID)
 		if sid != own {
 			if err := s.Play.JoinParty(r.Context(), sid, u.ID); err != nil {
 				writeErr(w, 403, "party", err.Error())
@@ -553,7 +583,7 @@ func (s *Server) postParty(w http.ResponseWriter, r *http.Request) {
 			s.enqueuePartyExpire(r, sid, exp)
 		}
 	} else {
-		own, _ := s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(body.DeviceID, requestDeviceID(r, nil)))
+		own, _ := s.attachedPlaySession(r, nil, body.DeviceID)
 		if sid != own {
 			if err := s.Play.LeaveParty(r.Context(), sid, u.ID); err != nil {
 				writeErr(w, 403, "party", err.Error())
@@ -602,7 +632,7 @@ func (s *Server) postPartyVote(w http.ResponseWriter, r *http.Request) {
 		if ok {
 			sid = found
 		} else {
-			sid, err = s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(body.DeviceID, requestDeviceID(r, nil)))
+			sid, err = s.attachedPlaySession(r, nil, body.DeviceID)
 			if err != nil {
 				writeErr(w, 500, "party", err.Error())
 				return
@@ -1145,8 +1175,10 @@ func isYouTubeVideoID(s string) bool {
 }
 
 // describePlaybackControl names the control on its Activity entry. Volume
-// nudges arrive in bursts and are only recorded when they fail.
-func describePlaybackControl(r *http.Request, action string) {
+// nudges arrive in bursts and the browser's periodic position save is a
+// "seek" every ten seconds while playing; both are only recorded when they
+// fail. A seek the user made is still recorded.
+func describePlaybackControl(r *http.Request, action string, extra map[string]any) {
 	st := oplog.RequestFrom(r.Context())
 	if st == nil {
 		return
@@ -1159,5 +1191,16 @@ func describePlaybackControl(r *http.Request, action string) {
 	switch a {
 	case "volume", "mute", "unmute":
 		st.Suppress()
+	case "seek":
+		if isPersistSeek(extra) {
+			st.Suppress()
+		}
 	}
+}
+
+// isPersistSeek is true for the browser's periodic position save, which it
+// sends as a seek with persist=true. It is bookkeeping, not a user seek.
+func isPersistSeek(extra map[string]any) bool {
+	v, ok := extraBoolMap(extra, "persist")
+	return ok && v
 }

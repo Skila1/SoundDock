@@ -379,3 +379,91 @@ func fmtTrack(v any) string {
 	}
 	return ""
 }
+
+func TestPersistPositionKeepsRevisionAndIgnoresStaleInstance(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	e := New(pool)
+	userID := seedUser(t, pool)
+	a, b := fixtureTracks(t, pool)
+	sid, err := e.WebSession(ctx, userID, "browser-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Replace(ctx, sid, []uuid.UUID{a, b}, 0); err != nil {
+		t.Fatal(err)
+	}
+	q, err := e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q["status"] != "playing" {
+		t.Skipf("replace did not start playback: %v", q["status"])
+	}
+	rev, seq, inst := revOf(q), seqOf(q), instanceOf(q)
+	ok, err := e.PersistPosition(ctx, sid, inst, 12000)
+	if err != nil || !ok {
+		t.Fatalf("persist: ok=%v err=%v", ok, err)
+	}
+	q, _ = e.Get(ctx, sid)
+	if posOf(q) != 12000 || seqOf(q) != seq+1 {
+		t.Fatalf("persist pos %d seq %d", posOf(q), seqOf(q))
+	}
+	if revOf(q) != rev {
+		t.Fatalf("persist must not bump state_revision (undo stays valid): %d -> %d", rev, revOf(q))
+	}
+	if err := e.Control(ctx, sid, "skip", nil); err != nil {
+		t.Fatal(err)
+	}
+	ok, err = e.PersistPosition(ctx, sid, inst, 180000)
+	if err != nil || ok {
+		t.Fatalf("a save for the previous track must be dropped: ok=%v err=%v", ok, err)
+	}
+	q, _ = e.Get(ctx, sid)
+	if posOf(q) == 180000 {
+		t.Fatal("stale save moved the next track")
+	}
+}
+
+func TestResumeRestartsCheckpointClock(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	e := New(pool)
+	userID := seedUser(t, pool)
+	a, b := fixtureTracks(t, pool)
+	sid, err := e.WebSession(ctx, userID, "browser-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Replace(ctx, sid, []uuid.UUID{a, b}, 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Control(ctx, sid, "pause", map[string]any{"position_ms": 5000}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE playback_sessions SET checkpoint_at=now()-interval '1 hour' WHERE id=$1`, sid); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Control(ctx, sid, "resume", nil); err != nil {
+		t.Fatal(err)
+	}
+	var age float64
+	if err := pool.QueryRow(ctx, `SELECT extract(epoch FROM now()-checkpoint_at) FROM playback_sessions WHERE id=$1`, sid).Scan(&age); err != nil {
+		t.Fatal(err)
+	}
+	if age > 60 {
+		t.Fatalf("resume left checkpoint_at %0.fs in the past; observers add the paused span", age)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE playback_sessions SET checkpoint_at=now()-interval '3 seconds' WHERE id=$1`, sid); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Control(ctx, sid, "resume", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT extract(epoch FROM now()-checkpoint_at) FROM playback_sessions WHERE id=$1`, sid).Scan(&age); err != nil {
+		t.Fatal(err)
+	}
+	if age < 2 {
+		t.Fatal("resume while already playing must not restart the clock")
+	}
+}

@@ -13,8 +13,33 @@ const CATALOGUE_KEYS = [
   ["history"],
   ["playlists"],
   ["playlist"],
-  ["track-meta"]
+  ["track-meta"],
+  ["track"],
+  ["personal-library"],
+  ["queue-tracks"],
+  ["me-rediscovery"],
+  ["me-never-played"]
 ] as const;
+
+// Home rails that hold track rows.
+const HOME_TRACK_RAILS = ["continue", "recently_added", "most_played", "my_library", "favourites"] as const;
+
+function mapHomeRails(old: unknown, mapRows: (rows: unknown[]) => unknown[]): unknown {
+  if (!old || typeof old !== "object") return old;
+  const data = { ...(old as Record<string, unknown>) };
+  for (const rail of HOME_TRACK_RAILS) {
+    if (Array.isArray(data[rail])) data[rail] = mapRows(data[rail] as unknown[]);
+  }
+  return data;
+}
+
+/** The editable artist field for a track: its primary and featured credits, not composers. */
+export function performerNames(artists: { name: string; role?: string }[] | undefined): string {
+  return (artists || [])
+    .filter((a) => a.name && (!a.role || a.role === "primary" || a.role === "featured"))
+    .map((a) => a.name)
+    .join(", ");
+}
 
 export function catalogueRowId(row: unknown): string | undefined {
   if (!row || typeof row !== "object") return undefined;
@@ -55,16 +80,7 @@ function dropFromTrackList(old: unknown, gone: Set<string>) {
 
 export function removeTracksFromCaches(qc: QueryClient, ids: string[]) {
   const gone = new Set(ids);
-  qc.setQueriesData({ queryKey: ["home"] }, (old: unknown) => {
-    if (!old || typeof old !== "object") return old;
-    const data = old as Record<string, unknown>;
-    return {
-      ...data,
-      continue: filterRows(data.continue as unknown[], gone),
-      recently_added: filterRows(data.recently_added as unknown[], gone),
-      most_played: filterRows(data.most_played as unknown[], gone)
-    };
-  });
+  qc.setQueriesData({ queryKey: ["home"] }, (old: unknown) => mapHomeRails(old, (rows) => filterRows(rows, gone) || []));
   qc.setQueriesData({ queryKey: ["tracks"] }, (old: unknown) => mapTrackCache(old, (rows) => filterRows(rows, gone) || []));
   qc.setQueriesData({ queryKey: ["search"] }, (old: unknown) => {
     if (!old || typeof old !== "object") return old;
@@ -99,7 +115,9 @@ export function clearCatalogueTracks(qc: QueryClient) {
   qc.setQueryData(["tracks"], []);
 }
 
-export function patchTracksInCaches(qc: QueryClient, ids: string[], patch: { genre?: string; year?: number }) {
+export type TrackCachePatch = { title?: string; artist?: string; album?: string; genre?: string; year?: number };
+
+export function patchTracksInCaches(qc: QueryClient, ids: string[], patch: TrackCachePatch) {
   const want = new Set(ids);
   const apply = (row: unknown) => {
     const id = catalogueRowId(row);
@@ -107,17 +125,7 @@ export function patchTracksInCaches(qc: QueryClient, ids: string[], patch: { gen
     return { ...(row as object), ...patch };
   };
   qc.setQueriesData({ queryKey: ["tracks"] }, (old: unknown) => mapTrackCache(old, (rows) => rows.map(apply)));
-  qc.setQueriesData({ queryKey: ["home"] }, (old: unknown) => {
-    if (!old || typeof old !== "object") return old;
-    const data = old as Record<string, unknown>;
-    const mapRows = (rows: unknown) => (Array.isArray(rows) ? rows.map(apply) : rows);
-    return {
-      ...data,
-      continue: mapRows(data.continue),
-      recently_added: mapRows(data.recently_added),
-      most_played: mapRows(data.most_played)
-    };
-  });
+  qc.setQueriesData({ queryKey: ["home"] }, (old: unknown) => mapHomeRails(old, (rows) => rows.map(apply)));
 }
 
 export function refreshCatalogue(qc: QueryClient) {

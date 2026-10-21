@@ -131,17 +131,30 @@ func (d *Dock) findTrack(ctx context.Context, lib uuid.UUID, videoID string) (uu
 }
 
 func (d *Dock) HasOriginal(ctx context.Context, lib uuid.UUID, videoID string) bool {
-	if d == nil || d.pool == nil || videoID == "" {
-		return false
-	}
-	var ok bool
-	_ = d.pool.QueryRow(ctx, `
-		SELECT EXISTS (
-		  SELECT 1 FROM tracks t
-		  JOIN track_files tf ON tf.track_id=t.id AND tf.quality='original' AND tf.deleted_at IS NULL
-		  WHERE t.library_id=$1 AND t.acquisition_ref=$2
-		)`, lib, videoID).Scan(&ok)
+	_, ok := d.originalTrack(ctx, lib, videoID)
 	return ok
+}
+
+// originalTrack is the newest library track for videoID with a live original
+// file. HasOriginal and relinkIntentsToOriginal share it so a skip always
+// relinks to a track ReadyOriginals accepts.
+func (d *Dock) originalTrack(ctx context.Context, lib uuid.UUID, videoID string) (uuid.UUID, bool) {
+	if d == nil || d.pool == nil || videoID == "" {
+		return uuid.Nil, false
+	}
+	var id uuid.UUID
+	err := d.pool.QueryRow(ctx, `
+		SELECT t.id FROM tracks t
+		WHERE t.library_id=$1 AND t.acquisition_ref=$2
+		  AND EXISTS (
+		    SELECT 1 FROM track_files tf
+		    WHERE tf.track_id=t.id AND tf.quality='original' AND tf.deleted_at IS NULL
+		  )
+		ORDER BY t.created_at DESC LIMIT 1`, lib, videoID).Scan(&id)
+	if err != nil || id == uuid.Nil {
+		return uuid.Nil, false
+	}
+	return id, true
 }
 
 func (d *Dock) ReadyOriginals(ctx context.Context, jobID, lib uuid.UUID) ([]uuid.UUID, bool) {
@@ -248,22 +261,24 @@ func (d *Dock) FinalizeDownload(src LocalTrack) (LocalTrack, error) {
 
 // relinkIntentsToOriginal moves a job's intents for videoID off file-less
 // stubs and onto the library track that already has the original download.
-func (d *Dock) relinkIntentsToOriginal(ctx context.Context, jobID, lib uuid.UUID, videoID string) {
-	if d == nil || d.pool == nil || jobID == uuid.Nil || videoID == "" {
-		return
+// It returns that track, or uuid.Nil when no original exists (any more).
+func (d *Dock) relinkIntentsToOriginal(ctx context.Context, jobID, lib uuid.UUID, videoID string) uuid.UUID {
+	existing, ok := d.originalTrack(ctx, lib, videoID)
+	if !ok {
+		return uuid.Nil
 	}
-	existing, ok, _ := d.findTrack(ctx, lib, videoID)
-	if !ok || existing == uuid.Nil {
-		return
+	if jobID == uuid.Nil {
+		return existing
 	}
 	intents, err := ListJobIntents(ctx, d.pool, jobID)
 	if err != nil {
-		return
+		return existing
 	}
 	for _, in := range intents {
-		if in.TrackID == existing || VideoID(in.SourceRef) != videoID {
+		if in.TrackID == existing || CanonicalSourceRef(in.SourceRef) != videoID {
 			continue
 		}
 		_, _ = d.pool.Exec(ctx, `UPDATE acquisition_intents SET track_id=$2 WHERE id=$1`, in.ID, existing)
 	}
+	return existing
 }

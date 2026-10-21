@@ -1,3 +1,4 @@
+import { queueToParty } from "@/stores/party";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { queryClient } from "@/app/providers";
@@ -40,6 +41,7 @@ import {
   applySnapshot,
   applySwitchToBrowser,
   initialSession,
+  isSessionSwitch,
   shouldStopHtmlAudio,
   tabOwnsBrowserLease,
   type QueueSnapshot,
@@ -154,6 +156,10 @@ let lastQueueMutAt = 0;
 let session: SessionView = initialSession();
 let lastClock: ClockSample | null = null;
 let queueSse: QueueSseClient | null = null;
+let queueSseRunning = false;
+/** Session id the open event stream is subscribed to, from its last state event. */
+let streamSid: string | null = null;
+let lastResubscribeAt = 0;
 
 /** A control that has not answered by now is treated as failed so seek/skip state cannot wedge. */
 const CONTROL_TIMEOUT_MS = 10_000;
@@ -570,8 +576,14 @@ function patchFromSession(view: SessionView, extra: Record<string, unknown> = {}
   };
 }
 
-function ingestQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kind?: "snapshot" | "playhead" | "bind" }): SessionView {
+function ingestQueue(
+  snap: QueueSnapshot,
+  opts?: { clock?: ClockSample; kind?: "snapshot" | "playhead" | "bind"; stream?: boolean }
+): SessionView {
   const prev = session;
+  // The event stream stays on the session it connected to. When a request
+  // answers from another one (joined or left the bot's voice channel), follow it.
+  if (!opts?.stream && opts?.kind !== "playhead" && isSessionSwitch(prev, snap)) resubscribeQueueSse(false);
   session = applySnapshot(prev, snap, {
     guildId: guildIdOf(),
     clock: opts?.clock ?? lastClock ?? undefined,
@@ -587,7 +599,27 @@ function ingestQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kind?: "
   return session;
 }
 
-function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kind?: "snapshot" | "playhead" }) {
+/**
+ * The stream is subscribed to the session it resolved when it connected, so it
+ * keeps reporting that one after the player moved to another. Reconnect it.
+ */
+function resubscribeQueueSse(resync: boolean) {
+  if (!queueSse || !queueSseRunning) return;
+  const now = Date.now();
+  if (now - lastResubscribeAt < 3_000) return;
+  lastResubscribeAt = now;
+  streamSid = null;
+  queueSse.stop();
+  queueSse.start({ resync });
+}
+
+/** A stream event for a session the player no longer shows. */
+function staleStreamEvent(sid: string | null | undefined): boolean {
+  const cur = session.queue.id ? String(session.queue.id) : "";
+  return !!sid && !!cur && sid !== cur;
+}
+
+function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kind?: "snapshot" | "playhead"; stream?: boolean }) {
   if (seeking && opts?.kind === "playhead") return;
   const prev = usePlayer.getState();
   const prevId = prev.queue?.current_track_id;
@@ -652,6 +684,53 @@ function applyRemoteQueue(snap: QueueSnapshot, opts?: { clock?: ClockSample; kin
   ensureSessionPoll();
 }
 
+/** Invalidation keys that mean a track's title, artist, album or cover may have changed. */
+const TRACK_META_KEYS = new Set(["track", "tracks", "track-meta", "queue-tracks", "artwork"]);
+let trackRefreshTimer: number | undefined;
+
+function scheduleCurrentTrackRefresh() {
+  // An edit invalidates several keys at once; fetch once.
+  if (trackRefreshTimer) window.clearTimeout(trackRefreshTimer);
+  trackRefreshTimer = window.setTimeout(() => {
+    trackRefreshTimer = undefined;
+    void refreshCurrentTrack();
+  }, 250);
+}
+
+/**
+ * Re-read the now-playing track after a metadata or cover edit and merge the
+ * new title, artist, album and artwork into `current` and the queue rows for
+ * that track. Playback is not touched.
+ */
+export async function refreshCurrentTrack(): Promise<void> {
+  const id = usePlayer.getState().current?.id;
+  if (!id || !isLibraryTrackId(id)) return;
+  let t: PlayerTrack;
+  try {
+    t = await api.get<PlayerTrack>(`/api/v1/tracks/${id}`);
+  } catch {
+    return;
+  }
+  if (!t || usePlayer.getState().current?.id !== id) return;
+  const merged: PlayerTrack = { ...usePlayer.getState().current!, ...t };
+  if (currentMeta?.id === id) currentMeta = { ...currentMeta, ...t };
+  if (nextMeta?.id === id) nextMeta = { ...nextMeta, ...t };
+  const q = usePlayer.getState().queue;
+  const patchItems = (items: PlayerQueueItem[] | undefined) =>
+    items?.map((it) =>
+      sameTrackId(it.track_id, id) ? { ...it, title: t.title ?? it.title, artist: t.artist ?? it.artist } : it
+    );
+  if (session.queue?.items) {
+    session = { ...session, queue: { ...session.queue, items: patchItems(session.queue.items as PlayerQueueItem[]) || [] } };
+  }
+  usePlayer.setState({
+    current: merged,
+    ...(q ? { queue: { ...q, items: patchItems(q.items) || [] } } : {})
+  });
+  bindMediaSession(merged);
+  publishMediaPosition();
+}
+
 function ensureQueueSse(): QueueSseClient {
   if (queueSse) return queueSse;
   queueSse = createQueueSseClient({
@@ -663,17 +742,27 @@ function ensureQueueSse(): QueueSseClient {
       applyRemoteQueue(queue, { clock: lastClock ?? undefined, kind: "snapshot" });
     },
     onState: (snap) => {
+      if (snap.id) streamSid = String(snap.id);
+      if (staleStreamEvent(streamSid)) {
+        // Subscribed to a session the player left (or the server now attaches
+        // this user elsewhere): refetch, then reconnect to the current one.
+        resubscribeQueueSse(true);
+        return;
+      }
       const serverTime = parseTimeMs(snap.server_time);
       const clock = serverTime != null ? sampleClock(Date.now(), Date.now(), serverTime) : undefined;
-      applyRemoteQueue(snap, { clock, kind: "snapshot" });
+      applyRemoteQueue(snap, { clock, kind: "snapshot", stream: true });
     },
     onPlayhead: (event) => {
-      applyRemoteQueue(playheadEventToSnap(event, session.queue), { kind: "playhead" });
+      // Playhead events carry no session id; they belong to the stream's session.
+      if (staleStreamEvent(streamSid)) return;
+      applyRemoteQueue(playheadEventToSnap(event, session.queue), { kind: "playhead", stream: true });
     },
     onPresence: (event) => {
       usePlayer.setState({ listeners: mergePresence(usePlayer.getState().listeners, event) });
     },
     onInvalidate: (event) => {
+      if ((event.keys || []).some((k) => TRACK_META_KEYS.has(k))) scheduleCurrentTrackRefresh();
       for (const key of event.keys || []) {
         if (key === "artwork") {
           useArtworkVersion.getState().bump();
@@ -687,6 +776,7 @@ function ensureQueueSse(): QueueSseClient {
     },
     onJobProgress: () => undefined,
     onAuthLost: () => {
+      queueSseRunning = false;
       queueSse?.stop();
       pauseAll();
       clearCrossfadeTimer();
@@ -849,7 +939,9 @@ async function appendToQueue(ids: string[], next?: boolean, hints?: QueueTrackHi
     toast.message("Getting it from YouTube…");
   }
   await usePlayer.getState().pollVoice();
-  if (canPlayOnDiscord()) {
+  // Adding to a queue that is playing in this browser must not pull the bot
+  // into the channel; join only when Discord is (or is about to become) the output.
+  if (canPlayOnDiscord() && (usingDiscord() || !isPlaybackLive())) {
     try {
       await joinDiscord();
     } catch {
@@ -1120,6 +1212,7 @@ export const usePlayer = create<PlayerStore>()(
             await get().control("autoplay", { autoplay: prefsNow.autoplay });
           }
           ensureSessionPoll();
+          queueSseRunning = true;
           ensureQueueSse().start({ resync: false });
         } catch {
           /* unauthenticated or not in voice */
@@ -1145,6 +1238,8 @@ export const usePlayer = create<PlayerStore>()(
       playTracks: async (ids, start = 0, hints) => {
         if (!ids.length) return;
         const idx = Math.max(0, Math.min(start, ids.length - 1));
+        // Guests play into the host's party instead of their own player.
+        if (await queueToParty(ids.slice(idx, idx + 1), true, hintPayload(ids.slice(idx, idx + 1), hints?.slice(idx, idx + 1)))) return;
         await enqueueQueueOp(async () => {
           if (isPlaybackLive()) {
             const toAdd = ids.slice(idx);
@@ -1236,6 +1331,7 @@ export const usePlayer = create<PlayerStore>()(
         preloadUpcoming(get().queue);
       },
       add: async (ids, next, hints) => {
+        if (await queueToParty(ids, next, hintPayload(ids, hints))) return;
         await enqueueQueueOp(() => appendToQueue(ids, next, hints));
       },
       control: async (action, extra) => {
@@ -1628,7 +1724,16 @@ function onTimeUpdate(el: HTMLAudioElement) {
   if (cur) markProgress(cur.id, pos, dur);
   if (Date.now() - persistPosAt > 10000 && usePlayer.getState().playing && !usingDiscord()) {
     persistPosAt = Date.now();
-    usePlayer.getState().control("seek", { position_ms: Math.round(pos) }).catch(() => undefined);
+    // A position save, not a user seek: the server keeps it out of the
+    // Activity log and the undo revision, and drops it if the track changed.
+    usePlayer
+      .getState()
+      .control("seek", {
+        position_ms: Math.round(pos),
+        persist: true,
+        ...(session.queue.playback_instance_id ? { playback_instance_id: session.queue.playback_instance_id } : {})
+      })
+      .catch(() => undefined);
   }
   scheduleCrossfade();
   publishMediaPosition();
@@ -1805,6 +1910,9 @@ export function applyRemoteQueueForTests(snap: QueueSnapshot) {
 
 export function resetPlayerSessionForTests(view?: SessionView) {
   queueSse?.stop();
+  queueSseRunning = false;
+  streamSid = null;
+  lastResubscribeAt = 0;
   session = view ? { ...initialSession(), ...view } : initialSession();
   lastClock = null;
   commands.reset();

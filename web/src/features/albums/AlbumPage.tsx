@@ -118,7 +118,7 @@ export function AlbumPage() {
           }
         }}
       />
-      {edit && <AlbumEditDialog album={a} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); qc.invalidateQueries({ queryKey: ["album", id] }); }} />}
+      {edit && <AlbumEditDialog album={a} onClose={() => setEdit(false)} onSaved={() => { setEdit(false); refreshCatalogue(qc); }} />}
     </div>
   );
 }

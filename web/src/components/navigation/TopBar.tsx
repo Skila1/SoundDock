@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { CommandSearch } from "@/components/navigation/CommandSearch";
+import { PartyButton } from "@/features/party/Party";
 import { useTheme } from "@/stores/theme";
 import { ACCENT_PRESETS, PrefsSync, usePrefs } from "@/stores/prefs";
 import { useUi } from "@/stores/ui";
@@ -61,6 +62,7 @@ export function TopBar({ title, user }: { title?: string; user: User }) {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <PartyButton />
       <Button size="icon" variant="ghost" onClick={() => theme.setTheme(theme.theme === "dark" ? "light" : "dark")} aria-label="Toggle theme">
         {theme.theme === "dark" ? <Sun /> : <Moon />}
       </Button>

@@ -236,17 +236,25 @@ func TestActivityMiddlewareDescribeAndSuppress(t *testing.T) {
 	s := &Server{}
 	h := activityRouter(s, func(r chi.Router) {
 		r.Post("/api/v1/me/queue/control", func(w http.ResponseWriter, r *http.Request) {
-			var body struct{ Action string }
+			var body struct {
+				Action string
+				Extra  map[string]any
+			}
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			describePlaybackControl(r, body.Action)
+			describePlaybackControl(r, body.Action, body.Extra)
 			writeJSON(w, 200, map[string]any{})
 		})
 	})
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/v1/me/queue/control", strings.NewReader(`{"Action":"volume"}`)))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/v1/me/queue/control", strings.NewReader(`{"Action":"seek","Extra":{"position_ms":10000,"persist":true}}`)))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/v1/me/queue/control", strings.NewReader(`{"Action":"next"}`)))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("POST", "/api/v1/me/queue/control", strings.NewReader(`{"Action":"seek","Extra":{"position_ms":42000}}`)))
 	got := drainProbe(t, w)
-	if len(got) != 1 || got[0].Action != "playback.next" || got[0].Message != "Playback: next" || got[0].Category != "playback" {
+	if len(got) != 2 || got[0].Action != "playback.next" || got[0].Message != "Playback: next" || got[0].Category != "playback" {
 		t.Fatalf("entries: %+v", got)
+	}
+	if got[1].Action != "playback.seek" {
+		t.Fatalf("a user seek should still be recorded: %+v", got[1])
 	}
 }
 

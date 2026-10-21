@@ -1,3 +1,4 @@
+import { useParty } from "@/stores/party";
 import { useState } from "react";
 import { SettingsTabs } from "@/components/navigation/SettingsTabs";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -209,7 +210,7 @@ export function ProfilePage({ user, onRefresh }: { user: User; onRefresh: () => 
       <div className="mt-6 flex flex-wrap gap-2">
         <Button variant="outline" onClick={() => (window.location.href = "/settings/connected")}>Connected services</Button>
         <Button variant="outline" onClick={() => (window.location.href = "/profile/devices")}>Devices</Button>
-        <Button variant="outline" onClick={() => (window.location.href = "/profile/party")}>Party</Button>
+        <Button variant="outline" onClick={() => useParty.getState().set({ open: true })}>Party</Button>
         <Button variant="outline" onClick={() => window.open("/api/v1/me/export")}>Export my data</Button>
         <Button variant="ghost" onClick={() => api.post("/api/v1/auth/logout-all").then(() => {
           resetClientSession();

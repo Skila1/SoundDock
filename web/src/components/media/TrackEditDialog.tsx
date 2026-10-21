@@ -4,7 +4,7 @@ import { ImagePlus, Loader2, Lock, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { artworkUrl } from "@/lib/utils";
-import { refreshCatalogue } from "@/lib/catalogue";
+import { patchTracksInCaches, performerNames, refreshCatalogue } from "@/lib/catalogue";
 import { useArtworkVersion } from "@/stores/artwork";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Field } from "@/components/ui/field";
@@ -58,7 +58,7 @@ const MAX_ART = 20 << 20;
 function toForm(t: TrackMetaFull): Form {
   return {
     title: t.title || "",
-    artist: t.artists?.map((a) => a.name).join(", ") || t.artist || "",
+    artist: performerNames(t.artists) || t.artist || "",
     album: t.album || "",
     genre: t.genre || "",
     year: t.year ? String(t.year) : "",
@@ -137,7 +137,8 @@ export function TrackEditDialog({ trackId, onClose }: { trackId: string; onClose
     const body: Record<string, unknown> = {};
     const changed = (k: keyof Form) => form[k] !== initial[k];
     if (changed("locked")) body.locked = form.locked;
-    if (!form.locked) {
+    // Edits made in the same save that turns the lock on are kept, then locked.
+    if (!(initial.locked && form.locked)) {
       if (changed("title") && form.title.trim()) body.title = form.title.trim();
       if (changed("artist")) body.artist = form.artist;
       if (changed("album")) body.album = form.album.trim();
@@ -180,8 +181,12 @@ export function TrackEditDialog({ trackId, onClose }: { trackId: string; onClose
           .catch(() => toast.message("Saved. File write-back is not available for this library."));
       }
       if (art || resetArt) useArtworkVersion.getState().bump();
+      const shown: { title?: string; artist?: string; album?: string } = {};
+      if (typeof body.title === "string") shown.title = body.title;
+      if (typeof body.artist === "string") shown.artist = body.artist;
+      if (typeof body.album === "string") shown.album = body.album;
+      if (Object.keys(shown).length) patchTracksInCaches(qc, [t.id], shown);
       refreshCatalogue(qc);
-      for (const key of ["personal-library", "track", "queue", "me-queue"]) void qc.invalidateQueries({ queryKey: [key] });
       toast.success("Song updated");
       onClose();
     } catch (err) {
@@ -191,7 +196,7 @@ export function TrackEditDialog({ trackId, onClose }: { trackId: string; onClose
     }
   };
 
-  const lockHint = (field: string) => (fieldLocks.has(field) ? "Locked field - changes are ignored" : undefined);
+  const lockHint = (field: string) => (fieldLocks.has(field) ? "Edited by hand, so rescans keep it" : undefined);
   const coverSrc = artPreview || (resetArt ? undefined : t ? artworkUrl("track", t.id, "page") : undefined);
 
   return (
@@ -328,7 +333,11 @@ export function TrackEditDialog({ trackId, onClose }: { trackId: string; onClose
                 onChange={setWriteBack}
               />
             </div>
-            {lockedNow && <p className="text-xs text-subtle">Metadata is locked. Turn off the lock to edit fields.</p>}
+            {lockedNow && (
+              <p className="text-xs text-subtle">
+                {initial?.locked ? "Metadata is locked. Turn off the lock to edit fields." : "Your changes are saved, then the song is locked."}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <Button type="button" variant="ghost" onClick={onClose} disabled={saving}>
                 Cancel

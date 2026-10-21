@@ -1,6 +1,7 @@
 import {
   Activity,
   Archive,
+  Bot,
   ArchiveRestore,
   Cog,
   Disc3,
@@ -13,6 +14,7 @@ import {
   Plug,
   RefreshCw,
   ScanSearch,
+  ShieldCheck,
   SlidersHorizontal,
   Timer,
   Users,
@@ -57,7 +59,7 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
     icon: HardDrive,
     links: [
       { to: "storage", label: "Storage", icon: HardDrive },
-      { to: "retention", label: "Retention", icon: Timer },
+      { to: "retention", label: "Cleanup", icon: Timer },
       { to: "archive", label: "Archive", icon: Archive },
       { to: "backups", label: "Backups", icon: ArchiveRestore }
     ]
@@ -69,6 +71,7 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
     links: [
       { to: "users", label: "Users", icon: Users },
       { to: "groups", label: "Groups", icon: UsersRound },
+      { to: "access", label: "Access", icon: ShieldCheck },
       { to: "discord", label: "Discord", icon: MessageCircle },
       { to: "connected", label: "Connected Services", icon: Link2 }
     ]
@@ -79,7 +82,8 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
     icon: Cog,
     links: [
       { to: "updates", label: "Updates", icon: RefreshCw },
-      { to: "integrations", label: "Integrations", icon: Plug }
+      { to: "integrations", label: "Integrations", icon: Plug },
+      { to: "discord-bot", label: "Discord Bot", icon: Bot }
     ]
   }
 ];
@@ -102,7 +106,7 @@ export const legacyAdminRedirects: Readonly<Record<string, string>> = {
   webhooks: "/admin/integrations?tab=webhooks",
   quotas: "/admin/users",
   roles: "/admin/groups",
-  grants: "/admin/libraries?tab=access",
+  grants: "/admin/access",
   "duplicate-review": "/admin/scan?tab=duplicates",
   metadata: "/admin/media-settings",
   lyrics: "/admin/media-settings",

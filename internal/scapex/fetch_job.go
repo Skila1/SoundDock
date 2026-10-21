@@ -2,6 +2,7 @@ package scapex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -105,16 +106,17 @@ func (s *Service) RunFetchJob(ctx context.Context, opts FetchOpts) ([]uuid.UUID,
 	_ = SetIntentsStatus(ctx, s.dock.pool, jobID, StatusDownloading, []string{StatusQueued})
 
 	var locals []LocalTrack
+	var reused []uuid.UUID
 	for _, raw := range opts.URLs {
 		src := WatchURL(raw)
 		if src == "" || VideoID(src) == "" {
 			return fail(fmt.Errorf("not an allowlisted YouTube watch URL or video id"))
 		}
-		if s.dock.HasOriginal(ctx, lib, VideoID(src)) {
-			// Another track already holds this download. Point this job's intents
-			// at it; otherwise their empty stubs never get a file and the job
-			// fails with "produced no audio".
-			s.dock.relinkIntentsToOriginal(ctx, jobID, lib, VideoID(src))
+		// Another track already holds this download. Point this job's intents
+		// at it; otherwise their empty stubs never get a file. The lookup is
+		// the same one ReadyOriginals checks, so a skip never strands intents.
+		if orig := s.dock.relinkIntentsToOriginal(ctx, jobID, lib, VideoID(src)); orig != uuid.Nil {
+			reused = append(reused, orig)
 			continue
 		}
 		got, err := s.download(ctx, src, work, policy)
@@ -124,12 +126,7 @@ func (s *Service) RunFetchJob(ctx context.Context, opts FetchOpts) ([]uuid.UUID,
 		locals = append(locals, got...)
 	}
 	if len(locals) == 0 {
-		if ids, ok := s.dock.ReadyOriginals(ctx, jobID, lib); ok {
-			_ = SetIntentsStatus(ctx, s.dock.pool, jobID, StatusReady, []string{StatusQueued, StatusDownloading, StatusProcessing, StatusScanning})
-			_ = ApplyReadyIntents(ctx, s.dock.pool, opts.Player, jobID)
-			return ids, nil
-		}
-		return fail(fmt.Errorf("yt-dlp produced no audio"))
+		return s.finishReused(ctx, opts, jobID, lib, reused, fail)
 	}
 
 	var extra int64
@@ -182,6 +179,30 @@ func (s *Service) RunFetchJob(ctx context.Context, opts FetchOpts) ([]uuid.UUID,
 		return ids, WrapFetchError(err)
 	}
 	return ids, nil
+}
+
+// errOriginalPending is retryable: the original exists but this job's intents
+// do not see it yet (a concurrent fetch or relink still settling).
+var errOriginalPending = errors.New("original download for this video is not attached yet; will retry")
+
+// finishReused ends a job whose every URL was already downloaded by another
+// track. Jobs without intents (playlist import fills) succeed with the
+// existing tracks; jobs whose intents are not ready yet retry instead of
+// failing for good.
+func (s *Service) finishReused(ctx context.Context, opts FetchOpts, jobID, lib uuid.UUID, reused []uuid.UUID, fail func(error) ([]uuid.UUID, error)) ([]uuid.UUID, error) {
+	if ids, ok := s.dock.ReadyOriginals(ctx, jobID, lib); ok {
+		_ = SetIntentsStatus(ctx, s.dock.pool, jobID, StatusReady, []string{StatusQueued, StatusDownloading, StatusProcessing, StatusScanning})
+		_ = ApplyReadyIntents(ctx, s.dock.pool, opts.Player, jobID)
+		return ids, nil
+	}
+	if len(reused) == 0 {
+		return fail(fmt.Errorf("yt-dlp produced no audio"))
+	}
+	intents, err := ListJobIntents(ctx, s.dock.pool, jobID)
+	if err == nil && len(intents) == 0 {
+		return reused, nil
+	}
+	return nil, errOriginalPending
 }
 
 func cancelled(ctx context.Context, opts FetchOpts) bool {

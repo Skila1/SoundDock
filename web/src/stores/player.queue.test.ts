@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
 import { getTabRendererId } from "@/lib/device";
 import { initialSession } from "@/stores/sessionReducer";
-import { applyRemoteQueueForTests, resetPlayerSessionForTests, usePlayer } from "@/stores/player";
+import { applyRemoteQueueForTests, refreshCurrentTrack, resetPlayerSessionForTests, usePlayer } from "@/stores/player";
 import * as engine from "@/components/player/audioEngine";
 import type { QueueState } from "@/types/api";
 
@@ -114,6 +114,76 @@ describe("add to queue keeps playback", () => {
     expect(usePlayer.getState().queue?.current_track_id).toBe("t1");
     expect(usePlayer.getState().queue?.items).toHaveLength(2);
     expect(usePlayer.getState().position).toBe(12_000);
+  });
+
+  it("does not pull the bot into voice when adding while playing in this browser", async () => {
+    seedPlaying();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo) => {
+        const url = String(input);
+        if (url.includes("voice-state")) {
+          return { ok: true, json: async () => ({ discord_enabled: true, linked: true, in_voice: true, guild_id: "g1", channel_id: "c1" }) } as Response;
+        }
+        return { ok: false, json: async () => ({}) } as Response;
+      })
+    );
+    const added = queue({
+      state_revision: 5,
+      items: [
+        { id: "i1", position: 0, track_id: "t1", media_state: "ready" },
+        { id: "i2", position: 1, track_id: "t2", media_state: "ready" }
+      ]
+    });
+    const posts: string[] = [];
+    vi.mocked(api.post).mockImplementation(async (url: string) => {
+      posts.push(String(url));
+      if (String(url).includes("/me/queue/add")) return added;
+      if (String(url).includes("/me/discord/join")) return { ok: true, guild_id: "g1", binding_revision: 4 };
+      throw new Error(`unexpected POST ${url}`);
+    });
+
+    await usePlayer.getState().add(["t2"]);
+
+    expect(posts.some((u) => u.includes("/me/discord/join"))).toBe(false);
+    expect(posts.some((u) => u.includes("/me/queue/add"))).toBe(true);
+    expect(usePlayer.getState().queue?.items).toHaveLength(2);
+  });
+
+  it("refreshCurrentTrack merges an edited title into now playing and the queue row", async () => {
+    const id = "11111111-2222-4333-8444-555555555555";
+    seedPlaying(
+      queue({ current_track_id: id, items: [{ id: "i1", position: 0, track_id: id, media_state: "ready", title: "Old", artist: "A" }] })
+    );
+    usePlayer.setState({ current: { id, title: "Old", artist: "A" } });
+    vi.mocked(api.get).mockResolvedValue({ id, title: "New title", artist: "New artist", album: "New album" });
+
+    await refreshCurrentTrack();
+
+    expect(usePlayer.getState().current?.title).toBe("New title");
+    expect(usePlayer.getState().current?.album).toBe("New album");
+    expect(usePlayer.getState().queue?.items[0].title).toBe("New title");
+    expect(usePlayer.getState().queue?.items[0].artist).toBe("New artist");
+    expect(usePlayer.getState().playing).toBe(true);
+  });
+
+  it("follows a switch to another session even when its revision is lower", () => {
+    seedPlaying(queue({ id: "web-device", state_revision: 400, playhead_sequence: 90 }));
+
+    applyRemoteQueueForTests(
+      queue({
+        id: "guild-session",
+        status: "paused",
+        state_revision: 7,
+        playhead_sequence: 2,
+        playback_instance_id: "inst-guild",
+        current_track_id: "t9",
+        items: [{ id: "g1", position: 0, track_id: "t9", media_state: "ready" }]
+      })
+    );
+
+    expect(usePlayer.getState().queue?.id).toBe("guild-session");
+    expect(usePlayer.getState().queue?.current_track_id).toBe("t9");
   });
 
   it("does not pause when the add SSE echo arrives with the same current track", () => {

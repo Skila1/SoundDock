@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { BarChart3, Disc3, History, Home, Library, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Shield, Users, type LucideIcon } from "lucide-react";
+import { BarChart3, Disc3, History, Home, Library, ListMusic, PanelLeftClose, PanelLeftOpen, Radio, Shield, type LucideIcon } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Button } from "@/components/ui/button";
 import { Tooltip } from "@/components/ui/tooltip";
@@ -31,8 +31,7 @@ const groups: { id: string; label?: string; items: NavItem[] }[] = [
     label: "You",
     items: [
       { to: "/history", label: "History", icon: History },
-      { to: "/stats", label: "Stats", icon: BarChart3 },
-      { to: "/profile/party", label: "Party", icon: Users }
+      { to: "/stats", label: "Stats", icon: BarChart3 }
     ]
   }
 ];

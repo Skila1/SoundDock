@@ -15,7 +15,7 @@ export function AdminMediaSettings() {
   return (
     <div>
       <PageHeader title="Media Settings" description="Where SoundDock gets metadata and lyrics, the format it downloads in, and the transcode cache. Changes save as soon as you make them." />
-      <div className="grid gap-5 lg:grid-cols-2">
+      <div className="max-w-3xl space-y-5">
         <MetadataSettings />
         <DownloadSettings />
         <LyricsSettings />

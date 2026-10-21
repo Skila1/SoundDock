@@ -1,3 +1,4 @@
+import { getDeviceId } from "@/lib/device";
 export const ME_PATH = "/api/v1/me";
 
 /**
@@ -51,12 +52,23 @@ export function getCSRFToken() {
   return csrfTokenRequest;
 }
 
+// Every call names this browser's device so the server acts on the same
+// playback session the player uses (parties, queue, renderer).
+function deviceHeader(): Record<string, string> {
+  try {
+    const id = getDeviceId();
+    return id ? { "X-Device-ID": id } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function csrfHeaders(headers?: HeadersInit) {
-  return { ...(headers || {}), "X-CSRF-Token": await getCSRFToken() };
+  return { ...(headers || {}), ...deviceHeader(), "X-CSRF-Token": await getCSRFToken() };
 }
 
 export const api = {
-  get: <T = any>(p: string, init?: Pick<RequestInit, "signal">) => fetch(p, { credentials: "include", ...init }).then((r) => parse(r, p)) as Promise<T>,
+  get: <T = any>(p: string, init?: Pick<RequestInit, "signal">) => fetch(p, { credentials: "include", headers: deviceHeader(), ...init }).then((r) => parse(r, p)) as Promise<T>,
   post: async <T = any>(p: string, body?: unknown, init?: Pick<RequestInit, "signal">) =>
     fetch(p, {
       ...init,

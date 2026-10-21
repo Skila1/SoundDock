@@ -10,9 +10,9 @@ describe("admin navigation", () => {
     expect(adminNavGroups.map((g) => [g.label, g.links.map((l) => l.label)])).toEqual([
       ["Overview", ["Dashboard", "Activity"]],
       ["Library", ["Libraries", "Scan", "Catalog", "Media Settings"]],
-      ["Storage", ["Storage", "Retention", "Archive", "Backups"]],
-      ["IAM", ["Users", "Groups", "Discord", "Connected Services"]],
-      ["System", ["Updates", "Integrations"]]
+      ["Storage", ["Storage", "Cleanup", "Archive", "Backups"]],
+      ["IAM", ["Users", "Groups", "Access", "Discord", "Connected Services"]],
+      ["System", ["Updates", "Integrations", "Discord Bot"]]
     ]);
   });
 

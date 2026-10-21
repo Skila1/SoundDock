@@ -404,7 +404,7 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 			inst = fmt.Sprint(v)
 		}
 		if tid == current && inst == instance && stat == status && trackCancel != nil {
-			pos := sessionPositionMS(st)
+			pos := sessionLivePositionMS(st, time.Now())
 			expected := appliedStart + int(time.Since(appliedAt).Milliseconds())
 			if pos-expected > 2000 || expected-pos > 2000 {
 				// Seek: restart ffmpeg this tick instead of waiting another poll.
@@ -415,7 +415,7 @@ func (b *Bot) streamLoop(ctx context.Context, guildID string) {
 		}
 		stopTrack()
 		current, instance, status = tid, inst, stat
-		appliedStart = sessionPositionMS(st)
+		appliedStart = sessionLivePositionMS(st, time.Now())
 		appliedAt = time.Now()
 		tctx, cancel := context.WithCancel(ctx)
 		trackCancel = cancel
@@ -467,7 +467,7 @@ func (b *Bot) playTrack(ctx context.Context, guildID string, sid, trackID uuid.U
 	}
 	defer src.Close()
 
-	startMS := sessionPositionMS(st)
+	startMS := sessionLivePositionMS(st, time.Now())
 	pcmCmd, pcm, err := src.open(ctx, gainDB, startMS)
 	if err != nil {
 		b.recordPlaybackError(ctx, guildID, trackID, "ffmpeg", err.Error())
@@ -622,6 +622,48 @@ func sessionPositionMS(st map[string]any) int {
 	default:
 		return 0
 	}
+}
+
+// maxPlayheadInterpolation bounds how far past its last checkpoint a playing
+// session is extrapolated. A live renderer checkpoints far more often than
+// this (Discord every second, a browser tab every ten), so an older checkpoint
+// means nobody was rendering and the stored position is the better guess.
+const maxPlayheadInterpolation = 30 * time.Second
+
+// sessionLivePositionMS is where a playing session is now: position_ms plus
+// the time since checkpoint_at. position_ms alone is only the last checkpoint,
+// so taking over from a browser tab (which saves its position every ten
+// seconds) started the bot up to ten seconds early.
+func sessionLivePositionMS(st map[string]any, now time.Time) int {
+	pos := sessionPositionMS(st)
+	if st == nil || statusOf(st) != "playing" {
+		return pos
+	}
+	var at time.Time
+	switch v := st["checkpoint_at"].(type) {
+	case time.Time:
+		at = v
+	case *time.Time:
+		if v != nil {
+			at = *v
+		}
+	}
+	if at.IsZero() {
+		return pos
+	}
+	elapsed := now.Sub(at)
+	if elapsed <= 0 || elapsed > maxPlayheadInterpolation {
+		return pos
+	}
+	rate := 1.0
+	if r, ok := st["playback_rate"].(float64); ok && r > 0 {
+		rate = r
+	}
+	live := pos + int(float64(elapsed.Milliseconds())*rate)
+	if d := int(int64Of(st, "duration_ms")); d > 0 && live > d {
+		live = d
+	}
+	return live
 }
 
 // sessionVolume returns the session volume in 0-1. Missing volume defaults to 1;

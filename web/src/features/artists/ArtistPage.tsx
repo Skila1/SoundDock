@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { Heart, Pencil, Shuffle } from "lucide-react";
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { refreshCatalogue } from "@/lib/catalogue";
 import { Artwork } from "@/components/media/Artwork";
 import { HeroIconButton, MediaHero } from "@/components/media/MediaHero";
 import { CoverEditor } from "@/components/media/CoverEditor";
@@ -97,7 +98,7 @@ export function ArtistPage() {
         <ArtistEditDialog
           artist={a}
           onClose={() => setEdit(false)}
-          onSaved={() => { setEdit(false); qc.invalidateQueries({ queryKey: ["artist", id] }); }}
+          onSaved={() => { setEdit(false); refreshCatalogue(qc); }}
         />
       )}
     </div>

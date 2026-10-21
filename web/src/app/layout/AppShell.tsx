@@ -30,7 +30,6 @@ const titles: Record<string, string> = {
   "/playlists": "My Playlists",
   "/radio": "Radio",
   "/profile/devices": "Devices",
-  "/profile/party": "Party",
   "/profile": "Profile",
   "/history": "History",
   "/stats": "Stats",

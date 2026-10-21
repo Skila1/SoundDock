@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
+import { performerNames, refreshCatalogue } from "@/lib/catalogue";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -27,7 +28,7 @@ type TrackMeta = {
   genre?: string;
   year?: number | null;
   artist?: string;
-  artists?: { name: string }[];
+  artists?: { name: string; role?: string }[];
   album?: string;
   album_id?: string | null;
   track_number?: number;
@@ -53,8 +54,8 @@ function CatalogEditor() {
     queryKey: ["admin-catalog-albums", albumQ],
     queryFn: () =>
       api.get<CatalogAlbum[]>(
-        `/api/v1/albums?limit=400&q=${encodeURIComponent(albumQ)}`
-      )
+        `/api/v1/albums?limit=400&q=${encodeURIComponent(albumQ)}`,
+      ),
   });
   const tracks = useQuery({
     queryKey: ["admin-catalog-tracks", trackQ],
@@ -62,21 +63,28 @@ function CatalogEditor() {
       const p = new URLSearchParams({ limit: "200", all: "1" });
       if (trackQ.trim()) p.set("q", trackQ.trim());
       return api.get<TrackPage>(`/api/v1/tracks?${p}`);
-    }
+    },
   });
   const allAlbums = useQuery({
     queryKey: ["admin-catalog-albums-all"],
-    queryFn: () => api.get<CatalogAlbum[]>("/api/v1/albums?limit=400")
+    queryFn: () => api.get<CatalogAlbum[]>("/api/v1/albums?limit=400"),
   });
 
-  const albumList = useMemo(() => (Array.isArray(albums.data) ? albums.data : []), [albums.data]);
+  const albumList = useMemo(
+    () => (Array.isArray(albums.data) ? albums.data : []),
+    [albums.data],
+  );
   const trackList: Track[] = tracks.data?.items || [];
   const albumOptions = useMemo(
     () => (Array.isArray(allAlbums.data) ? allAlbums.data : albumList),
-    [allAlbums.data, albumList]
+    [allAlbums.data, albumList],
   );
 
-  function toggle(set: Set<string>, id: string, next: (s: Set<string>) => void) {
+  function toggle(
+    set: Set<string>,
+    id: string,
+    next: (s: Set<string>) => void,
+  ) {
     const copy = new Set(set);
     if (copy.has(id)) copy.delete(id);
     else copy.add(id);
@@ -88,8 +96,10 @@ function CatalogEditor() {
       qc.invalidateQueries({ queryKey: ["admin-catalog-albums"] }),
       qc.invalidateQueries({ queryKey: ["admin-catalog-albums-all"] }),
       qc.invalidateQueries({ queryKey: ["admin-catalog-tracks"] }),
-      qc.invalidateQueries({ queryKey: ["album"] })
+      qc.invalidateQueries({ queryKey: ["album"] }),
     ]);
+    // Edits here show on Home, the library, albums, playlists and the queue.
+    refreshCatalogue(qc);
   }
 
   async function createAlbum(trackIds: string[] = []) {
@@ -103,7 +113,7 @@ function CatalogEditor() {
       title,
       artist: newAlbum.artist.trim() || undefined,
       year: year && !Number.isNaN(year) ? year : undefined,
-      track_ids: trackIds
+      track_ids: trackIds,
     });
     toast.success("Album created");
     setCreateOpen(false);
@@ -124,7 +134,11 @@ function CatalogEditor() {
   async function deleteAlbums() {
     const ids = [...pickedAlbums];
     if (!ids.length) return;
-    if (!window.confirm(`Delete ${ids.length} album${ids.length === 1 ? "" : "s"}? Tracks stay in the library, unassigned.`)) {
+    if (
+      !window.confirm(
+        `Delete ${ids.length} album${ids.length === 1 ? "" : "s"}? Tracks stay in the library, unassigned.`,
+      )
+    ) {
       return;
     }
     for (const id of ids) {
@@ -152,7 +166,7 @@ function CatalogEditor() {
 
   async function openTrack(id: string) {
     const meta = await api.get<TrackMeta>(`/api/v1/tracks/${id}/metadata`);
-    const artist = meta.artists?.map((a) => a.name).filter(Boolean).join(", ") || meta.artist || "";
+    const artist = performerNames(meta.artists) || meta.artist || "";
     setEditTrack({ ...meta, artist });
   }
 
@@ -165,7 +179,7 @@ function CatalogEditor() {
       year: editTrack.year,
       album_id: editTrack.album_id || "",
       track_number: editTrack.track_number,
-      disc_number: editTrack.disc_number
+      disc_number: editTrack.disc_number,
     });
     toast.success("Track saved");
     setEditTrack(null);
@@ -204,7 +218,9 @@ function CatalogEditor() {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">Edit albums and track details. Albums can be empty and filled later.</p>
+        <p className="text-sm text-muted">
+          Edit albums and track details. Albums can be empty and filled later.
+        </p>
         <Button onClick={() => setCreateOpen(true)}>
           <Plus className="h-4 w-4" /> New album
         </Button>
@@ -221,17 +237,35 @@ function CatalogEditor() {
             value={albumQ}
             onChange={(e) => setAlbumQ(e.target.value)}
           />
-          <div className="mb-3 flex flex-wrap gap-2">
-            <Button size="sm" variant="secondary" disabled={pickedAlbums.size < 2} onClick={() => mergeAlbums()}>
-              Merge selected
-            </Button>
-            <Button size="sm" variant="ghost" disabled={!pickedAlbums.size} onClick={() => deleteAlbums()}>
-              <Trash2 className="h-4 w-4" /> Delete
-            </Button>
-          </div>
+          {pickedAlbums.size > 0 && (
+            <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-accent/30 bg-accent/5 px-3 py-2">
+              <span className="mr-auto text-sm font-medium">
+                {pickedAlbums.size} selected
+              </span>
+              <Button
+                size="sm"
+                variant="secondary"
+                disabled={pickedAlbums.size < 2}
+                onClick={() => mergeAlbums()}
+              >
+                Merge selected
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!pickedAlbums.size}
+                onClick={() => deleteAlbums()}
+              >
+                <Trash2 className="h-4 w-4" /> Delete
+              </Button>
+            </div>
+          )}
           <div className="max-h-[32rem] space-y-1 overflow-auto rounded-xl border border-border">
             {albumList.map((a) => (
-              <label key={a.id} className="flex items-center gap-3 px-3 py-2 hover:bg-surface-2">
+              <label
+                key={a.id}
+                className="flex items-center gap-3 px-3 py-2 hover:bg-surface-2"
+              >
                 <input
                   type="checkbox"
                   checked={pickedAlbums.has(a.id)}
@@ -240,11 +274,16 @@ function CatalogEditor() {
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium">{a.title}</div>
                   <div className="text-xs text-muted">
-                    {a.artist || "No artist"} · {a.track_count ?? 0} track{(a.track_count ?? 0) === 1 ? "" : "s"}
+                    {a.artist || "No artist"} · {a.track_count ?? 0} track
+                    {(a.track_count ?? 0) === 1 ? "" : "s"}
                     {a.year ? ` · ${a.year}` : ""}
                   </div>
                 </div>
-                <Button size="sm" variant="ghost" onClick={() => setEditAlbum(a)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditAlbum(a)}
+                >
                   <Pencil className="h-4 w-4" />
                 </Button>
               </label>
@@ -267,55 +306,87 @@ function CatalogEditor() {
             value={trackQ}
             onChange={(e) => setTrackQ(e.target.value)}
           />
-          <div className="mb-3 space-y-2 rounded-xl border border-border p-3">
-            <p className="text-xs text-muted">Bulk: genre and tags are comma-separated. Autoplay uses these, never the title.</p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <Field label="Genre / tags">
-                <Input value={bulkGenre} onChange={(e) => setBulkGenre(e.target.value)} placeholder="Drum & Bass, liquid" />
+          {pickedTracks.size > 0 && (
+            <div className="mb-3 space-y-2 rounded-xl border border-accent/30 bg-accent/5 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-sm font-medium">
+                  {pickedTracks.size} selected
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setPickedTracks(new Set())}
+                >
+                  Clear
+                </Button>
+              </div>
+              <p className="text-xs text-muted">
+                Genre and tags are comma-separated. Autoplay uses these, never
+                the title.
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Field label="Genre / tags">
+                  <Input
+                    value={bulkGenre}
+                    onChange={(e) => setBulkGenre(e.target.value)}
+                    placeholder="Drum & Bass, liquid"
+                  />
+                </Field>
+                <Field label="Year">
+                  <Input
+                    value={bulkYear}
+                    onChange={(e) => setBulkYear(e.target.value)}
+                    inputMode="numeric"
+                  />
+                </Field>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() =>
+                    bulkTracks({
+                      genre: bulkGenre.trim() || undefined,
+                      year: bulkYear.trim() ? Number(bulkYear) : undefined,
+                    })
+                  }
+                >
+                  Apply to selected
+                </Button>
+              </div>
+              <Field label="Move into album">
+                <select
+                  className="flex h-10 w-full rounded-md border border-border bg-surface-1 px-3 text-sm"
+                  value={moveAlbumId}
+                  onChange={(e) => setMoveAlbumId(e.target.value)}
+                >
+                  <option value="">Existing album…</option>
+                  {albumOptions.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.title}
+                      {a.artist ? ` - ${a.artist}` : ""}
+                    </option>
+                  ))}
+                </select>
               </Field>
-              <Field label="Year">
-                <Input value={bulkYear} onChange={(e) => setBulkYear(e.target.value)} inputMode="numeric" />
+              <Field label="Or new album title">
+                <Input
+                  value={moveNewTitle}
+                  onChange={(e) => setMoveNewTitle(e.target.value)}
+                  placeholder="Skila - Singles"
+                />
               </Field>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() =>
-                  bulkTracks({
-                    genre: bulkGenre.trim() || undefined,
-                    year: bulkYear.trim() ? Number(bulkYear) : undefined
-                  })
-                }
-              >
-                Apply to selected
+              <Button size="sm" onClick={() => moveSelected()}>
+                Move selected tracks
               </Button>
             </div>
-            <Field label="Move into album">
-              <select
-                className="flex h-10 w-full rounded-md border border-border bg-surface-1 px-3 text-sm"
-                value={moveAlbumId}
-                onChange={(e) => setMoveAlbumId(e.target.value)}
-              >
-                <option value="">Existing album…</option>
-                {albumOptions.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.title}
-                    {a.artist ? ` - ${a.artist}` : ""}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Or new album title">
-              <Input value={moveNewTitle} onChange={(e) => setMoveNewTitle(e.target.value)} placeholder="Skila - Singles" />
-            </Field>
-            <Button size="sm" onClick={() => moveSelected()}>
-              Move selected tracks
-            </Button>
-          </div>
+          )}
           <div className="max-h-[24rem] space-y-1 overflow-auto rounded-xl border border-border">
             {trackList.map((t) => (
-              <label key={t.id} className="flex items-center gap-3 px-3 py-2 hover:bg-surface-2">
+              <label
+                key={t.id}
+                className="flex items-center gap-3 px-3 py-2 hover:bg-surface-2"
+              >
                 <input
                   type="checkbox"
                   checked={pickedTracks.has(t.id)}
@@ -327,19 +398,28 @@ function CatalogEditor() {
                     {t.artist || "Unknown"} · {t.album || "No album"}
                   </div>
                 </div>
-                <Button size="sm" variant="ghost" onClick={() => openTrack(t.id)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => openTrack(t.id)}
+                >
                   <Pencil className="h-4 w-4" />
                 </Button>
               </label>
             ))}
             {tracks.isError && (
               <p className="px-3 py-8 text-center text-sm text-muted">
-                Could not load tracks{tracks.error instanceof Error ? `: ${tracks.error.message}` : "."}
+                Could not load tracks
+                {tracks.error instanceof Error
+                  ? `: ${tracks.error.message}`
+                  : "."}
               </p>
             )}
             {!tracks.isError && !trackList.length && !tracks.isFetching && (
               <p className="px-3 py-8 text-center text-sm text-muted">
-                {trackQ.trim() ? "No tracks match." : "No tracks in the catalogue."}
+                {trackQ.trim()
+                  ? "No tracks match."
+                  : "No tracks in the catalogue."}
               </p>
             )}
           </div>
@@ -355,21 +435,44 @@ function CatalogEditor() {
               try {
                 await createAlbum();
               } catch (err) {
-                toast.error(err instanceof Error ? err.message : "Could not create album");
+                toast.error(
+                  err instanceof Error ? err.message : "Could not create album",
+                );
               }
             }}
           >
             <Field label="Title">
-              <Input value={newAlbum.title} onChange={(e) => setNewAlbum({ ...newAlbum, title: e.target.value })} required />
+              <Input
+                value={newAlbum.title}
+                onChange={(e) =>
+                  setNewAlbum({ ...newAlbum, title: e.target.value })
+                }
+                required
+              />
             </Field>
             <Field label="Artist">
-              <Input value={newAlbum.artist} onChange={(e) => setNewAlbum({ ...newAlbum, artist: e.target.value })} />
+              <Input
+                value={newAlbum.artist}
+                onChange={(e) =>
+                  setNewAlbum({ ...newAlbum, artist: e.target.value })
+                }
+              />
             </Field>
             <Field label="Year">
-              <Input value={newAlbum.year} onChange={(e) => setNewAlbum({ ...newAlbum, year: e.target.value })} inputMode="numeric" />
+              <Input
+                value={newAlbum.year}
+                onChange={(e) =>
+                  setNewAlbum({ ...newAlbum, year: e.target.value })
+                }
+                inputMode="numeric"
+              />
             </Field>
             <div className="flex justify-end gap-2">
-              <Button type="button" variant="ghost" onClick={() => setCreateOpen(false)}>
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={() => setCreateOpen(false)}
+              >
                 Cancel
               </Button>
               <Button type="submit">Create</Button>
@@ -378,7 +481,12 @@ function CatalogEditor() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!editAlbum} onOpenChange={(v) => { if (!v) setEditAlbum(null); }}>
+      <Dialog
+        open={!!editAlbum}
+        onOpenChange={(v) => {
+          if (!v) setEditAlbum(null);
+        }}
+      >
         <DialogContent title="Edit album">
           {editAlbum && (
             <AlbumEditForm
@@ -390,7 +498,12 @@ function CatalogEditor() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!editTrack} onOpenChange={(v) => { if (!v) setEditTrack(null); }}>
+      <Dialog
+        open={!!editTrack}
+        onOpenChange={(v) => {
+          if (!v) setEditTrack(null);
+        }}
+      >
         <DialogContent title="Edit track">
           {editTrack && (
             <form
@@ -400,23 +513,37 @@ function CatalogEditor() {
                 try {
                   await saveTrack();
                 } catch (err) {
-                  toast.error(err instanceof Error ? err.message : "Could not save track");
+                  toast.error(
+                    err instanceof Error ? err.message : "Could not save track",
+                  );
                 }
               }}
             >
               <Field label="Title">
-                <Input value={editTrack.title} onChange={(e) => setEditTrack({ ...editTrack, title: e.target.value })} />
+                <Input
+                  value={editTrack.title}
+                  onChange={(e) =>
+                    setEditTrack({ ...editTrack, title: e.target.value })
+                  }
+                />
               </Field>
               <Field label="Artist">
                 <Input
                   value={editTrack.artist || ""}
-                  onChange={(e) => setEditTrack({ ...editTrack, artist: e.target.value })}
+                  onChange={(e) =>
+                    setEditTrack({ ...editTrack, artist: e.target.value })
+                  }
                 />
               </Field>
-              <Field label="Genre / tags" hint="Comma-separated. Autoplay matches these only.">
+              <Field
+                label="Genre / tags"
+                hint="Comma-separated. Autoplay matches these only."
+              >
                 <Input
                   value={editTrack.genre || ""}
-                  onChange={(e) => setEditTrack({ ...editTrack, genre: e.target.value })}
+                  onChange={(e) =>
+                    setEditTrack({ ...editTrack, genre: e.target.value })
+                  }
                 />
               </Field>
               <Field label="Year">
@@ -425,7 +552,9 @@ function CatalogEditor() {
                   onChange={(e) =>
                     setEditTrack({
                       ...editTrack,
-                      year: e.target.value.trim() ? Number(e.target.value) : null
+                      year: e.target.value.trim()
+                        ? Number(e.target.value)
+                        : null,
                     })
                   }
                   inputMode="numeric"
@@ -435,7 +564,9 @@ function CatalogEditor() {
                 <select
                   className="flex h-10 w-full rounded-md border border-border bg-surface-1 px-3 text-sm"
                   value={editTrack.album_id || ""}
-                  onChange={(e) => setEditTrack({ ...editTrack, album_id: e.target.value })}
+                  onChange={(e) =>
+                    setEditTrack({ ...editTrack, album_id: e.target.value })
+                  }
                 >
                   <option value="">No album</option>
                   {albumOptions.map((a) => (
@@ -449,20 +580,34 @@ function CatalogEditor() {
                 <Field label="Disc">
                   <Input
                     value={String(editTrack.disc_number || 1)}
-                    onChange={(e) => setEditTrack({ ...editTrack, disc_number: Number(e.target.value) || 1 })}
+                    onChange={(e) =>
+                      setEditTrack({
+                        ...editTrack,
+                        disc_number: Number(e.target.value) || 1,
+                      })
+                    }
                     inputMode="numeric"
                   />
                 </Field>
                 <Field label="Track no.">
                   <Input
                     value={String(editTrack.track_number || 0)}
-                    onChange={(e) => setEditTrack({ ...editTrack, track_number: Number(e.target.value) || 0 })}
+                    onChange={(e) =>
+                      setEditTrack({
+                        ...editTrack,
+                        track_number: Number(e.target.value) || 0,
+                      })
+                    }
                     inputMode="numeric"
                   />
                 </Field>
               </div>
               <div className="flex justify-end gap-2">
-                <Button type="button" variant="ghost" onClick={() => setEditTrack(null)}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setEditTrack(null)}
+                >
                   Cancel
                 </Button>
                 <Button type="submit">Save</Button>
@@ -478,7 +623,7 @@ function CatalogEditor() {
 function AlbumEditForm({
   album,
   onCancel,
-  onSave
+  onSave,
 }: {
   album: CatalogAlbum;
   onCancel: () => void;
@@ -499,10 +644,12 @@ function AlbumEditForm({
             title,
             artist,
             edition_title: edition,
-            year: y && !Number.isNaN(y) ? y : undefined
+            year: y && !Number.isNaN(y) ? y : undefined,
           });
         } catch (err) {
-          toast.error(err instanceof Error ? err.message : "Could not save album");
+          toast.error(
+            err instanceof Error ? err.message : "Could not save album",
+          );
         }
       }}
     >
@@ -513,7 +660,11 @@ function AlbumEditForm({
         <Input value={artist} onChange={(e) => setArtist(e.target.value)} />
       </Field>
       <Field label="Year">
-        <Input value={year} onChange={(e) => setYear(e.target.value)} inputMode="numeric" />
+        <Input
+          value={year}
+          onChange={(e) => setYear(e.target.value)}
+          inputMode="numeric"
+        />
       </Field>
       <Field label="Edition">
         <Input value={edition} onChange={(e) => setEdition(e.target.value)} />
@@ -532,11 +683,16 @@ export function AdminCatalog() {
   // Old Catalog tabs moved to the Scan page; keep bookmarks working.
   const [params] = useSearchParams();
   const tab = params.get("tab");
-  if (tab === "duplicates") return <Navigate to="/admin/scan?tab=duplicates" replace />;
-  if (tab === "cleanup") return <Navigate to="/admin/scan?tab=metadata" replace />;
+  if (tab === "duplicates")
+    return <Navigate to="/admin/scan?tab=duplicates" replace />;
+  if (tab === "cleanup")
+    return <Navigate to="/admin/scan?tab=metadata" replace />;
   return (
     <div>
-      <PageHeader title="Catalog" description="Edit albums and songs across every library. Find duplicates and fill in missing details from the Scan page." />
+      <PageHeader
+        title="Catalog"
+        description="Edit albums and songs across every library. Find duplicates and fill in missing details from the Scan page."
+      />
       <CatalogEditor />
     </div>
   );

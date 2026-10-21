@@ -20,7 +20,7 @@ func (s *Server) partyFor(r *http.Request, bodyID *uuid.UUID, deviceID string) (
 	if found, ok, ferr := s.Play.FindPartyForUser(r.Context(), u.ID); ferr == nil && ok {
 		return found, nil
 	}
-	return s.Play.WebSession(r.Context(), u.ID, firstNonEmpty(deviceID, requestDeviceID(r, nil)))
+	return s.attachedPlaySession(r, nil, deviceID)
 }
 
 func (s *Server) writePartyState(w http.ResponseWriter, r *http.Request, sid uuid.UUID) {

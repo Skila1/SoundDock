@@ -192,6 +192,25 @@ describe("output switch helpers", () => {
     expect(personal.queue.items).toHaveLength(0);
   });
 
+  it("switching to a session with a lower state_revision still applies it", () => {
+    const personal = applySnapshot(initialSession(), snap({ id: "web-device", state_revision: 500, playhead_sequence: 90 }));
+    const guild = applySnapshot(personal, snap({
+      id: "guild-sess",
+      state_revision: 12,
+      playhead_sequence: 3,
+      playback_instance_id: "inst-guild",
+      current_track_id: "t9",
+      items: [{ id: "g1", position: 0, track_id: "t9" }]
+    }));
+    expect(guild.ignored).toBeNull();
+    expect(guild.queue.id).toBe("guild-sess");
+    expect(guild.queue.current_track_id).toBe("t9");
+    expect(guild.lastAppliedRevision).toBe(12);
+    const next = applySnapshot(guild, snap({ id: "guild-sess", state_revision: 13, status: "playing", current_track_id: "t9", items: guild.queue.items }));
+    expect(next.stateApplied).toBe(true);
+    expect(next.queue.status).toBe("playing");
+  });
+
   it("owner leaving VC keeps the same session and queue ids", () => {
     const owned = applySnapshot(initialSession(), snap({ id: "web-1", binding_revision: 4 }));
     const after = applySnapshot(owned, snap({ id: "web-1", binding_revision: 5, state_revision: 2 }));
