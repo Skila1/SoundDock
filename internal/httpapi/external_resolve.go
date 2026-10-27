@@ -10,10 +10,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/external"
 	"github.com/sounddock/sounddock/internal/matcher"
 	"github.com/sounddock/sounddock/internal/minilib"
 	"github.com/sounddock/sounddock/internal/playback"
-	"github.com/sounddock/sounddock/internal/scapex"
 )
 
 const maxResolveBatch = 25
@@ -21,6 +21,7 @@ const maxResolveBatch = 25
 type resolveIn struct {
 	Title      string   `json:"title"`
 	Artists    []string `json:"artists"`
+	Album      string   `json:"album"`
 	DurationMS int      `json:"duration_ms"`
 	ISRC       string   `json:"isrc"`
 }
@@ -78,34 +79,10 @@ func (s *Server) resolveOne(ctx context.Context, libs []uuid.UUID, t resolveIn) 
 	if s.ScapeX == nil {
 		return resolveOut{Source: "none"}
 	}
-	q := t.Title
-	if len(t.Artists) > 0 {
-		q = strings.TrimSpace(t.Artists[0]) + " - " + t.Title
-	}
-	hits, err := s.YouTube().Search(ctx, q, 6)
-	if err != nil {
-		return resolveOut{Source: "none"}
-	}
-	want := matcher.NormaliseTitle(t.Title)
-	var best *scapex.Hit
-	for i := range hits {
-		h := hits[i]
-		if !scapex.LooksLikeMusic(h) {
-			continue
-		}
-		if want != "" && !strings.Contains(matcher.NormaliseTitle(h.Title), want) {
-			continue
-		}
-		if best == nil {
-			best = &hits[i]
-		}
-		// Prefer the upload whose length matches the original recording.
-		if t.DurationMS > 0 && h.DurationMS > 0 && abs(h.DurationMS-t.DurationMS) <= 8000 {
-			best = &hits[i]
-			break
-		}
-	}
-	if best == nil {
+	// Same pick as playlist import: Spotify version suffixes and accents are
+	// cleaned, and the next query is tried when one finds nothing.
+	best, ok, err := external.FindYouTube(ctx, s.YouTube(), t.Title, t.Artists, t.Album, t.DurationMS)
+	if err != nil || !ok {
 		return resolveOut{Source: "none"}
 	}
 	artist := strings.Join(t.Artists, ", ")
@@ -113,13 +90,6 @@ func (s *Server) resolveOne(ctx context.Context, libs []uuid.UUID, t resolveIn) 
 		artist = best.Artist
 	}
 	return resolveOut{Ref: best.ID, Source: "youtube", Title: t.Title, Artist: artist, DurationMS: best.DurationMS}
-}
-
-func abs(n int) int {
-	if n < 0 {
-		return -n
-	}
-	return n
 }
 
 // addToMyLibrary saves songs to the caller's personal library without playing

@@ -16,7 +16,7 @@ import (
 // Filler is YouTube search + fetch. Callers should pass an isolated
 // implementation so yt-dlp runs on the acquisition/search pools.
 type Filler interface {
-	Search(ctx context.Context, q string, limit int) ([]scapex.Hit, error)
+	Searcher
 	Fetch(ctx context.Context, refs []string) ([]uuid.UUID, error)
 }
 
@@ -192,7 +192,7 @@ func isTimeout(err error) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "timeout")
 }
 
-func searchYouTube(ctx context.Context, sx Filler, q string) ([]scapex.Hit, error) {
+func searchYouTube(ctx context.Context, sx Searcher, q string) ([]scapex.Hit, error) {
 	var err error
 	for attempt := 0; attempt < 2; attempt++ {
 		sctx, cancel := ctx, context.CancelFunc(func() {})
@@ -213,37 +213,59 @@ func searchYouTube(ctx context.Context, sx Filler, q string) ([]scapex.Hit, erro
 	return nil, err
 }
 
-func fillFromYouTube(ctx context.Context, sx Filler, title string, artists []string, album string, durationMS int) (uuid.UUID, error) {
+// Searcher is the search half of Filler.
+type Searcher interface {
+	Search(ctx context.Context, q string, limit int) ([]scapex.Hit, error)
+}
+
+// FindYouTube picks the YouTube upload for a streaming-service song without
+// downloading it. Tries each query in turn; ok is false when nothing fits.
+func FindYouTube(ctx context.Context, sx Searcher, title string, artists []string, album string, durationMS int) (scapex.Hit, bool, error) {
 	if sx == nil {
-		return uuid.Nil, nil
+		return scapex.Hit{}, false, nil
 	}
-	qs := youtubeQueries(title, artists, album)
 	var lastErr error
 	searched := false
-	for _, q := range qs {
+	for _, q := range youtubeQueries(title, artists, album) {
 		hits, err := searchYouTube(ctx, sx, q)
 		if err != nil {
 			lastErr = err
 			if ctx.Err() != nil {
-				return uuid.Nil, ctx.Err()
+				return scapex.Hit{}, false, ctx.Err()
 			}
 			continue
 		}
 		searched = true
-		id, _ := pickYouTubeID(scapex.RankHits(q, hits), title, artists, durationMS)
+		ranked := scapex.RankHits(q, hits)
+		id, _ := pickYouTubeID(ranked, title, artists, durationMS)
 		if id == "" {
 			continue
 		}
-		got, err := sx.Fetch(ctx, []string{id})
-		if err != nil || len(got) == 0 {
-			return uuid.Nil, err
+		for _, h := range ranked {
+			if h.ID == id {
+				return h, true, nil
+			}
 		}
-		return got[0], nil
 	}
 	if !searched {
-		return uuid.Nil, lastErr
+		return scapex.Hit{}, false, lastErr
 	}
-	return uuid.Nil, nil
+	return scapex.Hit{}, false, nil
+}
+
+func fillFromYouTube(ctx context.Context, sx Filler, title string, artists []string, album string, durationMS int) (uuid.UUID, error) {
+	if sx == nil {
+		return uuid.Nil, nil
+	}
+	h, ok, err := FindYouTube(ctx, sx, title, artists, album, durationMS)
+	if err != nil || !ok {
+		return uuid.Nil, err
+	}
+	got, err := sx.Fetch(ctx, []string{h.ID})
+	if err != nil || len(got) == 0 {
+		return uuid.Nil, err
+	}
+	return got[0], nil
 }
 
 func FillTrack(ctx context.Context, sx Filler, provider, videoID, title string, artists []string) (uuid.UUID, error) {

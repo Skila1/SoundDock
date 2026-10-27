@@ -135,3 +135,48 @@ func TestFillFromYouTubeReportsSearchErrors(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+type anySearcher struct {
+	hits  []scapex.Hit
+	calls int
+}
+
+func (a *anySearcher) Search(_ context.Context, _ string, _ int) ([]scapex.Hit, error) {
+	a.calls++
+	return a.hits, nil
+}
+
+// Spotify titles carry " - <version>" suffixes and accents that YouTube
+// uploads spell differently; these used to be skipped when queueing a playlist.
+func TestFindYouTubeSpotifyTitles(t *testing.T) {
+	decoy := scapex.Hit{ID: "decoy", Title: "Workout Mix 2026 Nonstop", Artist: "Gym Hits"}
+	cases := []struct {
+		title   string
+		artists []string
+		hit     scapex.Hit
+	}{
+		{"Say My Name - Hard Edit", []string{"ALYSSA", "Colin Hennerz"}, scapex.Hit{ID: "saymyname", Title: "ALYSSA & Colin Hennerz - Say My Name (Hard Edit)", Artist: "Hardstyle Vibes"}},
+		{"Don't Stop Me Now - Remastered 2011", []string{"Queen"}, scapex.Hit{ID: "queen", Title: "Queen - Don't Stop Me Now (Official Video)", Artist: "Queen Official"}},
+		{"Café", []string{"Artist"}, scapex.Hit{ID: "cafe", Title: "Artist - Cafe (Official Audio)", Artist: "Artist"}},
+		{"Bad Habits - Acoustic Version", []string{"Ed Sheeran"}, scapex.Hit{ID: "habits", Title: "Ed Sheeran - Bad Habits [Acoustic Version]", Artist: "Ed Sheeran"}},
+		{"Lose Yourself - From \"8 Mile\" Soundtrack", []string{"Eminem"}, scapex.Hit{ID: "lose", Title: "Eminem - Lose Yourself [HD]", Artist: "EminemMusic"}},
+		{"Dönmüyor Giden", []string{"Tarkan"}, scapex.Hit{ID: "tarkan", Title: "TARKAN – Dönmüyor Giden (Official Visualiser)", Artist: "Tarkan"}},
+	}
+	for _, c := range cases {
+		s := &anySearcher{hits: []scapex.Hit{decoy, c.hit}}
+		h, ok, err := FindYouTube(context.Background(), s, c.title, c.artists, "", 0)
+		if err != nil || !ok || h.ID != c.hit.ID {
+			t.Errorf("%q: got %q ok=%v err=%v", c.title, h.ID, ok, err)
+		}
+	}
+}
+
+func TestFindYouTubeTriesNextQuery(t *testing.T) {
+	f := &fakeFiller{hits: map[string][]scapex.Hit{
+		"Atom Bomb Baby The Five Stars": {{ID: "abb", Title: "The Five Stars - Atom Bomb Baby"}},
+	}}
+	h, ok, err := FindYouTube(context.Background(), f, "Atom Bomb Baby", []string{"The Five Stars"}, "", 0)
+	if err != nil || !ok || h.ID != "abb" || len(f.fetched) != 0 {
+		t.Fatalf("hit=%q ok=%v err=%v fetched=%q", h.ID, ok, err, f.fetched)
+	}
+}

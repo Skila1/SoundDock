@@ -75,7 +75,7 @@ export function ProviderPlaylistPage() {
       if (need.length) {
         try {
           const r = await api.post<{ items: Resolved[] }>("/api/v1/providers/resolve", {
-            tracks: need.map((i) => ({ title: tracks[i].title, artists: tracks[i].artists || [], duration_ms: tracks[i].duration_ms || 0, isrc: tracks[i].isrc || "" }))
+            tracks: need.map((i) => ({ title: tracks[i].title, artists: tracks[i].artists || [], album: tracks[i].album || "", duration_ms: tracks[i].duration_ms || 0, isrc: tracks[i].isrc || "" }))
           });
           const next = { ...resolvedRef.current };
           need.forEach((i, k) => (next[i] = r.items[k] || { source: "none" }));
