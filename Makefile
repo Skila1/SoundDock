@@ -1,4 +1,4 @@
-.PHONY: build web test tidy docker
+.PHONY: build web test tidy docker bump
 
 VERSION ?= $(shell tr -d '[:space:]' < VERSION)
 
@@ -19,3 +19,7 @@ docker:
 
 run-api:
 	go run ./cmd/sounddock all
+
+# Next release version: patch and minor count 0-9 (0.1.9 -> 0.2.0).
+bump:
+	sh scripts/bump-version.sh
