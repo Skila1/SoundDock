@@ -187,19 +187,24 @@ function playheadFromSnap(snap: QueueSnapshot, offsetMs: number, nowMs: number, 
   };
 }
 
-export function applyBindResult(view: SessionView, result: BindResult, guildId?: string | null): SessionView {
+/**
+ * `fromJoin` marks the answer to our own join: the server bound us just now and
+ * its revision is the current one, so a higher number remembered for the guild
+ * is out of date, not the answer.
+ */
+export function applyBindResult(view: SessionView, result: BindResult, guildId?: string | null, fromJoin = false): SessionView {
   const rev = num(result.binding_revision, -1);
   const guild = guildId || result.guild_id || "";
   // binding_revision counts per guild, so never compare one guild against another's.
   const last = guild ? view.lastBindingByGuild[guild] ?? 0 : view.lastBindingRevision;
-  if (rev >= 0 && rev < last) {
+  if (!fromJoin && rev >= 0 && rev < last) {
     return { ...view, ignored: "stale_bind", stateApplied: false, playheadApplied: false, stopAudio: false };
   }
   const lastBindingByGuild = guild && rev >= 0 ? { ...view.lastBindingByGuild, [guild]: rev } : view.lastBindingByGuild;
   return {
     ...view,
     ignored: null,
-    lastBindingRevision: rev >= 0 ? Math.max(view.lastBindingRevision, rev) : view.lastBindingRevision,
+    lastBindingRevision: rev >= 0 ? (fromJoin ? rev : Math.max(view.lastBindingRevision, rev)) : view.lastBindingRevision,
     lastBindingByGuild,
     queue: {
       ...view.queue,
@@ -289,7 +294,10 @@ export function applySnapshot(view: SessionView, snap: QueueSnapshot, opts: Appl
   } else if (snap.binding_revision != null && Number.isFinite(snap.binding_revision)) {
     const rev = num(snap.binding_revision);
     lastBindingRevision = Math.max(lastBindingRevision, rev);
-    if (opts.guildId) lastBindingByGuild = { ...lastBindingByGuild, [opts.guildId]: Math.max(lastBindingByGuild[opts.guildId] ?? 0, rev) };
+    // File it under the guild the server says it belongs to. Filing it under
+    // the guild we are in made another guild's higher revision reject our joins.
+    const bindGuild = snap.binding_guild_id || "";
+    if (bindGuild) lastBindingByGuild = { ...lastBindingByGuild, [bindGuild]: Math.max(lastBindingByGuild[bindGuild] ?? 0, rev) };
   }
 
   const incomingRev = snap.state_revision;

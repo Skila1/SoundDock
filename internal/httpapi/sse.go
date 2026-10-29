@@ -426,7 +426,7 @@ var sessionStateKeys = []string{
 	"id", "kind", "owner_key", "state_revision", "status", "volume", "muted",
 	"output_pref", "playback_instance_id", "repeat", "shuffle", "autoplay",
 	"current_index", "current_track_id", "items", "renderer_kind", "renderer_id",
-	"renderer_generation", "binding_revision", "stop_after_current", "shuffle_mode",
+	"renderer_generation", "binding_revision", "binding_guild_id", "stop_after_current", "shuffle_mode",
 	"crossfade_seconds", "replaygain_mode", "device_id", "generation",
 }
 

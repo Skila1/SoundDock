@@ -123,6 +123,27 @@ describe("bind revision", () => {
     expect(stale.queue.output_pref).toBe("discord");
   });
 
+  it("accepts our own join reply below a remembered revision", () => {
+    const seeded = applyBindResult(initialSession(), { binding_revision: 143, guild_id: "g1" }, "g1");
+    const joined = applyBindResult(seeded, { binding_revision: 51, guild_id: "g1", ok: true }, "g1", true);
+    expect(joined.ignored).toBeNull();
+    expect(joined.lastBindingByGuild.g1).toBe(51);
+    expect(joined.queue.binding_revision).toBe(51);
+  });
+
+  it("files a snapshot's binding_revision under its own guild", () => {
+    const view = applySnapshot(initialSession(), snap({ state_revision: 1, binding_revision: 143, binding_guild_id: "other" }), { guildId: "here" });
+    expect(view.lastBindingByGuild.other).toBe(143);
+    expect(view.lastBindingByGuild.here).toBeUndefined();
+    const joined = applyBindResult(view, { binding_revision: 51, guild_id: "here", ok: true }, "here");
+    expect(joined.ignored).toBeNull();
+  });
+
+  it("does not file a snapshot revision without a guild", () => {
+    const view = applySnapshot(initialSession(), snap({ state_revision: 1, binding_revision: 143 }), { guildId: "here" });
+    expect(view.lastBindingByGuild.here).toBeUndefined();
+  });
+
   it("accepts a first bind in another guild with a lower revision", () => {
     const seeded = applyBindResult(initialSession(), { binding_revision: 40, guild_id: "g1" }, "g1");
     const other = applyBindResult(seeded, { binding_revision: 3, guild_id: "g2", ok: true }, "g2");

@@ -1259,11 +1259,7 @@ export const usePlayer = create<PlayerStore>()(
             pauseAll();
             try {
               const joined = await joinDiscord();
-              const next = applyBindResult(session, joined || {}, joined?.guild_id || guildIdOf());
-              if (next.ignored === "stale_bind") {
-                toast.error("Voice bind is out of date");
-                return;
-              }
+              const next = applyBindResult(session, joined || {}, joined?.guild_id || guildIdOf(), true);
               session = next;
               const q = await api.put<PlayerQueue>("/api/v1/me/queue", {
                 track_ids: ids,
@@ -1517,18 +1513,7 @@ export const usePlayer = create<PlayerStore>()(
           }
           try {
             const joined = await joinDiscord();
-            const next = applyBindResult(session, joined || {}, joined?.guild_id || guildIdOf());
-            if (next.ignored === "stale_bind") {
-              session = applyJoinFailure(session);
-              set({ output: "browser", queue: { ...get().queue, output_pref: "browser" } as PlayerQueue });
-              toast.error("Voice bind is out of date");
-              if (wasPlaying && resumeId) {
-                const played = await startLocal(resumeId, resumePos, true, resumeMeta);
-                set({ playing: played });
-              }
-              ensureSessionPoll();
-              return;
-            }
+            const next = applyBindResult(session, joined || {}, joined?.guild_id || guildIdOf(), true);
             session = next;
             pauseAll();
             try {

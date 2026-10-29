@@ -13,6 +13,37 @@ type BindResult struct {
 	BindingRevision int64     `json:"binding_revision"`
 	SessionID       uuid.UUID `json:"session_id"`
 	StateRevision   int64     `json:"state_revision"`
+	// Released lists other guilds whose bot was connected to this session and
+	// lost it to this bind; the caller drops the bot's voice there.
+	Released []string `json:"-"`
+}
+
+// releaseOtherGuilds detaches sessionID from every guild but guildID. A
+// session plays in one voice channel; a leftover row (the bot was kicked or
+// moved) used to report its higher binding_revision for the live guild.
+func releaseOtherGuilds(ctx context.Context, tx pgx.Tx, sessionID uuid.UUID, guildID string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+		UPDATE discord_voice_runtime
+		SET session_id=NULL, binding_revision=binding_revision+1, last_disconnect_reason='moved'
+		WHERE session_id=$1 AND guild_id<>$2
+		RETURNING guild_id, connected`, sessionID, guildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var live []string
+	for rows.Next() {
+		var g string
+		var connected bool
+		if err := rows.Scan(&g, &connected); err != nil {
+			return nil, err
+		}
+		if connected {
+			live = append(live, g)
+		}
+	}
+	sort.Strings(live)
+	return live, rows.Err()
 }
 
 func sameVoiceChannel(prev *string, want string) bool {
@@ -61,13 +92,17 @@ func (e *Engine) BindGuildSession(ctx context.Context, guildID string, sessionID
 		return BindResult{}, ErrBindConflict
 	}
 
+	released, err := releaseOtherGuilds(ctx, tx, sessionID, guildID)
+	if err != nil {
+		return BindResult{}, err
+	}
 	sameSession := prevSession != nil && *prevSession == sessionID
 	if sameSession && sameVoiceChannel(prevCh, voiceChannelID) {
 		if err := tx.Commit(ctx); err != nil {
 			return BindResult{}, err
 		}
 		e.ReapOrphanPlaying(ctx, sessionID)
-		return BindResult{BindingRevision: curRev, SessionID: sessionID, StateRevision: sessionStateRevision(ctx, e.pool, sessionID)}, nil
+		return BindResult{BindingRevision: curRev, SessionID: sessionID, StateRevision: sessionStateRevision(ctx, e.pool, sessionID), Released: released}, nil
 	}
 
 	oldID := uuid.Nil
@@ -105,7 +140,7 @@ func (e *Engine) BindGuildSession(ctx context.Context, guildID string, sessionID
 		return BindResult{}, err
 	}
 	e.ReapOrphanPlaying(ctx, sessionID)
-	return BindResult{BindingRevision: newRev, SessionID: sessionID, StateRevision: stateRev}, nil
+	return BindResult{BindingRevision: newRev, SessionID: sessionID, StateRevision: stateRev, Released: released}, nil
 }
 
 // BindDiscordRenderer atomically binds a guild voice runtime row to sessionID
@@ -170,6 +205,10 @@ func (e *Engine) BindDiscordRenderer(ctx context.Context, guildID string, sessio
 		}
 	}
 
+	released, err := releaseOtherGuilds(ctx, tx, sessionID, guildID)
+	if err != nil {
+		return BindResult{}, err
+	}
 	if err := casGrantDiscord(ctx, tx, sessionID, discordRendererID, discordGeneration); err != nil {
 		return BindResult{}, err
 	}
@@ -185,7 +224,7 @@ func (e *Engine) BindDiscordRenderer(ctx context.Context, guildID string, sessio
 		return BindResult{}, err
 	}
 	e.ReapOrphanPlaying(ctx, sessionID)
-	return BindResult{BindingRevision: newRev, SessionID: sessionID, StateRevision: stateRev}, nil
+	return BindResult{BindingRevision: newRev, SessionID: sessionID, StateRevision: stateRev, Released: released}, nil
 }
 
 // UnbindDiscordRenderer increments binding_revision, CAS-releases the Discord

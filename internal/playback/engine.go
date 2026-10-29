@@ -187,8 +187,14 @@ func (e *Engine) Get(ctx context.Context, sid uuid.UUID) (map[string]any, error)
 			s.state_revision, s.playhead_sequence, s.playback_instance_id, s.muted, s.output_pref, s.autoplay,
 			s.renderer_kind, s.renderer_id, s.renderer_generation, s.checkpoint_at, s.duration_ms, s.playback_rate,
 			s.renderer_heartbeat_at,
-			(SELECT r.binding_revision FROM discord_voice_runtime r WHERE r.session_id=s.id ORDER BY r.binding_revision DESC LIMIT 1)
-		FROM playback_sessions s WHERE s.id=$1`, sid)
+			b.binding_revision, b.guild_id
+		FROM playback_sessions s
+		-- The connected guild's row; revisions count per guild, so report which one.
+		LEFT JOIN LATERAL (
+			SELECT r.binding_revision, r.guild_id FROM discord_voice_runtime r
+			WHERE r.session_id=s.id ORDER BY r.connected DESC, r.binding_revision DESC LIMIT 1
+		) b ON true
+		WHERE s.id=$1`, sid)
 	var id uuid.UUID
 	var kind, owner, repeat, rg, status, shuffleMode, outputPref, rendererKind string
 	var vol, playbackRate float64
@@ -199,9 +205,10 @@ func (e *Engine) Get(ctx context.Context, sid uuid.UUID) (map[string]any, error)
 	var deviceID, rendererID *string
 	var checkpointAt, heartbeatAt *time.Time
 	var bindingRev *int64
+	var bindingGuild *string
 	if err := row.Scan(&id, &kind, &owner, &vol, &repeat, &shuffle, &xf, &rg, &idx, &cur, &pos, &status, &shuffleMode, &stopAfter, &deviceID,
 		&stateRev, &playheadSeq, &instanceID, &muted, &outputPref, &autoplay,
-		&rendererKind, &rendererID, &rendererGen, &checkpointAt, &durationMS, &playbackRate, &heartbeatAt, &bindingRev); err != nil {
+		&rendererKind, &rendererID, &rendererGen, &checkpointAt, &durationMS, &playbackRate, &heartbeatAt, &bindingRev, &bindingGuild); err != nil {
 		return nil, err
 	}
 	items, _ := e.Queue(ctx, sid)
@@ -214,7 +221,7 @@ func (e *Engine) Get(ctx context.Context, sid uuid.UUID) (map[string]any, error)
 		"muted": muted, "output_pref": outputPref, "autoplay": autoplay,
 		"renderer_kind": rendererKind, "renderer_id": rendererID, "renderer_generation": rendererGen,
 		"checkpoint_at": checkpointAt, "duration_ms": durationMS, "playback_rate": playbackRate,
-		"renderer_heartbeat_at": heartbeatAt, "binding_revision": bindingRev,
+		"renderer_heartbeat_at": heartbeatAt, "binding_revision": bindingRev, "binding_guild_id": bindingGuild,
 	}, nil
 }
 

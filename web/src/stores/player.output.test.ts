@@ -216,7 +216,7 @@ describe("output switch", () => {
     expect(usePlayer.getState().position).toBeGreaterThan(12_000);
   });
 
-  it("ignores a stale bind HTTP behind a newer binding_revision", async () => {
+  it("switches to Discord when the join reply is below a remembered revision", async () => {
     seedBrowserPlaying();
     vi.spyOn(engine, "playActive").mockResolvedValue(undefined);
     resetPlayerSessionForTests({
@@ -236,8 +236,9 @@ describe("output switch", () => {
 
     await usePlayer.getState().setOutput("discord");
 
-    expect(usePlayer.getState().output).toBe("browser");
-    expect(getPlayerSessionForTests().lastBindingRevision).toBe(9);
+    // The server just bound us; its revision is current and the remembered 9 is not.
+    expect(usePlayer.getState().output).toBe("discord");
+    expect(getPlayerSessionForTests().lastBindingByGuild.g1).toBe(4);
   });
 
   it("toggles back to browser and plays locally when no voice channel is visible", async () => {

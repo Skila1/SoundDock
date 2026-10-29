@@ -216,6 +216,7 @@ export type QueueState = {
   playback_rate?: number;
   renderer_heartbeat_at?: string | null;
   binding_revision?: number | null;
+  binding_guild_id?: string | null;
   server_time?: string | null;
   listeners?: QueueListener[];
 };

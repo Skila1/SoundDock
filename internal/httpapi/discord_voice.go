@@ -226,6 +226,12 @@ func (s *Server) ensureDiscordJoin(r *http.Request, guildID, channelID string, s
 	if err != nil {
 		return playback.BindResult{}, err
 	}
+	// The session moved here; drop the bot's voice where it was still playing it.
+	if bot := discordx.Live(); bot != nil {
+		for _, g := range res.Released {
+			_ = bot.LeaveGuild(context.WithoutCancel(ctx), g)
+		}
+	}
 	if discordx.Live() == nil {
 		_, _ = s.Pool.Exec(ctx, `
 			UPDATE discord_voice_runtime

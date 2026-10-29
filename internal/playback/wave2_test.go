@@ -467,3 +467,71 @@ func TestResumeRestartsCheckpointClock(t *testing.T) {
 		t.Fatal("resume while already playing must not restart the clock")
 	}
 }
+
+// A session left bound in a guild the bot was kicked from reported that
+// guild's higher binding_revision, and the browser rejected joins elsewhere.
+func TestBindGuildSessionReleasesOtherGuilds(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	e := New(pool)
+	userID := seedUser(t, pool)
+	sid, err := e.WebSession(ctx, userID, "browser-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, live := "w2o-"+uuid.NewString()[:8], "w2l-"+uuid.NewString()[:8]
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM discord_voice_runtime WHERE guild_id = ANY($1)`, []string{old, live})
+		_, _ = pool.Exec(context.Background(), `DELETE FROM discord_guilds WHERE id = ANY($1)`, []string{old, live})
+	})
+	if _, err := e.BindGuildSession(ctx, old, sid, "ch-old", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE discord_voice_runtime SET binding_revision=143, connected=true WHERE guild_id=$1`, old); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := e.BindGuildSession(ctx, live, sid, "ch-live", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Released) != 1 || res.Released[0] != old {
+		t.Fatalf("released %v, want [%s]", res.Released, old)
+	}
+	var bound *uuid.UUID
+	var rev int64
+	if err := pool.QueryRow(ctx, `SELECT session_id, binding_revision FROM discord_voice_runtime WHERE guild_id=$1`, old).Scan(&bound, &rev); err != nil {
+		t.Fatal(err)
+	}
+	if bound != nil || rev != 144 {
+		t.Fatalf("old guild still bound=%v rev=%d", bound, rev)
+	}
+	q, err := e.Get(ctx, sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g, _ := q["binding_guild_id"].(*string); g == nil || *g != live {
+		t.Fatalf("binding_guild_id %v, want %s", q["binding_guild_id"], live)
+	}
+	if r, _ := q["binding_revision"].(*int64); r == nil || *r != res.BindingRevision {
+		t.Fatalf("binding_revision %v, want %d", q["binding_revision"], res.BindingRevision)
+	}
+
+	// Re-joining the same channel is a no-op bind but still clears a stray row.
+	if _, err := pool.Exec(ctx, `UPDATE discord_voice_runtime SET session_id=$2 WHERE guild_id=$1`, old, sid); err != nil {
+		t.Fatal(err)
+	}
+	again, err := e.BindGuildSession(ctx, live, sid, "ch-live", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.BindingRevision != res.BindingRevision {
+		t.Fatalf("no-op bumped live revision %d -> %d", res.BindingRevision, again.BindingRevision)
+	}
+	if err := pool.QueryRow(ctx, `SELECT session_id FROM discord_voice_runtime WHERE guild_id=$1`, old).Scan(&bound); err != nil {
+		t.Fatal(err)
+	}
+	if bound != nil {
+		t.Fatal("no-op bind left the other guild bound")
+	}
+}
