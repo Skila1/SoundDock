@@ -189,6 +189,7 @@ func TestEnsureBoundSessionUsesRuntimeNotFreshGuildRow(t *testing.T) {
 	if _, err := play.BindDiscordRenderer(ctx, guild, other, "vc-1", 0, "other-bot", 1); err != nil {
 		t.Fatal(err)
 	}
+	personalQueues(t, pool, guild)
 
 	bot := New(pool, nil, nil, play, nil, nil)
 	sid, err := bot.ensureBoundSession(ctx, guild, "vc-1")
@@ -339,6 +340,7 @@ func TestEnsureBoundSessionDoesNotStealBrowser(t *testing.T) {
 	if _, err := play.AcquireBrowserRenderer(ctx, sid, "tab-1", 0); err != nil {
 		t.Fatal(err)
 	}
+	personalQueues(t, pool, guild)
 
 	bot := New(pool, nil, nil, play, nil, nil)
 	got, err := bot.ensureBoundSession(ctx, guild, "vc")
@@ -401,5 +403,52 @@ func TestPauseAfterReclaimDoesNotGlobalUpdate(t *testing.T) {
 	otherSt, _ := play.Get(ctx, other)
 	if statusOf(otherSt) != "playing" {
 		t.Fatalf("must not globally pause other sessions, got %q", statusOf(otherSt))
+	}
+}
+
+// personalQueues puts a server on personal queues; new servers default to one
+// shared queue, which always rebinds the server's own session.
+func personalQueues(t *testing.T, pool *pgxpool.Pool, guild string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `UPDATE discord_guilds SET queue_mode='personal' WHERE id=$1`, guild); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureBoundSessionSharedQueueRebindsServerSession(t *testing.T) {
+	pool := discordTestPool(t)
+	ctx := context.Background()
+	play := playback.New(pool)
+	guild := "shr-" + uuid.NewString()[:8]
+	owner := "shr-web-" + guild
+	t.Cleanup(func() {
+		c := context.Background()
+		_, _ = pool.Exec(c, `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
+		_, _ = pool.Exec(c, `DELETE FROM playback_command_receipts WHERE session_id IN (SELECT id FROM playback_sessions WHERE owner_key IN ($1,$2))`, guild, owner)
+		_, _ = pool.Exec(c, `DELETE FROM playback_sessions WHERE owner_key IN ($1,$2)`, guild, owner)
+		_, _ = pool.Exec(c, `DELETE FROM discord_guilds WHERE id=$1`, guild)
+	})
+	personal, err := play.Session(ctx, "web_device", owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := play.BindGuildSession(ctx, guild, personal, "vc", 0); err != nil {
+		t.Fatal(err)
+	}
+	bot := New(pool, nil, nil, play, nil, nil)
+	got, err := bot.ensureBoundSession(ctx, guild, "vc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, err := play.Session(ctx, "discord_guild", guild, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != shared {
+		t.Fatalf("bound %s, want the server's shared queue %s (not personal %s)", got, shared, personal)
+	}
+	var bound uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT session_id FROM discord_voice_runtime WHERE guild_id=$1`, guild).Scan(&bound); err != nil || bound != shared {
+		t.Fatalf("runtime bound %s err %v", bound, err)
 	}
 }

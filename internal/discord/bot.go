@@ -266,7 +266,12 @@ func (b *Bot) syncCommands(ctx context.Context, token string, appID *string) err
 	}
 	ids := make([]string, 0, len(guilds))
 	for _, g := range guilds {
-		_, _ = b.pool.Exec(ctx, `INSERT INTO discord_guilds (id, name) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name`, g.ID, g.Name)
+		if b.serverBanned(ctx, g.ID) {
+			go b.leaveBanned(context.Background(), g.ID, g.Name)
+			continue
+		}
+		_, _ = b.pool.Exec(ctx, `INSERT INTO discord_guilds (id, name, joined_at) VALUES ($1,$2,now())
+			ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, left_at=NULL, joined_at=COALESCE(discord_guilds.joined_at, now())`, g.ID, g.Name)
 		ids = append(ids, g.ID)
 	}
 	var last error
@@ -458,20 +463,9 @@ func ffmpegPCMReader(ctx context.Context, r io.Reader, replayGainDB float64, sta
 	return cmd, stdout, nil
 }
 
+// guildLibraries is the library filter for search and play in a server.
 func (b *Bot) guildLibraries(ctx context.Context, guildID string) []uuid.UUID {
-	rows, err := b.pool.Query(ctx, `SELECT library_id FROM discord_guild_libraries WHERE guild_id=$1`, guildID)
-	if err != nil {
-		return nil
-	}
-	defer rows.Close()
-	var ids []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if rows.Scan(&id) == nil {
-			ids = append(ids, id)
-		}
-	}
-	return ids
+	return LoadServerScope(ctx, b.pool, guildID).SearchLibraries()
 }
 
 func (b *Bot) linkedUserID(ctx context.Context, discordUser string) (uuid.UUID, bool) {
@@ -481,12 +475,12 @@ func (b *Bot) linkedUserID(ctx context.Context, discordUser string) (uuid.UUID, 
 }
 
 func (b *Bot) guildEnabled(ctx context.Context, guildID string) bool {
-	var en bool
-	err := b.pool.QueryRow(ctx, `SELECT enabled FROM discord_guilds WHERE id=$1`, guildID).Scan(&en)
+	var en, banned bool
+	err := b.pool.QueryRow(ctx, `SELECT enabled, banned_at IS NOT NULL FROM discord_guilds WHERE id=$1`, guildID).Scan(&en, &banned)
 	if err != nil {
 		return true
 	}
-	return en
+	return en && !banned
 }
 
 func discordLogger(log *slog.Logger) *slog.Logger {

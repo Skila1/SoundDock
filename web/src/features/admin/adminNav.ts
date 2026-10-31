@@ -10,10 +10,12 @@ import {
   LayoutDashboard,
   Library,
   Link2,
+  LogIn,
   MessageCircle,
   Plug,
   RefreshCw,
   ScanSearch,
+  Server,
   ShieldCheck,
   SlidersHorizontal,
   Timer,
@@ -72,8 +74,17 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
       { to: "users", label: "Users", icon: Users },
       { to: "groups", label: "Groups", icon: UsersRound },
       { to: "access", label: "Access", icon: ShieldCheck },
-      { to: "discord", label: "Discord", icon: MessageCircle },
       { to: "connected", label: "Connected Services", icon: Link2 }
+    ]
+  },
+  {
+    id: "discord",
+    label: "Discord",
+    icon: MessageCircle,
+    links: [
+      { to: "discord/servers", label: "Servers", icon: Server },
+      { to: "discord/bot", label: "Bot", icon: Bot },
+      { to: "discord/sign-in", label: "Sign-in", icon: LogIn }
     ]
   },
   {
@@ -82,8 +93,7 @@ export const adminNavGroups: readonly AdminNavGroup[] = [
     icon: Cog,
     links: [
       { to: "updates", label: "Updates", icon: RefreshCw },
-      { to: "integrations", label: "Integrations", icon: Plug },
-      { to: "discord-bot", label: "Discord Bot", icon: Bot }
+      { to: "integrations", label: "Integrations", icon: Plug }
     ]
   }
 ];
@@ -107,6 +117,8 @@ export const legacyAdminRedirects: Readonly<Record<string, string>> = {
   quotas: "/admin/users",
   roles: "/admin/groups",
   grants: "/admin/access",
+  discord: "/admin/discord/servers",
+  "discord-bot": "/admin/discord/bot",
   "duplicate-review": "/admin/scan?tab=duplicates",
   metadata: "/admin/media-settings",
   lyrics: "/admin/media-settings",
@@ -125,7 +137,7 @@ export function adminPath(to: string) {
 export function adminGroupFor(pathname: string) {
   const seg = pathname.replace(/^\/admin\/?/, "").split("/")[0] || ".";
   const page = seg === "users" || seg === "discord-users" ? "users" : seg === "stats-migration" ? "." : seg;
-  return adminNavGroups.find((g) => g.links.some((l) => l.to === page)) || adminNavGroups[0];
+  return adminNavGroups.find((g) => g.links.some((l) => l.to.split("/")[0] === page)) || adminNavGroups[0];
 }
 
 /** Every path the admin nav links to, for tests and sanity checks. */

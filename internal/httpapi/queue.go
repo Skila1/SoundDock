@@ -54,17 +54,21 @@ func (s *Server) playSession(r *http.Request, extra map[string]any, bodyTarget, 
 		return uuid.Nil, err
 	}
 	if requestPlaybackTarget(r, extra, bodyTarget) == "discord" {
-		if err := s.bindSessionToDiscord(r, sid, extra); err != nil {
-			return uuid.Nil, err
-		}
+		return s.bindSessionToDiscord(r, sid, extra)
 	}
 	return sid, nil
 }
 
-func (s *Server) bindSessionToDiscord(r *http.Request, sid uuid.UUID, extra map[string]any) error {
+// bindSessionToDiscord binds the queue that plays in the caller's voice
+// channel and returns it: the server's shared queue, or sid for personal queues.
+func (s *Server) bindSessionToDiscord(r *http.Request, sid uuid.UUID, extra map[string]any) (uuid.UUID, error) {
 	g, c, ok := s.findUserVoice(r)
 	if !ok {
-		return errNotInVoice
+		return uuid.Nil, errNotInVoice
+	}
+	sid, err := s.serverQueueSession(r.Context(), g, sid)
+	if err != nil {
+		return uuid.Nil, err
 	}
 	expected, _ := extraInt64Map(extra, "expected_binding_revision")
 	rendererID := extraStringMap(extra, "renderer_id")
@@ -72,8 +76,10 @@ func (s *Server) bindSessionToDiscord(r *http.Request, sid uuid.UUID, extra map[
 	if gen == 0 {
 		gen, _ = extraInt64Map(extra, "generation")
 	}
-	_, err := s.ensureDiscordJoin(r, g, c, sid, expected, rendererID, gen)
-	return err
+	if _, err := s.ensureDiscordJoin(r, g, c, sid, expected, rendererID, gen); err != nil {
+		return uuid.Nil, err
+	}
+	return sid, nil
 }
 
 func (s *Server) writePlaySessionErr(w http.ResponseWriter, err error) bool {
@@ -204,7 +210,15 @@ func (s *Server) putQueue(w http.ResponseWriter, r *http.Request) {
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	ctx, refs := s.acquirePlayCtx(r, body.TrackIDs, body.Tracks)
+	kept, keptHints, skipped := s.serverTrackFilter(r.Context(), sid, body.TrackIDs, body.Tracks)
+	if skipped > 0 {
+		if len(kept) == 0 {
+			writeServerSkipped(w)
+			return
+		}
+		body.Start = keptStart(body.TrackIDs, kept, body.Start)
+	}
+	ctx, refs := s.acquirePlayCtx(r, kept, keptHints)
 	ids, err := s.resolvePlayTracks(ctx, refs)
 	if s.writeAcquireErr(w, err) {
 		return
@@ -234,7 +248,31 @@ func (s *Server) putQueue(w http.ResponseWriter, r *http.Request) {
 		s.Hooks.Emit(r.Context(), "playback.started", map[string]any{"track_id": ids[start]})
 	}
 	q, _ := s.Play.Get(r.Context(), sid)
+	markServerSkipped(q, skipped)
 	s.respondQueueMedia(w, r, sid, q, "state")
+}
+
+// keptStart moves a start index from the requested list onto the filtered
+// one: the same song, or the next one kept when it was dropped.
+func keptStart(orig, kept []string, start int) int {
+	j := 0
+	for i, ref := range orig {
+		if j < len(kept) && kept[j] == ref {
+			if i >= start {
+				return j
+			}
+			j++
+		}
+	}
+	return 0
+}
+
+// markServerSkipped tells the player how many songs the server's library
+// limit left out, so it can say so instead of dropping them silently.
+func markServerSkipped(q map[string]any, skipped int) {
+	if q != nil && skipped > 0 {
+		q["server_skipped"] = skipped
+	}
 }
 
 func (s *Server) writeAcquireErr(w http.ResponseWriter, err error) bool {
@@ -266,7 +304,12 @@ func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	ctx, refs := s.acquirePlayCtx(r, body.TrackIDs, body.Tracks)
+	kept, keptHints, skipped := s.serverTrackFilter(r.Context(), sid, body.TrackIDs, body.Tracks)
+	if skipped > 0 && len(kept) == 0 {
+		writeServerSkipped(w)
+		return
+	}
+	ctx, refs := s.acquirePlayCtx(r, kept, keptHints)
 	ids, err := s.resolvePlayTracks(ctx, refs)
 	if s.writeAcquireErr(w, err) {
 		return
@@ -289,6 +332,7 @@ func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	q, _ := s.Play.Get(r.Context(), sid)
+	markServerSkipped(q, skipped)
 	s.respondQueueMedia(w, r, sid, q, "state")
 }
 
@@ -342,11 +386,11 @@ func (s *Server) queueControl(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else if pref == playback.OutputDiscord && requestPlaybackTarget(r, body.Extra, body.Target) != "discord" {
-			if err := s.bindSessionToDiscord(r, sid, body.Extra); err != nil {
-				if s.writePlaySessionErr(w, err) {
-					return
-				}
+			bound, err := s.bindSessionToDiscord(r, sid, body.Extra)
+			if s.writePlaySessionErr(w, err) {
+				return
 			}
+			sid = bound
 		}
 	}
 	switch body.Action {

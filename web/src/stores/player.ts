@@ -193,6 +193,12 @@ function shouldSkipDupAppend(ids: string[]) {
   return Date.now() - lastQueueMutAt < 1000 && alreadyQueuedAtEnd(ids);
 }
 
+/** Say so when a Discord server's library limit left songs out. */
+function noteServerSkipped(q: PlayerQueue | null | undefined) {
+  const n = q?.server_skipped || 0;
+  if (n > 0) toast.message(n === 1 ? "1 song isn't available in this Discord server" : `${n} songs aren't available in this Discord server`);
+}
+
 function emptyQueue(partial?: Partial<PlayerQueue>): PlayerQueue {
   return {
     id: "",
@@ -913,6 +919,7 @@ async function playOnBrowser(ids: string[], idx: number, hints?: QueueTrackHint[
     device_id: getDeviceId(),
     command_id: newCommandId()
   });
+  noteServerSkipped(q);
   lastQueueMutAt = Date.now();
   ingestQueue(q);
   usePlayer.setState(patchFromSession(session, { playing: true, output: "browser" }));
@@ -959,6 +966,7 @@ async function appendToQueue(ids: string[], next?: boolean, hints?: QueueTrackHi
     device_id: getDeviceId(),
     command_id: newCommandId()
   });
+  noteServerSkipped(q);
   lastQueueMutAt = Date.now();
   const applyAdded = (snap: PlayerQueue) => {
     ingestQueue(snap);
@@ -1268,6 +1276,7 @@ export const usePlayer = create<PlayerStore>()(
                 device_id: getDeviceId(),
                 command_id: newCommandId()
               });
+              noteServerSkipped(q);
               ingestQueue(q || emptyQueue());
               set(patchFromSession(session, { playing: true, position: 0, output: "discord" }));
               lastQueueMutAt = Date.now();

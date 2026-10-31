@@ -41,6 +41,8 @@ const AdminDiscord = lazy(() => import("@/features/admin/AdminDiscord").then((m)
 const AdminLibraries = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminLibraries })));
 const AdminStorage = lazy(() => import("@/features/admin/AdminLibraries").then((m) => ({ default: m.AdminStorage })));
 const AdminAccess = lazy(() => import("@/features/admin/iam/AdminAccess").then((m) => ({ default: m.AdminAccess })));
+const AdminDiscordServers = lazy(() => import("@/features/admin/discord/AdminDiscordServers").then((m) => ({ default: m.AdminDiscordServers })));
+const AdminDiscordServer = lazy(() => import("@/features/admin/discord/AdminDiscordServers").then((m) => ({ default: m.AdminDiscordServer })));
 const AdminDiscordBot = lazy(() => import("@/features/admin/system/DiscordBot").then((m) => ({ default: m.AdminDiscordBot })));
 const AdminScan = lazy(() => import("@/features/admin/AdminScan").then((m) => ({ default: m.AdminScan })));
 const AdminCatalog = lazy(() => import("@/features/admin/AdminCatalog").then((m) => ({ default: m.AdminCatalog })));
@@ -168,8 +170,10 @@ export function AppRouter() {
             <Route path="users/:id/library" element={<PersonalLibraryPage admin />} />
             <Route path="discord-users/:discordID/library" element={<PersonalLibraryPage adminDiscord />} />
             <Route path="groups" element={<AdminRoles />} />
-            <Route path="discord" element={<AdminDiscord bot={false} />} />
-            <Route path="discord-bot" element={<AdminDiscordBot />} />
+            <Route path="discord/servers" element={<AdminDiscordServers />} />
+            <Route path="discord/servers/:id" element={<AdminDiscordServer />} />
+            <Route path="discord/bot" element={<AdminDiscordBot />} />
+            <Route path="discord/sign-in" element={<AdminDiscord bot={false} />} />
             <Route path="access" element={<AdminAccess />} />
             <Route path="libraries" element={<AdminLibraries />} />
             <Route path="storage" element={<AdminStorage />} />

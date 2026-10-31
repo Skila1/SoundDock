@@ -6,7 +6,7 @@ export type PillTone = "ok" | "warn" | "fail";
 export const fixLinks = {
   diagnostics: "/admin/updates",
   updates: "/admin/updates",
-  discordBot: "/admin/discord",
+  discordBot: "/admin/discord/bot",
   librarySettings: "/admin/media-settings",
   library: "/admin/libraries",
   storage: "/admin/storage",

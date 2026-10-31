@@ -217,6 +217,8 @@ export type QueueState = {
   renderer_heartbeat_at?: string | null;
   binding_revision?: number | null;
   binding_guild_id?: string | null;
+  /** Songs left out because this Discord server cannot play their library. */
+  server_skipped?: number;
   server_time?: string | null;
   listeners?: QueueListener[];
 };

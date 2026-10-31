@@ -8,13 +8,12 @@ import { Field } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/misc";
 import { PageHeader } from "@/components/ui/empty";
-import { Switch } from "@/components/ui/switch";
 import { Card, RowMenu, SettingSwitch, errorMessage } from "../adminUi";
-import { guildsKey, useDiscordGuilds } from "../iam/iamShared";
+import { Link } from "react-router-dom";
 
 export const discordKey = ["discord"] as const;
 
-/** Standalone page for System > Discord bot, if the bot moves out of IAM. */
+/** Discord > Bot: token, gateway status and slash commands. */
 export function AdminDiscordBot() {
   const d = useQuery({ queryKey: discordKey, queryFn: () => api.get<any>("/api/v1/admin/integrations/discord") });
   return (
@@ -28,8 +27,6 @@ export function AdminDiscordBot() {
 export function DiscordBotSettings({ data }: { data: any }) {
   const qc = useQueryClient();
   const st = useQuery({ queryKey: ["discord-status"], queryFn: () => api.get<any>("/api/v1/admin/integrations/discord/status") });
-  const guilds = useDiscordGuilds();
-  const sessions = useQuery({ queryKey: ["discord-sessions"], queryFn: () => api.get<any[]>("/api/v1/admin/integrations/discord/sessions"), refetchInterval: 10000 });
   const [enabled, setEnabled] = useState(false);
   const [app, setApp] = useState("");
   const [token, setToken] = useState("");
@@ -57,8 +54,6 @@ export function DiscordBotSettings({ data }: { data: any }) {
       setSaving(false);
     }
   }
-
-  const sessionsByGuild = new Map((sessions.data || []).map((s: any) => [s.guild_id, s]));
 
   return (
     <div className="space-y-5">
@@ -100,47 +95,10 @@ export function DiscordBotSettings({ data }: { data: any }) {
         )}
       </Card>
 
-      <Card title="Servers" description="Turn a server off to ignore its slash commands and web playback.">
-        {!guilds.data?.length && <p className="text-sm text-muted">{guilds.isLoading ? "Loading..." : "Invite the bot to a server to get started."}</p>}
-        <ul className="divide-y divide-border">
-          {(guilds.data || []).map((g) => {
-            const sess: any = sessionsByGuild.get(g.id);
-            return (
-              <li key={g.id} className="flex flex-wrap items-center justify-between gap-3 py-2.5">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 font-medium">
-                    {g.name || g.id}
-                    {sess?.connected && <Badge tone="success">In voice</Badge>}
-                  </div>
-                  <div className="text-xs text-muted">
-                    {sess?.status ? `${sess.status} · ` : ""}volume {g.default_volume ?? "-"} · queue limit {g.queue_limit ?? "-"}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Switch
-                    checked={g.enabled !== false}
-                    aria-label={`Enable ${g.name || g.id}`}
-                    onCheckedChange={async (on) => {
-                      try {
-                        await api.patch(`/api/v1/admin/integrations/discord/guilds/${g.id}`, { enabled: on });
-                        toast.success(on ? "Server enabled" : "Server disabled");
-                        qc.invalidateQueries({ queryKey: guildsKey });
-                      } catch (err) {
-                        toast.error(errorMessage(err, "Could not update server"));
-                      }
-                    }}
-                  />
-                  <RowMenu
-                    actions={[{
-                      label: "Disconnect from voice",
-                      onSelect: () => void api.post(`/api/v1/admin/integrations/discord/guilds/${g.id}/disconnect`).then(() => { toast("Disconnected"); qc.invalidateQueries({ queryKey: ["discord-sessions"] }); }).catch((e) => toast.error(errorMessage(e, "Could not disconnect")))
-                    }]}
-                  />
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+      <Card title="Servers" description="Queues, libraries, bans and activity for each server are on the Servers page.">
+        <Button size="sm" variant="secondary" asChild>
+          <Link to="/admin/discord/servers">Manage servers</Link>
+        </Button>
       </Card>
     </div>
   );

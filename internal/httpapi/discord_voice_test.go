@@ -121,6 +121,7 @@ func TestGuestInBoundVCAttachesHostSession(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
 	})
+	personalServer(t, pool, guild)
 	putUserVoice(t, pool, didHost, guild, ch)
 	putUserVoice(t, pool, didGuest, guild, ch)
 
@@ -205,6 +206,7 @@ func TestDiscordJoinBindsAttachedSession(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM playback_sessions WHERE kind='discord_guild' AND owner_key=$1`, guild)
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
 	})
+	personalServer(t, pool, guild)
 	putUserVoice(t, pool, did, guild, ch)
 	rec := httptest.NewRecorder()
 	s.discordJoin(rec, authedJSON(u, http.MethodPost, "/api/v1/me/discord/join", map[string]any{}))
@@ -266,6 +268,7 @@ func TestDiscordPlayDoesNotCopyGuildQueue(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM playback_sessions WHERE kind='discord_guild' AND owner_key=$1`, guild)
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
 	})
+	personalServer(t, pool, guild)
 	putUserVoice(t, pool, did, guild, ch)
 	guildSID, err := s.Play.Session(context.Background(), "discord_guild", guild, nil)
 	if err != nil {
@@ -303,6 +306,7 @@ func TestSwitchRendererToBrowserKeepsBind(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
 	})
+	personalServer(t, pool, guild)
 	putUserVoice(t, pool, did, guild, ch)
 	jrec := httptest.NewRecorder()
 	s.discordJoin(jrec, authedJSON(u, http.MethodPost, "/api/v1/me/discord/join", map[string]any{}))
@@ -369,6 +373,7 @@ func TestAcquireBrowserLeaseConflictWhileDiscordHolds(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
 	})
+	personalServer(t, pool, guild)
 	putUserVoice(t, pool, did, guild, ch)
 	jrec := httptest.NewRecorder()
 	s.discordJoin(jrec, authedJSON(u, http.MethodPost, "/api/v1/me/discord/join", map[string]any{}))
@@ -408,6 +413,7 @@ func TestUnlinkedDiscordListenerUsesVoiceDisplayName(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
 	})
+	personalServer(t, pool, guild)
 	putUserVoice(t, pool, didHost, guild, ch)
 	putUserVoice(t, pool, didGuest, guild, ch)
 	if _, err := pool.Exec(context.Background(), `UPDATE discord_user_voice SET display_name=$2 WHERE discord_user_id=$1`, didGuest, "Pixel"); err != nil {
@@ -466,6 +472,7 @@ func TestDisconnectedRuntimeDoesNotAttach(t *testing.T) {
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
 		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
 	})
+	personalServer(t, pool, guild)
 	putUserVoice(t, pool, didHost, guild, ch)
 	putUserVoice(t, pool, didGuest, guild, ch)
 	jrec := httptest.NewRecorder()
@@ -525,5 +532,55 @@ func TestSharedBoundSessionKeepsOtherUsersBrowserSessionPrivate(t *testing.T) {
 	}
 	if !sharedBoundSession("discord_guild", nil, playback.OutputBrowser, friend) {
 		t.Fatal("guild sessions are shared")
+	}
+}
+
+// personalServer puts a server on personal queues before anything binds it;
+// a server row the bind creates would default to one shared queue.
+func personalServer(t *testing.T, pool *pgxpool.Pool, guild string) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(), `INSERT INTO discord_guilds (id, queue_mode) VALUES ($1,'personal') ON CONFLICT (id) DO UPDATE SET queue_mode='personal'`, guild); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSharedServerJoinUsesServerQueueForEveryone(t *testing.T) {
+	s, pool := wave1HTTPServer(t)
+	didHost := "shr-h-" + uuid.NewString()[:8]
+	didGuest := "shr-g-" + uuid.NewString()[:8]
+	host := seedQueueUser(t, pool, didHost)
+	guest := seedQueueUser(t, pool, didGuest)
+	guild := "shr-" + uuid.NewString()[:8]
+	ch := "shr-ch-" + uuid.NewString()[:8]
+	t.Cleanup(func() {
+		ctx := context.Background()
+		_, _ = pool.Exec(ctx, `DELETE FROM discord_user_voice WHERE guild_id=$1`, guild)
+		_, _ = pool.Exec(ctx, `DELETE FROM discord_voice_runtime WHERE guild_id=$1`, guild)
+		_, _ = pool.Exec(ctx, `DELETE FROM playback_sessions WHERE kind='discord_guild' AND owner_key=$1`, guild)
+		_, _ = pool.Exec(ctx, `DELETE FROM discord_guilds WHERE id=$1`, guild)
+	})
+	putUserVoice(t, pool, didHost, guild, ch)
+	putUserVoice(t, pool, didGuest, guild, ch)
+
+	rec := httptest.NewRecorder()
+	s.discordJoin(rec, authedJSON(host, http.MethodPost, "/api/v1/me/discord/join", map[string]any{}))
+	if rec.Code != 200 {
+		t.Fatalf("join %d %s", rec.Code, rec.Body.String())
+	}
+	joined, _ := decodeMap(t, rec)["session_id"].(string)
+	shared, err := s.Play.Session(context.Background(), "discord_guild", guild, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined != shared.String() {
+		t.Fatalf("join bound %s, want the server queue %s", joined, shared)
+	}
+	grec := httptest.NewRecorder()
+	s.getQueue(grec, authedJSON(guest, http.MethodGet, "/api/v1/me/queue", nil))
+	if grec.Code != 200 {
+		t.Fatalf("guest get %d %s", grec.Code, grec.Body.String())
+	}
+	if queueID(decodeMap(t, grec)) != shared.String() {
+		t.Fatal("a guest in the voice channel should see the server queue")
 	}
 }

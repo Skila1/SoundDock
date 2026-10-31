@@ -71,6 +71,7 @@ func (b *Bot) runSession(ctx context.Context, token string) error {
 	dg.StateEnabled = true
 	dg.AddHandler(b.onReady)
 	dg.AddHandler(b.onGuildCreate)
+	dg.AddHandler(b.onGuildDelete)
 	dg.AddHandler(b.onVoiceState)
 	dg.AddHandler(b.onInteraction)
 	if err := dg.Open(); err != nil {
@@ -131,7 +132,33 @@ func (b *Bot) onGuildCreate(s *discordgo.Session, g *discordgo.GuildCreate) {
 		return
 	}
 	ctx := context.Background()
-	_, _ = b.pool.Exec(ctx, `INSERT INTO discord_guilds (id, name) VALUES ($1,$2) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name`, g.ID, g.Name)
+	if b.serverBanned(ctx, g.ID) {
+		go b.leaveBanned(context.Background(), g.ID, g.Name)
+		return
+	}
+	// GUILD_CREATE also fires on every reconnect; only a first join or a
+	// return after leaving is news.
+	var fresh bool
+	_ = b.pool.QueryRow(ctx, `
+		WITH prev AS (SELECT joined_at IS NULL OR left_at IS NOT NULL AS fresh FROM discord_guilds WHERE id=$1)
+		SELECT COALESCE((SELECT fresh FROM prev), true)`, g.ID).Scan(&fresh)
+	_, _ = b.pool.Exec(ctx, `
+		INSERT INTO discord_guilds (id, name, icon, owner_id, member_count, joined_at)
+		VALUES ($1,$2,$3,$4,$5,now())
+		ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, icon=EXCLUDED.icon, owner_id=EXCLUDED.owner_id,
+			member_count=EXCLUDED.member_count, left_at=NULL,
+			joined_at=CASE WHEN discord_guilds.left_at IS NOT NULL OR discord_guilds.joined_at IS NULL THEN now() ELSE discord_guilds.joined_at END`,
+		g.ID, g.Name, g.Icon, g.OwnerID, g.MemberCount)
+	if fresh {
+		oplog.Emit(ctx, oplog.Entry{Level: "info", Category: "discord", Action: "discord.server.joined",
+			Message: "Bot added to Discord server " + g.Name, Result: oplog.ResultSuccess,
+			Details: map[string]any{"guild_id": g.ID, "guild_name": g.Name, "owner_id": g.OwnerID}})
+	}
+	go func(id string) {
+		if _, err := b.RefreshServer(context.Background(), id); err != nil {
+			b.log.Warn("discord server refresh", "guild", id, "err", err)
+		}
+	}(g.ID)
 	botID := ""
 	if s != nil && s.State != nil && s.State.User != nil {
 		botID = s.State.User.ID
@@ -287,4 +314,24 @@ func (b *Bot) DiscordEnabled(ctx context.Context) bool {
 	var enc []byte
 	_ = b.pool.QueryRow(ctx, `SELECT enabled, bot_token_enc FROM discord_settings WHERE id=1`).Scan(&en, &enc)
 	return en && len(enc) > 0
+}
+
+// onGuildDelete fires when the bot is removed from a server (kicked, banned
+// by the server, or our own leave). An outage marks the guild unavailable instead.
+func (b *Bot) onGuildDelete(_ *discordgo.Session, g *discordgo.GuildDelete) {
+	if g == nil || g.Guild == nil || g.Unavailable {
+		return
+	}
+	ctx := context.Background()
+	name := g.Name
+	if g.BeforeDelete != nil && name == "" {
+		name = g.BeforeDelete.Name
+	}
+	b.markVoiceDisconnected(ctx, g.ID, "removed")
+	b.stopStreamer(g.ID)
+	b.dropVoice(g.ID)
+	_, _ = b.pool.Exec(ctx, `UPDATE discord_guilds SET left_at=now() WHERE id=$1`, g.ID)
+	oplog.Emit(ctx, oplog.Entry{Level: "info", Category: "discord", Action: "discord.server.left",
+		Message: "Bot removed from Discord server " + name, Result: oplog.ResultSuccess,
+		Details: map[string]any{"guild_id": g.ID, "guild_name": name}})
 }

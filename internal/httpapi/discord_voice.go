@@ -170,12 +170,21 @@ func sharedBoundSession(kind string, owner *uuid.UUID, outputPref string, u *aut
 }
 
 func (s *Server) guildPlaybackEnabled(ctx context.Context, guildID string) bool {
-	var en bool
-	err := s.Pool.QueryRow(ctx, `SELECT enabled FROM discord_guilds WHERE id=$1`, guildID).Scan(&en)
+	var en, banned bool
+	err := s.Pool.QueryRow(ctx, `SELECT enabled, banned_at IS NOT NULL FROM discord_guilds WHERE id=$1`, guildID).Scan(&en, &banned)
 	if err != nil {
 		return true
 	}
-	return en
+	return en && !banned
+}
+
+// serverQueueSession is the queue that plays in a server: its own shared
+// queue when the server is set to one, otherwise the caller's sid.
+func (s *Server) serverQueueSession(ctx context.Context, guildID string, sid uuid.UUID) (uuid.UUID, error) {
+	if !discordx.LoadServerScope(ctx, s.Pool, guildID).SharedQueue {
+		return sid, nil
+	}
+	return s.Play.Session(ctx, "discord_guild", guildID, nil)
 }
 
 func (s *Server) discordJoin(w http.ResponseWriter, r *http.Request) {
@@ -192,6 +201,9 @@ func (s *Server) discordJoin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid, err := s.attachedPlaySession(r, nil, body.DeviceID)
+	if err == nil {
+		sid, err = s.serverQueueSession(r.Context(), g, sid)
+	}
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
@@ -257,6 +269,9 @@ func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sid, err := s.attachedPlaySession(r, nil, body.DeviceID)
+	if err == nil {
+		sid, err = s.serverQueueSession(r.Context(), g, sid)
+	}
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
@@ -265,6 +280,15 @@ func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(body.TrackIDs) > 0 {
+		kept, _, skipped := s.serverTrackFilter(r.Context(), sid, body.TrackIDs, nil)
+		if skipped > 0 {
+			if len(kept) == 0 {
+				writeServerSkipped(w)
+				return
+			}
+			body.Start = keptStart(body.TrackIDs, kept, body.Start)
+			body.TrackIDs = kept
+		}
 		ids, err := s.resolveQueueTracks(r.Context(), body.TrackIDs)
 		if err != nil {
 			writeErr(w, 502, "scapex", err.Error())

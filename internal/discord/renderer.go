@@ -165,8 +165,20 @@ func (b *Bot) ensureBoundSession(ctx context.Context, guildID, channelID string)
 	}
 
 	sid := rt.SessionID
+	// A shared-queue server always plays its own queue, even when a member's
+	// personal queue is bound from the website.
+	rebind := false
+	if LoadServerScope(ctx, b.pool, guildID).SharedQueue {
+		shared, err := b.play.Session(ctx, "discord_guild", guildID, nil)
+		if err != nil {
+			return uuid.Nil, err
+		}
+		if sid != shared {
+			sid, rebind = shared, true
+		}
+	}
 	var prev map[string]any
-	if sid != uuid.Nil {
+	if sid != uuid.Nil && !rebind {
 		st, err := b.play.Get(ctx, sid)
 		if err == nil {
 			prev = st

@@ -11,8 +11,9 @@ describe("admin navigation", () => {
       ["Overview", ["Dashboard", "Activity"]],
       ["Library", ["Libraries", "Scan", "Catalog", "Media Settings"]],
       ["Storage", ["Storage", "Cleanup", "Archive", "Backups"]],
-      ["IAM", ["Users", "Groups", "Access", "Discord", "Connected Services"]],
-      ["System", ["Updates", "Integrations", "Discord Bot"]]
+      ["IAM", ["Users", "Groups", "Access", "Connected Services"]],
+      ["Discord", ["Servers", "Bot", "Sign-in"]],
+      ["System", ["Updates", "Integrations"]]
     ]);
   });
 
@@ -39,6 +40,8 @@ describe("admin navigation", () => {
     expect(adminGroupFor("/admin/users/1/library").id).toBe("iam");
     expect(adminGroupFor("/admin/updates").id).toBe("system");
     expect(adminGroupFor("/admin/connected").id).toBe("iam");
+    expect(adminGroupFor("/admin/discord/servers/123").id).toBe("discord");
+    expect(adminGroupFor("/admin/discord/sign-in").id).toBe("discord");
   });
 
   it("builds admin paths", () => {
@@ -54,7 +57,7 @@ describe("admin navigation", () => {
       expect(navSegments.has(from), `${from} collides with a live page`).toBe(false);
       expect(current.has(to.split("?")[0]), `${from} -> ${to}`).toBe(true);
     }
-    for (const retired of ["health", "diagnostics", "database", "workers", "inspect", "logs", "security", "grants", "quotas", "metadata", "lyrics", "transcoding", "acquisition-policy", "duplicate-review", "listen-compare", "stats-rebuild"]) {
+    for (const retired of ["health", "diagnostics", "database", "workers", "inspect", "logs", "security", "grants", "quotas", "metadata", "lyrics", "transcoding", "acquisition-policy", "duplicate-review", "listen-compare", "stats-rebuild", "discord", "discord-bot"]) {
       expect(legacyAdminRedirects[retired], retired).toBeTruthy();
     }
   });
