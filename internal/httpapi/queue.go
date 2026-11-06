@@ -210,7 +210,7 @@ func (s *Server) putQueue(w http.ResponseWriter, r *http.Request) {
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	kept, keptHints, skipped := s.serverTrackFilter(r.Context(), sid, body.TrackIDs, body.Tracks)
+	kept, keptHints, skipped := s.serverTrackFilter(r.Context(), currentUser(r), sid, body.TrackIDs, body.Tracks)
 	if skipped > 0 {
 		if len(kept) == 0 {
 			writeServerSkipped(w)
@@ -304,7 +304,7 @@ func (s *Server) queueAdd(w http.ResponseWriter, r *http.Request) {
 	if s.writePlaySessionErr(w, err) {
 		return
 	}
-	kept, keptHints, skipped := s.serverTrackFilter(r.Context(), sid, body.TrackIDs, body.Tracks)
+	kept, keptHints, skipped := s.serverTrackFilter(r.Context(), currentUser(r), sid, body.TrackIDs, body.Tracks)
 	if skipped > 0 && len(kept) == 0 {
 		writeServerSkipped(w)
 		return

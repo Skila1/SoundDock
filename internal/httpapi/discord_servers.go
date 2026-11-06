@@ -12,6 +12,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/sounddock/sounddock/internal/auth"
 	discordx "github.com/sounddock/sounddock/internal/discord"
 )
 
@@ -427,11 +428,18 @@ func (s *Server) adminDiscordServerActivity(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, 200, map[string]any{"items": out, "next_before": next})
 }
 
+// bypassesServerLimit is true for a signed-in SoundDock admin. API keys
+// never bypass, even admin-scoped ones.
+func bypassesServerLimit(u *auth.User) bool {
+	return u != nil && u.IsAdmin && !u.Integration
+}
+
 // serverTrackFilter drops library songs a restricted server may not play
 // when sid is that server's bound queue. YouTube refs are kept: they are
-// fetched for this request rather than browsed from a library.
-func (s *Server) serverTrackFilter(ctx context.Context, sid uuid.UUID, refs []string, hints []queueTrackHint) ([]string, []queueTrackHint, int) {
-	if len(refs) == 0 || sid == uuid.Nil {
+// fetched for this request rather than browsed from a library. SoundDock
+// admins are not limited: they run the instance and see every library.
+func (s *Server) serverTrackFilter(ctx context.Context, u *auth.User, sid uuid.UUID, refs []string, hints []queueTrackHint) ([]string, []queueTrackHint, int) {
+	if len(refs) == 0 || sid == uuid.Nil || bypassesServerLimit(u) {
 		return refs, hints, 0
 	}
 	var guildID string

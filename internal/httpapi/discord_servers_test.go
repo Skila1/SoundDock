@@ -83,7 +83,7 @@ func TestServerTrackFilterDropsHiddenLibraries(t *testing.T) {
 	ctx := context.Background()
 	refs := []string{f.hiddenTrack.String(), f.allowedTrack.String(), "yt:dQw4w9WgXcQ"}
 	hints := []queueTrackHint{{ID: f.hiddenTrack.String(), Title: "Hidden"}, {ID: "yt:dQw4w9WgXcQ", Title: "From YouTube"}}
-	kept, keptHints, skipped := f.s.serverTrackFilter(ctx, f.sid, refs, hints)
+	kept, keptHints, skipped := f.s.serverTrackFilter(ctx, nil, f.sid, refs, hints)
 	if skipped != 1 || !slices.Equal(kept, []string{f.allowedTrack.String(), "yt:dQw4w9WgXcQ"}) {
 		t.Fatalf("kept=%v skipped=%d", kept, skipped)
 	}
@@ -91,14 +91,26 @@ func TestServerTrackFilterDropsHiddenLibraries(t *testing.T) {
 		t.Fatalf("hints %v", keptHints)
 	}
 	// A queue that is not bound to a server is never filtered.
-	if _, _, n := f.s.serverTrackFilter(ctx, uuid.New(), refs, hints); n != 0 {
+	if _, _, n := f.s.serverTrackFilter(ctx, nil, uuid.New(), refs, hints); n != 0 {
 		t.Fatalf("unbound queue skipped %d", n)
+	}
+	// A SoundDock admin is never limited, but an admin-scoped API key is.
+	admin := &auth.User{ID: f.admin, IsAdmin: true}
+	if _, _, n := f.s.serverTrackFilter(ctx, admin, f.sid, refs, hints); n != 0 {
+		t.Fatalf("admin skipped %d", n)
+	}
+	key := &auth.User{IsAdmin: true, Integration: true}
+	if _, _, n := f.s.serverTrackFilter(ctx, key, f.sid, refs, hints); n != 1 {
+		t.Fatalf("api key skipped %d, want 1", n)
+	}
+	if _, _, n := f.s.serverTrackFilter(ctx, &auth.User{ID: uuid.New()}, f.sid, refs, hints); n != 1 {
+		t.Fatalf("member skipped %d, want 1", n)
 	}
 	// "All libraries" lifts the limit.
 	if _, err := f.s.Pool.Exec(ctx, `UPDATE discord_guilds SET library_mode='all' WHERE id=$1`, f.guild); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, n := f.s.serverTrackFilter(ctx, f.sid, refs, hints); n != 0 {
+	if _, _, n := f.s.serverTrackFilter(ctx, nil, f.sid, refs, hints); n != 0 {
 		t.Fatalf("all libraries skipped %d", n)
 	}
 }
@@ -122,6 +134,26 @@ func TestLoadServerScope(t *testing.T) {
 	}
 	if sc := discordx.LoadServerScope(ctx, f.s.Pool, "unknown-"+f.guild); sc.Restricted || sc.SharedQueue || sc.Banned {
 		t.Fatalf("unknown server %+v", sc)
+	}
+}
+
+func TestAdminUser(t *testing.T) {
+	f := newServerFixture(t)
+	ctx := context.Background()
+	if discordx.AdminUser(ctx, f.s.Pool, f.admin) {
+		t.Fatal("a user without the admin role is not an admin")
+	}
+	if _, err := f.s.Pool.Exec(ctx, `INSERT INTO user_roles (user_id, role_id) SELECT $1, id FROM roles WHERE name='Administrator'`, f.admin); err != nil {
+		t.Fatal(err)
+	}
+	if !discordx.AdminUser(ctx, f.s.Pool, f.admin) {
+		t.Fatal("Administrator role should count")
+	}
+	if _, err := f.s.Pool.Exec(ctx, `UPDATE users SET disabled=true WHERE id=$1`, f.admin); err != nil {
+		t.Fatal(err)
+	}
+	if discordx.AdminUser(ctx, f.s.Pool, f.admin) || discordx.AdminUser(ctx, f.s.Pool, uuid.Nil) {
+		t.Fatal("disabled or unknown users are not admins")
 	}
 }
 

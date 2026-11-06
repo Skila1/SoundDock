@@ -428,6 +428,9 @@ function LibrariesCard({ server, libs, busy, onPatch }: { server: DiscordServer;
               ))}
             </ul>
             {!picked.size && <p className="text-xs text-warning">With no libraries picked, this server can only play songs fetched from YouTube.</p>}
+            <p className="text-xs text-muted">
+              SoundDock admins are not limited: on the website, and in slash commands from a Discord account linked to an admin.
+            </p>
             {dirty && (
               <div className="flex gap-2">
                 <Button size="sm" disabled={busy} onClick={() => void onPatch({ library_ids: [...picked] }, "Libraries saved")}>Save libraries</Button>

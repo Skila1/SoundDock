@@ -280,7 +280,7 @@ func (s *Server) discordPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(body.TrackIDs) > 0 {
-		kept, _, skipped := s.serverTrackFilter(r.Context(), sid, body.TrackIDs, nil)
+		kept, _, skipped := s.serverTrackFilter(r.Context(), currentUser(r), sid, body.TrackIDs, nil)
 		if skipped > 0 {
 			if len(kept) == 0 {
 				writeServerSkipped(w)

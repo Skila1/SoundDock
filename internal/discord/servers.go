@@ -209,3 +209,28 @@ func errText(err error) string {
 	}
 	return err.Error()
 }
+
+// AdminUser is true for an enabled SoundDock account with the admin
+// permission.
+func AdminUser(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) bool {
+	if pool == nil || userID == uuid.Nil {
+		return false
+	}
+	var ok bool
+	_ = pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM users u
+			JOIN user_roles ur ON ur.user_id=u.id
+			JOIN role_permissions rp ON rp.role_id=ur.role_id
+			JOIN permissions p ON p.id=rp.permission_id
+			WHERE u.id=$1 AND NOT u.disabled AND p.name='admin')`, userID).Scan(&ok)
+	return ok
+}
+
+// librariesFor is the library filter for one person in a server. A Discord
+// account linked to a SoundDock admin is never limited.
+func (b *Bot) librariesFor(ctx context.Context, guildID, discordUser string) []uuid.UUID {
+	if uid, ok := b.linkedUserID(ctx, discordUser); ok && AdminUser(ctx, b.pool, uid) {
+		return nil
+	}
+	return b.guildLibraries(ctx, guildID)
+}

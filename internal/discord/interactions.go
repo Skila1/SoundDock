@@ -97,7 +97,7 @@ func (b *Bot) handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionC
 	if q == "" && len(data.Options) > 0 {
 		q = data.Options[0].StringValue()
 	}
-	libs := b.guildLibraries(context.Background(), i.GuildID)
+	libs := b.librariesFor(context.Background(), i.GuildID, interactionUser(i))
 	hits, err := b.search.Suggest(context.Background(), q, libs, 8)
 	if err != nil {
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -196,7 +196,7 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 			b.followup(s, i, "Could not join: "+err.Error())
 			return
 		}
-		if err := b.PlayQuery(ctx, i.GuildID, user, q, b.guildLibraries(ctx, i.GuildID)); err != nil {
+		if err := b.PlayQuery(ctx, i.GuildID, user, q, b.librariesFor(ctx, i.GuildID, user)); err != nil {
 			b.followup(s, i, err.Error())
 			return
 		}
@@ -204,7 +204,7 @@ func (b *Bot) handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate
 	case "search":
 		q := optionString(data.Options, "query")
 		b.deferReply(s, i)
-		hits, err := b.search.Search(ctx, q, []string{"track", "album", "playlist"}, b.guildLibraries(ctx, i.GuildID), 8)
+		hits, err := b.search.Search(ctx, q, []string{"track", "album", "playlist"}, b.librariesFor(ctx, i.GuildID, user), 8)
 		if err != nil || len(hits) == 0 {
 			b.followup(s, i, "No SoundDock library matches.")
 			return
@@ -471,7 +471,7 @@ func (b *Bot) handlePlaylist(s *discordgo.Session, i *discordgo.InteractionCreat
 			b.followup(s, i, "Playlist not found in SoundDock.")
 			return
 		}
-		if err := b.PlayQuery(ctx, i.GuildID, user, name, b.guildLibraries(ctx, i.GuildID)); err != nil {
+		if err := b.PlayQuery(ctx, i.GuildID, user, name, b.librariesFor(ctx, i.GuildID, user)); err != nil {
 			b.followup(s, i, err.Error())
 			return
 		}
